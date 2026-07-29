@@ -1,0 +1,864 @@
+diff --git a/examples/low_load_solution/macos/volc_conv_ai_demo.c b/examples/low_load_solution/macos/volc_conv_ai_demo.c
+index 2fcdf94..ef76708 100644
+--- a/examples/low_load_solution/macos/volc_conv_ai_demo.c
++++ b/examples/low_load_solution/macos/volc_conv_ai_demo.c
+@@ -1,4 +1,21 @@
+ 
++/*
++ * 火山引擎实时对话 Demo（macOS / Linux K1 共用）。
++ *
++ * 核心流程：
++ *   1. main() 读取 conv_ai_config.json，初始化 PulseAudio 和 SDK。
++ *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
++ *   3. SDK 检测到用户说完后回调对话状态，主循环提交当前音频段。
++ *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
++ *   5. 云端 Function Calling 可异步执行 K1 摇头命令并回传结果。
++ *
++ * 并发模型：
++ *   - 主线程：录音上传、键盘/信号状态机和 SDK 控制命令。
++ *   - SDK 回调线程：连接事件、对话状态、消息和下行音频。
++ *   - 播放线程：消费环形缓冲中的 TTS 音频。
++ *   - 工具线程：执行可能阻塞的电机命令，避免阻塞 SDK 回调。
++ */
++
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -9,6 +26,8 @@
+ #include <stdbool.h>
+ #include <string.h>
+ #include <pthread.h>
++#include <spawn.h>
++#include <sys/wait.h>
+ 
+ #include <pulse/simple.h>
+ #include <pulse/error.h>
+@@ -22,13 +41,17 @@
+ #define AUDIO_CHANNEL_NUM 1
+ #define AUDIO_FRAME_PER_SECOND (32000)
+ #define AUDIO_FRAME_MS (1000 / (AUDIO_FRAME_PER_SECOND / AUDIO_FRAME_LEN))
++#define AUDIO_PLAYBACK_CHUNK_MS 20
++#define FUNCTION_NAME_MAX_LEN 64
++#define FUNCTION_CALL_ID_MAX_LEN 128
+ 
+ #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
+ #define WS_SESSION_UPDATE "{\"event_id\":\"event_OgjwihjHg\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"model\":\"\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":0}},\"agent_config\":{\"WelcomeMessage\":\"这是一个覆盖智能体上的欢迎语.\"}}}"
+ 
+ typedef struct {
+-	uint8_t* audio_rec_buf;
+-    bool commit;
++    /* 上行音频、可选视频和云端下行播放所需的运行时资源。 */
++    uint8_t* audio_rec_buf;
++    bool commit;                  /* 是否需要提交当前一轮输入音频 */
+     char* bot_id;
+     char* video_rec_buf;
+     int video_frame_len;
+@@ -37,6 +60,7 @@ typedef struct {
+     int sample_rate;
+     int audio_frame_ms;
+     volc_ringbuf_t ring_buf;
++	    pthread_mutex_t ring_buf_mutex;
+ 	pa_simple* p_capture;
+ 	pa_simple* p_playback;
+     pa_sample_spec format;
+@@ -44,18 +68,43 @@ typedef struct {
+     volc_engine_t engine;
+ } realtime_ws_demo_t;
+ 
+-static volatile sig_atomic_t running = false;
+-static volatile sig_atomic_t interrupt = false;
++/*
++ * 跨信号/回调共享的轻量状态。信号处理函数只修改标志位，
++ * 所有 SDK 调用都留在主循环执行，避免在信号上下文中做非安全操作。
++ */
++static volatile sig_atomic_t running = false;               /* 正在采集并上传麦克风 */
++static volatile sig_atomic_t ai_playing = false;             /* 云端正在思考或播放回答 */
++static volatile sig_atomic_t interrupt = false;              /* 请求打断当前回答 */
++static volatile sig_atomic_t start_after_interrupt = false;  /* 打断后立即开始下一轮 */
+ static volatile sig_atomic_t start = false;
+ static volatile sig_atomic_t stop = false;
+ static volatile sig_atomic_t destory = false;
+ static volatile sig_atomic_t clear = false;
+ static volatile sig_atomic_t video_upload = false;
+-static volatile sig_atomic_t exit_request = false;
++static volatile sig_atomic_t exit_request = false;           /* 主线程和播放线程退出条件 */
+ static volatile sig_atomic_t session_update = false;
++static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
++static uint64_t wake_capture_deadline_ms = 0;                 /* 唤醒收音的最晚截止时间 */
+ static struct termios original_term;
++static bool terminal_configured = false;
+ static int tick = 0;
++extern char** environ;
++
++/* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
++typedef struct {
++    char name[FUNCTION_NAME_MAX_LEN];
++    char call_id[FUNCTION_CALL_ID_MAX_LEN];
++} pending_function_call_t;
+ 
++typedef struct {
++    realtime_ws_demo_t* demo;
++    char call_id[FUNCTION_CALL_ID_MAX_LEN];
++} function_call_task_t;
++
++static pending_function_call_t pending_function_call;
++static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
++
++/* 调试辅助：需要观察上行帧率时可在主循环中启用。 */
+ static void __get_fps(void) {
+     static uint64_t last_sec = 0;
+     static int fps = 0;
+@@ -75,83 +124,116 @@ static uint64_t __get_time_ms(void) {
+     return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
+ }
+ 
+-// 恢复终端设置
++/* 仅交互运行时恢复终端；systemd 模式没有 TTY，不执行任何操作。 */
+ static void __restore_terminal(void) {
+-    tcsetattr(STDIN_FILENO, TCSANOW, &original_term);
++    if (terminal_configured) {
++        tcsetattr(STDIN_FILENO, TCSANOW, &original_term);
++    }
+ }
+ 
+-// 信号处理函数
+-static void __handle_signal(int sig) {
+-    if (sig == SIGIO) {
+-        char buf[1];
+-        int n = read(STDIN_FILENO, buf, sizeof(buf));
+-        if (n > 0) {
+-            switch (buf[0]) {
+-                case ' ':
+-                    running = !running;
+-                    printf("\n状态: %s\n", running ? "运行中" : "已停止");
+-                    break;
+-                case 'i':
+-                    printf("\n状态: 打断\n");
+-                    interrupt = true;
+-                    break;
+-                case 'o':
+-                    printf("\n状态: stop\n");
+-                    stop = true;
+-                    break;
+-                case 'a':
+-                    printf("\n状态: start\n");
+-                    start = true;
+-                    break;
+-                case 'd':
+-                    printf("\n状态: destory\n");
+-                    destory = true;
+-                    break;
+-                case 'c':
+-                    printf("\n状态: 清除\n");
+-                    clear = true;
+-                    break;
+-                case 'v':
+-                    printf("\n状态: 视频上传\n");
+-                    video_upload = true;
+-                    break;
+-                case 'u':
+-                    printf("\n状态: session update\n");
+-                    session_update = true;
+-                    break;
+-                default:
+-                    break;
++static void __handle_key(char key) {
++    /*
++     * 按键只改变状态，实际 start/stop/interrupt/update 等调用统一由
++     * 主循环处理，避免键盘处理路径与音频路径并发操作 engine。
++     */
++    switch (key) {
++        case ' ':
++            if (ai_playing && !running) {
++                printf("\n状态: 打断AI并开始下一轮录音\n");
++                interrupt = true;
++                start_after_interrupt = true;
++                ai_playing = false;
++            } else {
++                running = !running;
++                printf("\n状态: %s\n", running ? "运行中" : "已停止");
+             }
++            break;
++        case 'i':
++            printf("\n状态: 打断\n");
++            running = false;
++            ai_playing = false;
++            start_after_interrupt = false;
++            interrupt = true;
++            break;
++        case 'o':
++            printf("\n状态: stop\n");
++            stop = true;
++            break;
++        case 'a':
++            printf("\n状态: start\n");
++            start = true;
++            break;
++        case 'd':
++            printf("\n状态: destory\n");
++            destory = true;
++            break;
++        case 'c':
++            printf("\n状态: 清除\n");
++            clear = true;
++            break;
++        case 'v':
++            printf("\n状态: 视频上传\n");
++            video_upload = true;
++            break;
++        case 'u':
++            printf("\n状态: session update\n");
++            session_update = true;
++            break;
++        default:
++            break;
++    }
++}
++
++static void __poll_keyboard(void) {
++    char buf[16];
++    ssize_t len;
++
++    while ((len = read(STDIN_FILENO, buf, sizeof(buf))) > 0) {
++        for (ssize_t i = 0; i < len; i++) {
++            __handle_key(buf[i]);
+         }
+-    } else if (sig == SIGINT) {
++    }
++}
++
++/*
++ * SIGUSR1 是无终端模式的“一轮对话”触发入口，由本地唤醒词服务发送。
++ * SIGINT/SIGTERM 只请求退出，让主循环和播放线程有机会正常收尾。
++ */
++static void __handle_signal(int sig) {
++    if (sig == SIGUSR1) {
++        wake_request = true;
++    } else if (sig == SIGINT || sig == SIGTERM) {
+         exit_request = true;
+     }
+ }
+ 
+-// 设置异步I/O
++/* 同时配置守护进程信号和交互终端的非阻塞按键输入。 */
+ static void __setup_async_io(void) {
+     struct sigaction sa;
+     int flags;
+ 
+-    // 保存原始终端设置
+-    tcgetattr(STDIN_FILENO, &original_term);
+-    
+-    // 设置退出时恢复终端
+-    atexit(__restore_terminal);
+-    
+     // 配置信号处理
+     sa.sa_handler = __handle_signal;
+     sigemptyset(&sa.sa_mask);
+     sa.sa_flags = SA_RESTART;
+-    sigaction(SIGIO, &sa, NULL);
+     sigaction(SIGINT, &sa, NULL);
++    sigaction(SIGTERM, &sa, NULL);
++    sigaction(SIGUSR1, &sa, NULL);
++
++    if (!isatty(STDIN_FILENO)) {
++        return;
++    }
+ 
+-    // 设置标准输入为异步模式
++    // 保存原始终端设置
++    if (tcgetattr(STDIN_FILENO, &original_term) != 0) {
++        return;
++    }
++    terminal_configured = true;
++    atexit(__restore_terminal);
++
++    // 键盘输入在主循环中轮询，避免SIGIO丢失连续按键
+     flags = fcntl(STDIN_FILENO, F_GETFL);
+-    fcntl(STDIN_FILENO, F_SETFL, flags | O_ASYNC | O_NONBLOCK);
+-    
+-    // 设置当前进程为接收SIGIO信号的进程
+-    fcntl(STDIN_FILENO, F_SETOWN, getpid());
++    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+     
+     // 修改终端设置：禁用行缓冲和回显
+     struct termios term = original_term;
+@@ -160,6 +242,7 @@ static void __setup_async_io(void) {
+ }
+ 
+ static char* __load_config_from_file(const char* filename) {
++    /* 返回以 '\0' 结尾的完整 JSON；所有权交给调用方。 */
+     FILE* config_fp = fopen(filename, "rb");
+     if (config_fp == NULL) {
+         printf("failed to open %s for reading.\n", filename);
+@@ -192,6 +275,7 @@ static char* __load_config_from_file(const char* filename) {
+ }
+ 
+ static int __load_video_file(realtime_ws_demo_t* demo) {
++    /* 视频链路的可选测试数据；默认启动流程没有调用此函数。 */
+     FILE* video_fp = fopen("send_video.h264", "rb");
+     if (video_fp == NULL) {
+         printf("failed to open send_video.h264 for reading.\n");
+@@ -224,25 +308,33 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
+ }
+ 
+ static void* __audio_playback_task(void* arg) {
++    /*
++     * SDK 回调只负责快速写环形缓冲，本线程以 20 ms 小块持续播放，
++     * 避免在回调线程里执行可能阻塞的 pa_simple_write()。
++     */
+     int len = 0;
+     int error  = 0;
++    int playback_chunk_len = 0;
+     uint8_t *buffer = NULL;
+     realtime_ws_demo_t* demo = (realtime_ws_demo_t*)arg;
+-    buffer = (uint8_t *)malloc(demo->frame_len);
++    playback_chunk_len = demo->sample_rate * AUDIO_CHANNEL_NUM * sizeof(int16_t) *
++                         AUDIO_PLAYBACK_CHUNK_MS / 1000;
++    buffer = (uint8_t *)malloc(playback_chunk_len);
+     if (NULL == buffer) {
+         printf("malloc buffer failed\n");
+         return NULL;
+     }
+     while (!exit_request) {
+-            len = volc_ringbuf_read(demo->ring_buf,(char *)buffer, sizeof(buffer));
+-            if (len > 0) {
+-                pa_simple_write(demo->p_playback, buffer, len, &error);
+-                if (error != 0) {
+-                    printf("pa_simple_write error: %d\n", error);
+-                }
+-            } else {
+-                usleep(100 * 1000);
++        pthread_mutex_lock(&demo->ring_buf_mutex);
++        len = volc_ringbuf_read(demo->ring_buf, (char *)buffer, playback_chunk_len);
++        pthread_mutex_unlock(&demo->ring_buf_mutex);
++        if (len > 0) {
++            if (pa_simple_write(demo->p_playback, buffer, len, &error) < 0) {
++                printf("pa_simple_write error: %s\n", pa_strerror(error));
+             }
++        } else {
++            usleep(10 * 1000);
++        }
+     }
+     free(buffer);
+     return NULL;
+@@ -251,6 +343,10 @@ static void* __audio_playback_task(void* arg) {
+ static bool is_ready = false;
+ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user_data)
+ {
++    /*
++     * 断线后退出进程，交给 systemd 的 Restart=always 重建完整 SDK 会话。
++     * 这样可以避免继续向已关闭的 WebSocket engine 发送音频。
++     */
+     switch (event->code) {
+         case VOLC_EV_CONNECTED:
+             is_ready = true;
+@@ -259,6 +355,7 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
+         case VOLC_EV_DISCONNECTED:
+             is_ready = false;
+             printf("Volc Engine disconnected\n");
++            exit_request = true;
+             break;
+         default:
+             printf("Volc Engine event: %d\n", event->code);
+@@ -268,43 +365,43 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
+ 
+ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_e status, void* user_data)
+ {
++    /*
++     * 云端进入 THINKING/ANSWERING 表示本轮收音已经结束，应停止上行。
++     * ANSWER_FINISH/INTERRUPTED 则释放“AI 正在回答”状态，允许下一轮唤醒。
++     */
+     printf("conversation status changed: %d\n", status);
+-    if (status == VOLC_CONV_STATUS_THINKING) {
++    if (status == VOLC_CONV_STATUS_THINKING || status == VOLC_CONV_STATUS_ANSWERING) {
++        running = false;
++        wake_capture_deadline_ms = 0;
++        ai_playing = true;
++    } else if (status == VOLC_CONV_STATUS_INTERRUPTED || status == VOLC_CONV_STATUS_ANSWER_FINISH) {
++        ai_playing = false;
+     }
+ }
+ 
+ static void _on_volc_audio_data(volc_engine_t handle, const void* data_ptr, size_t data_len, volc_audio_frame_info_t* info_ptr, void* user_data)
+ {
+-	int error = 0;
++    /* SDK 下发的是待播放 PCM；此处只入队，播放工作由独立线程完成。 */
+ 	realtime_ws_demo_t* demo = (realtime_ws_demo_t*)user_data;
+ 	if (demo == NULL) {
+ 		printf("demo is NULL\n");
+ 		return;
+ 	}
+-    if (volc_ringbuf_write(demo->ring_buf, (char *)data_ptr, data_len) != data_len) {
++    pthread_mutex_lock(&demo->ring_buf_mutex);
++    int written = volc_ringbuf_write(demo->ring_buf, (char *)data_ptr, data_len);
++    pthread_mutex_unlock(&demo->ring_buf_mutex);
++    if (written != data_len) {
+         printf("write audio data to ring buf fail!!!!!!!!\n");
+     }
+-    static FILE* fp = NULL;
+-    if (fp == NULL) {
+-        fp = fopen("audio_playback.pcm", "wb");
+-        if (fp == NULL) {
+-            printf("Failed to open audio_data.pcm for writing.\n");
+-            return;
+-        }
+-    }
+-    if (data_ptr != NULL && data_len > 0) {
+-        fwrite(data_ptr, 1, data_len, fp);
+-        fflush(fp);
+-    } else {
+-        printf("Received empty audio data.\n");
+-    }
+ }
+ 
+ static void _on_volc_video_data(volc_engine_t handle, const void* data_ptr, size_t data_len, volc_video_frame_info_t* info_ptr, void* user_data)
+ {
++    /* 当前 K1 验证未启用视频下行，保留回调接口便于后续扩展。 */
+ }
+ 
+ static void __on_subtitle_message_received(cJSON* root) {
++    /* RTC 模式字幕解析；当前 K1 低负载方案使用 WS 模式。 */
+     if (NULL == root) {
+         return;
+     }
+@@ -322,101 +419,187 @@ static void __on_subtitle_message_received(cJSON* root) {
+     }
+ }
+ 
+-static void __send_conversation_item_create(realtime_ws_demo_t* demo, const char* call_id, const char* mode, const char* content_str) {
++static int __send_function_call_output(realtime_ws_demo_t* demo, const char* call_id, const char* output) {
++    /* 将设备侧工具执行结果关联到原 call_id 并发送回云端。 */
+     volc_message_info_t msg_info = { 0 };
+     cJSON* root = cJSON_CreateObject();
+     cJSON* item = cJSON_CreateObject();
+-    cJSON* content = cJSON_CreateArray();
+-    cJSON* content_item = cJSON_CreateObject();
++    char event_id[FUNCTION_CALL_ID_MAX_LEN + 16];
++    char* json_str;
++    int ret;
+ 
+-    cJSON_AddItemToObject(root, "type", cJSON_CreateString("conversation.item.create"));
+-    cJSON_AddItemToObject(root, "item", item);
+-    cJSON_AddItemToObject(item, "type", cJSON_CreateString("message"));
+-    cJSON_AddItemToObject(item, "role", cJSON_CreateString("user"));
+-    cJSON_AddItemToObject(item, "interrupt_mode", cJSON_CreateNumber(1));
+-    cJSON_AddItemToObject(root, "event_id", cJSON_CreateString(call_id));
++    if (demo == NULL || call_id == NULL || output == NULL || root == NULL || item == NULL) {
++        cJSON_Delete(root);
++        cJSON_Delete(item);
++        return -1;
++    }
+ 
+-    cJSON_AddItemToObject(content_item, "type", cJSON_CreateString(mode));
+-    cJSON_AddItemToObject(content_item, "text", cJSON_CreateString(content_str));
+-    cJSON_AddItemToArray(content, content_item);
+-    cJSON_AddItemToObject(item, "content", content);
++    snprintf(event_id, sizeof(event_id), "event_%s", call_id);
+ 
+-    char* json_str = cJSON_Print(root);
++    cJSON_AddStringToObject(root, "event_id", event_id);
++    cJSON_AddStringToObject(root, "type", "conversation.item.create");
++    cJSON_AddItemToObject(root, "item", item);
++    cJSON_AddStringToObject(item, "type", "function_call_output");
++    cJSON_AddStringToObject(item, "call_id", call_id);
++    cJSON_AddStringToObject(item, "output", output);
++
++    json_str = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
+     if (json_str == NULL) {
+         printf("cJSON_Print failed\n");
+-        return;
++        return -1;
+     }
+-    printf("json_str:%s\n", json_str);
+-    cJSON_Delete(root);
+-    if (json_str) {
+-        msg_info.is_binary = true;
+-        volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
+-        free(json_str);
++    printf("function call output: %s\n", json_str);
++    msg_info.is_binary = true;
++    ret = volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
++    free(json_str);
++    return ret;
++}
++
++static int __run_head_shake(void) {
++    /*
++     * 使用固定可执行文件和固定参数，不经 shell 拼接用户输入，
++     * 避免命令注入，并通过退出码判断电机动作是否成功。
++     */
++    const char* executable = "/usr/bin/ai-toy_app";
++    char* const argv[] = {
++        (char*)executable,
++        "motor",
++        "head_lr",
++        "2",
++        NULL,
++    };
++    pid_t pid;
++    int status;
++    int ret;
++
++    ret = posix_spawn(&pid, executable, NULL, NULL, argv, environ);
++    if (ret != 0) {
++        fprintf(stderr, "failed to start head motor command: %s\n", strerror(ret));
++        return -1;
++    }
++    do {
++        ret = waitpid(pid, &status, 0);
++    } while (ret < 0 && errno == EINTR);
++
++    if (ret < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++        fprintf(stderr, "head motor command failed\n");
++        return -1;
+     }
++    return 0;
++}
++
++static void* __run_function_call(void* arg) {
++    /* 电机动作可能持续数秒，必须放到工作线程，不能阻塞 SDK 消息回调。 */
++    function_call_task_t* task = (function_call_task_t*)arg;
++    int ret;
++
++    if (task == NULL) {
++        return NULL;
++    }
++    printf("executing shake_head, call_id=%s\n", task->call_id);
++    ret = __run_head_shake();
++    __send_function_call_output(
++        task->demo,
++        task->call_id,
++        ret == 0 ? "摇头动作已完成" : "摇头动作执行失败");
++    free(task);
++    return NULL;
+ }
+ 
+ static void __handle_ws_conversation_item_created_call(realtime_ws_demo_t* demo, cJSON* root) {
+-    cJSON* item_obj = NULL;
+-    cJSON* call_id_obj = NULL;
+-    cJSON* type_obj = NULL;
+-    cJSON* name_obj = NULL;
+-    char* name = NULL;
++    /*
++     * Function Calling 第一步：conversation.item.created 给出工具名和
++     * call_id。这里只记录元数据，等待 arguments.done 后再真正执行。
++     */
++    cJSON* item_obj;
++    cJSON* call_id_obj;
++    cJSON* type_obj;
++    cJSON* name_obj;
++    const char* name;
++    const char* call_id;
++
++    (void)demo;
+ 
+     item_obj = cJSON_GetObjectItem(root, "item");
+-    if (item_obj == NULL) {
+-        printf("item_obj is NULL\n");
++    if (!cJSON_IsObject(item_obj)) {
+         return;
+     }
+-
++    type_obj = cJSON_GetObjectItem(item_obj, "type");
+     call_id_obj = cJSON_GetObjectItem(item_obj, "call_id");
+-    if (call_id_obj == NULL) {
+-        printf("call_id_obj is NULL\n");
++    name_obj = cJSON_GetObjectItem(item_obj, "name");
++    if (!cJSON_IsString(type_obj) || strcmp(type_obj->valuestring, "function_call") != 0) {
+         return;
+     }
+-    name_obj = cJSON_GetObjectItem(item_obj, "name");
+-    if (name_obj == NULL) {
+-        printf("name_obj is NULL\n");
++    if (!cJSON_IsString(call_id_obj) || !cJSON_IsString(name_obj)) {
++        printf("invalid function call notification\n");
+         return;
+     }
+-    name = cJSON_GetStringValue(name_obj);
+-    if (strcmp("get_current_weather", name) == 0) {
+-        // step 1: 接收工具调用通知消息
+-        printf("get_current_weather function_call\n");
+-        // step 2: 播放安抚语(可选)
+-       __send_conversation_item_create(demo, cJSON_GetStringValue(call_id_obj), "input_tts", "查询中，请稍等片刻。");
+-    } else {
++    name = name_obj->valuestring;
++    call_id = call_id_obj->valuestring;
++    if (strcmp(name, "shake_head") != 0) {
+         printf("unknown function call name: %s\n", name);
++        return;
+     }
+-}
+ 
+-static void* __handle_msg_message_thread(void* arg) {
+-    realtime_ws_demo_t* demo = (realtime_ws_demo_t*)arg;
+-    __send_conversation_item_create(demo, "event_id", "input_text", "上海天气今天25度, 晴天, 有微风。");
+-    return NULL;
++    pthread_mutex_lock(&function_call_mutex);
++    snprintf(pending_function_call.name, sizeof(pending_function_call.name), "%s", name);
++    snprintf(pending_function_call.call_id, sizeof(pending_function_call.call_id), "%s", call_id);
++    pthread_mutex_unlock(&function_call_mutex);
++    printf("shake_head function call received, call_id=%s\n", call_id);
+ }
+ 
+ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSON* root) {
++    /*
++     * Function Calling 第二步：参数接收完成。核对 call_id 后启动工作线程，
++     * 防止错配并避免重复执行上一条工具调用。
++     */
+     pthread_t msg_thread;
+-    cJSON* args_obj = NULL;
+-    cJSON* name_obj = NULL;
+-    if (NULL == root) {
++    cJSON* call_id_obj;
++    function_call_task_t* task;
++    int ret;
++
++    if (root == NULL) {
++        return;
++    }
++    call_id_obj = cJSON_GetObjectItem(root, "call_id");
++    if (!cJSON_IsString(call_id_obj)) {
++        printf("function call arguments missing call_id\n");
++        return;
++    }
++
++    task = calloc(1, sizeof(*task));
++    if (task == NULL) {
++        __send_function_call_output(demo, call_id_obj->valuestring, "摇头动作执行失败");
++        return;
++    }
++
++    pthread_mutex_lock(&function_call_mutex);
++    if (strcmp(pending_function_call.name, "shake_head") != 0 ||
++        strcmp(pending_function_call.call_id, call_id_obj->valuestring) != 0) {
++        pthread_mutex_unlock(&function_call_mutex);
++        free(task);
++        printf("no matching function call for call_id=%s\n", call_id_obj->valuestring);
++        return;
++    }
++    task->demo = demo;
++    snprintf(task->call_id, sizeof(task->call_id), "%s", pending_function_call.call_id);
++    pending_function_call.name[0] = '\0';
++    pending_function_call.call_id[0] = '\0';
++    pthread_mutex_unlock(&function_call_mutex);
++
++    ret = pthread_create(&msg_thread, NULL, __run_function_call, task);
++    if (ret != 0) {
++        fprintf(stderr, "failed to create function call thread: %s\n", strerror(ret));
++        __send_function_call_output(demo, task->call_id, "摇头动作执行失败");
++        free(task);
+         return;
+     }
+-    printf("function_call_arguments done received\n");
+-    args_obj = cJSON_GetObjectItem(root, "arguments");
+-    if (args_obj) {
+-        // 处理function_call_arguments
+-        // step 3: 接收工具调用指令消息， 解析参数并调用工具
+-        // ...
+-        // step 4: 接收工具调用结果消息，发送给模型
+-        printf("function_call_arguments done\n");
+-        pthread_create(&msg_thread, NULL, __handle_msg_message_thread, demo);
+-        pthread_detach(msg_thread);
+-    }
+-    printf("function_call_arguments done processing completed\n");
++    pthread_detach(msg_thread);
+ }
+ 
+ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, size_t size) {
++    /* WS JSON 消息路由：工具调用单独处理，其余事件原样打印便于调试。 */
+     cJSON* root = NULL;
+     cJSON* type_obj = NULL;
+     root = cJSON_Parse((const char*)message);
+@@ -440,6 +623,7 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
+ }
+ 
+ static void __handle_rtc_message(realtime_ws_demo_t* demo, const void* message, size_t size) {
++    /* RTC 二进制消息路由；K1 当前构建关闭 RTC，仅保留原 demo 兼容代码。 */
+     cJSON* root = NULL;
+     if (((uint8_t*)message)[0] == 's' && ((uint8_t*)message)[1] == 'u' && ((uint8_t*)message)[2] == 'b' && ((uint8_t*)message)[3] == 'v') {
+         // root = cJSON_Parse(((uint8_t *)message) + 8);
+@@ -455,6 +639,7 @@ static void __handle_rtc_message(realtime_ws_demo_t* demo, const void* message,
+ 
+ static void _on_volc_message_data(volc_engine_t handle, const void* message, size_t size, volc_message_info_t* info_ptr, void* user_data)
+ {   
++    /* 根据配置的传输模式，将 SDK 消息交给 RTC 或 WebSocket 解析器。 */
+     realtime_ws_demo_t* demo = (realtime_ws_demo_t*)user_data;
+     static int cnt = 0;
+     printf("--------------%d----------------\r\n", cnt++);
+@@ -472,6 +657,10 @@ static void _on_volc_message_data(volc_engine_t handle, const void* message, siz
+ }
+ 
+ static int __parse_demo_config(const char* config, realtime_ws_demo_t* handle) {
++    /*
++     * Demo 只消费 bot_id 和 mode；IoT 鉴权等完整配置由 volc_create()
++     * 再次解析。WS 使用 16 kHz/100 ms 帧，RTC 保留原 8 kHz 配置。
++     */
+     cJSON* root = NULL;
+     cJSON* obj_item = NULL;
+     if (NULL == config) {
+@@ -528,6 +717,7 @@ static int _build_ws_message(const char* msg, uint8_t** out_buf, size_t* out_len
+ }
+ 
+ static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
++    /* 清除云端尚未提交的输入音频，供交互调试按键使用。 */
+     uint8_t* clear = NULL;
+     size_t clear_len = 0;
+     volc_message_info_t msg_info = {0};
+@@ -550,6 +740,10 @@ int main(int argc, const char* argv[]){
+     uint64_t diff_time_ms = 0;
+ 	realtime_ws_demo_t demo = {0};
+ 
++    setvbuf(stdout, NULL, _IOLBF, 0);
++    setvbuf(stderr, NULL, _IOLBF, 0);
++
++    /* 阶段 1：读取配置并根据传输模式确定音频采样率和帧大小。 */
+ 	if ((config_data = __load_config_from_file("conv_ai_config.json")) == NULL) {
+ 		printf("load config from file fail\n");
+ 		return -1;
+@@ -576,7 +770,12 @@ int main(int argc, const char* argv[]){
+         printf("create ring buf fail\n");
+         goto err_out_label;
+     }
++    pthread_mutex_init(&demo.ring_buf_mutex, NULL);
+ 
++    /*
++     * 阶段 2：创建一条单声道 PulseAudio 录音流和一条播放流。
++     * K1 上由 systemd 保证 PulseAudio socket 已就绪后再启动本程序。
++     */
+     demo.format.format = PA_SAMPLE_S16NE;
+     demo.format.rate = demo.sample_rate;
+     demo.format.channels = AUDIO_CHANNEL_NUM;
+@@ -609,6 +808,10 @@ int main(int argc, const char* argv[]){
+     volc_opt_t opt = {0};
+     opt.mode = demo.mode;
+ 
++    /*
++     * 以下注释代码是 SDK API 的手工实验入口，不属于正常运行路径。
++     * 需要专项验证 create/start/stop/destroy 时再单独启用。
++     */
+     // // create后直接destroy
+     // printf("创建后直接销毁\n");
+     // volc_destroy(demo.engine);
+@@ -643,10 +846,15 @@ int main(int argc, const char* argv[]){
+     opt.bot_id = demo.bot_id;
+     volc_start(demo.engine, &opt);
+ 
+-    while (!is_ready) {
++    /* 阶段 3：等待云端 session 就绪后再接受唤醒，避免丢失首轮音频。 */
++    while (!is_ready && !exit_request) {
+         sleep(1);
+         printf("waiting for volc realtime to be ready...\n");
+     }
++    if (exit_request) {
++        printf("Volc Engine connection failed; exiting for service restart.\n");
++        goto err_out_label;
++    }
+     printf("volc realtime is ready.\n");
+ 
+ 
+@@ -659,7 +867,33 @@ int main(int argc, const char* argv[]){
+     volc_audio_frame_info_t info = {0};
+     info.data_type = VOLC_AUDIO_DATA_TYPE_PCM;
+     volc_video_frame_info_t video_info = {0};
++
++    /*
++     * 阶段 4：主状态机。
++     * running=true 时阻塞读取一帧麦克风 PCM 并上传；running=false 时，
++     * 若 demo.commit=true，则发送最后一帧并携带 commit 结束本轮输入。
++     */
+     while (!exit_request) {
++        __poll_keyboard();
++
++        /*
++         * 唤醒服务通过 SIGUSR1 进入这里。普通空闲状态直接开始收音；
++         * AI 正在回答时先安排 interrupt，再开始下一轮。6 秒截止时间用于
++         * 防止背景人声让云端 VAD 长时间无法判定句尾。
++         */
++        if (wake_request) {
++            wake_request = false;
++            wake_capture_deadline_ms = __get_time_ms() + 6000;
++            if (ai_playing && !running) {
++                interrupt = true;
++                start_after_interrupt = true;
++                ai_playing = false;
++                printf("wakeup signal: interrupting current response\n");
++            } else {
++                running = true;
++                printf("wakeup signal: listening\n");
++            }
++        }
+         // printf("volc....................\n");
+         if (running) {
+             last_time_ms = __get_time_ms();
+@@ -670,12 +904,19 @@ int main(int argc, const char* argv[]){
+             }
+             info.commit = false;
+             volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
++            if (wake_capture_deadline_ms != 0 &&
++                __get_time_ms() >= wake_capture_deadline_ms) {
++                running = false;
++                wake_capture_deadline_ms = 0;
++                printf("wake capture timeout: scheduling audio commit\n");
++            }
+             diff_time_ms = __get_time_ms() - last_time_ms;
+             if (diff_time_ms < demo.audio_frame_ms) {
+                 usleep(demo.audio_frame_ms - diff_time_ms);
+             }
+             demo.commit = true;
+         } else {
++            /* 每轮只提交一次，提交后等待云端 THINKING/ANSWERING 回调。 */
+             if (demo.commit) {
+                 info.commit = true;
+                 volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
+@@ -685,14 +926,24 @@ int main(int argc, const char* argv[]){
+             usleep(100000);
+         }
+         if (video_upload) {
++            /* 视频为可选调试路径，当前 K1 默认没有加载 send_video.h264。 */
+             video_info.data_type = VOLC_VIDEO_DATA_TYPE_H264;
+             if ((tick++ % 5) == 0) {
+                 volc_send_video_data(demo.engine, demo.video_rec_buf, demo.video_frame_len, &video_info);
+             }
+         }
+         if (interrupt) {
++            /* 打断前清空本地 TTS 缓冲，避免继续播放上一轮残留音频。 */
+             interrupt = false;
++            pthread_mutex_lock(&demo.ring_buf_mutex);
++            volc_ringbuf_clear(demo.ring_buf);
++            pthread_mutex_unlock(&demo.ring_buf_mutex);
+             volc_interrupt(demo.engine);
++            if (start_after_interrupt) {
++                start_after_interrupt = false;
++                running = true;
++                printf("状态: 运行中\n");
++            }
+         }
+         if (clear) {
+             clear = false;
+@@ -716,12 +967,18 @@ int main(int argc, const char* argv[]){
+             volc_update(demo.engine, WS_SESSION_UPDATE, strlen(WS_SESSION_UPDATE));
+         }
+     }
++
++    /* 阶段 5：通知播放线程退出并释放本进程持有的音频和缓冲资源。 */
+     pthread_join(demo.audio_playback_task, NULL);
+ 
+ err_out_label:
+ 	if (demo.audio_rec_buf) {
+ 		free(demo.audio_rec_buf);
+ 	}
++	if (demo.ring_buf) {
++        pthread_mutex_destroy(&demo.ring_buf_mutex);
++        volc_ringbuf_destroy(demo.ring_buf);
++    }
+ 	if (demo.p_capture) {
+ 		pa_simple_free(demo.p_capture);
+ 	}
+@@ -731,4 +988,4 @@ err_out_label:
+ 	}
+ 	getchar();
+ 	return 0;
+-}
+\ No newline at end of file
++}

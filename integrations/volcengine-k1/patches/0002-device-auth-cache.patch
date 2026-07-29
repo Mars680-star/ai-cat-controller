@@ -1,0 +1,191 @@
+diff --git a/volc_conv_ai/src/volc_conv_ai.c b/volc_conv_ai/src/volc_conv_ai.c
+index 651e01a..e2bdc5e 100644
+--- a/volc_conv_ai/src/volc_conv_ai.c
++++ b/volc_conv_ai/src/volc_conv_ai.c
+@@ -3,8 +3,11 @@
+ 
+ #include "volc_conv_ai.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <inttypes.h>
++#include <sys/stat.h>
+ #include "volc_osal.h"
+ #include "util/volc_json.h"
+ #include "util/volc_log.h"
+@@ -62,6 +65,138 @@ typedef struct {
+     volc_event_handler_t event_handler;
+ } volc_engine_impl_t;
+ 
++#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
++static int __device_auth_path(const volc_iot_info_t* info, char* path, size_t path_size) {
++    const char* override_path = getenv("VOLC_DEVICE_SECRET_PATH");
++    const char* home = getenv("HOME");
++
++    if (override_path && override_path[0] != '\0') {
++        return snprintf(path, path_size, "%s", override_path) < (int)path_size ? 0 : -1;
++    }
++    if (home == NULL || home[0] == '\0') {
++        home = ".";
++    }
++    return snprintf(path, path_size, "%s/.volc_conv_ai_%s_%s.json",
++                    home, info->product_key, info->device_name) < (int)path_size ? 0 : -1;
++}
++
++static int __device_auth_load(const volc_iot_info_t* expected, char** device_secret, char** rtc_app_id) {
++    char path[512] = {0};
++    char data[2048] = {0};
++    FILE* fp = NULL;
++    cJSON* root = NULL;
++    cJSON* instance = NULL;
++    cJSON* product = NULL;
++    cJSON* device = NULL;
++    cJSON* secret = NULL;
++    cJSON* rtc = NULL;
++    size_t read_len = 0;
++    int ret = -1;
++
++    if (__device_auth_path(expected, path, sizeof(path)) != 0) {
++        return -1;
++    }
++    fp = fopen(path, "rb");
++    if (fp == NULL) {
++        return -1;
++    }
++    read_len = fread(data, 1, sizeof(data) - 1, fp);
++    fclose(fp);
++    if (read_len == 0) {
++        return -1;
++    }
++
++    root = cJSON_Parse(data);
++    instance = cJSON_GetObjectItem(root, "instance_id");
++    product = cJSON_GetObjectItem(root, "product_key");
++    device = cJSON_GetObjectItem(root, "device_name");
++    secret = cJSON_GetObjectItem(root, "device_secret");
++    rtc = cJSON_GetObjectItem(root, "rtc_app_id");
++    if (!cJSON_IsString(instance) || !cJSON_IsString(product) ||
++        !cJSON_IsString(device) || !cJSON_IsString(secret) ||
++        strcmp(instance->valuestring, expected->instance_id) != 0 ||
++        strcmp(product->valuestring, expected->product_key) != 0 ||
++        strcmp(device->valuestring, expected->device_name) != 0) {
++        goto out;
++    }
++
++    *device_secret = strdup(secret->valuestring);
++    if (*device_secret == NULL) {
++        goto out;
++    }
++    if (cJSON_IsString(rtc)) {
++        *rtc_app_id = strdup(rtc->valuestring);
++        if (*rtc_app_id == NULL) {
++            HAL_SAFE_FREE(*device_secret);
++            goto out;
++        }
++    }
++    LOGI("Loaded cached device credentials from %s", path);
++    ret = 0;
++out:
++    cJSON_Delete(root);
++    return ret;
++}
++
++static int __device_auth_save(const volc_iot_info_t* info) {
++    char path[512] = {0};
++    char temp_path[520] = {0};
++    cJSON* root = NULL;
++    char* data = NULL;
++    FILE* fp = NULL;
++    size_t data_len = 0;
++    size_t written_len = 0;
++    int close_ret = 0;
++    int ret = -1;
++
++    if (info->device_secret == NULL ||
++        __device_auth_path(info, path, sizeof(path)) != 0 ||
++        snprintf(temp_path, sizeof(temp_path), "%s.tmp", path) >= (int)sizeof(temp_path)) {
++        return -1;
++    }
++
++    root = cJSON_CreateObject();
++    cJSON_AddStringToObject(root, "instance_id", info->instance_id);
++    cJSON_AddStringToObject(root, "product_key", info->product_key);
++    cJSON_AddStringToObject(root, "device_name", info->device_name);
++    cJSON_AddStringToObject(root, "device_secret", info->device_secret);
++    if (info->rtc_app_id) {
++        cJSON_AddStringToObject(root, "rtc_app_id", info->rtc_app_id);
++    }
++    data = cJSON_PrintUnformatted(root);
++    if (data == NULL) {
++        goto out;
++    }
++
++    fp = fopen(temp_path, "wb");
++    if (fp == NULL) {
++        goto out;
++    }
++    data_len = strlen(data);
++    written_len = fwrite(data, 1, data_len, fp);
++    close_ret = fclose(fp);
++    fp = NULL;
++    if (written_len != data_len || close_ret != 0) {
++        goto out;
++    }
++    if (chmod(temp_path, S_IRUSR | S_IWUSR) != 0 || rename(temp_path, path) != 0) {
++        goto out;
++    }
++    LOGI("Saved device credentials to %s", path);
++    ret = 0;
++out:
++    if (fp) {
++        fclose(fp);
++    }
++    if (ret != 0) {
++        remove(temp_path);
++    }
++    HAL_SAFE_FREE(data);
++    cJSON_Delete(root);
++    return ret;
++}
++#endif
++
+ static void _iot_info_free(volc_iot_info_t* info) {
+     if (info) {
+         HAL_SAFE_FREE(info->device_name);
+@@ -245,11 +380,23 @@ int volc_create(volc_engine_t* handle, const char* config_json, volc_event_handl
+            LOGE("Failed to parse IoT configuration");
+            goto err_out_label;
+        }
+-        ret = volc_device_register(&engine->info, &engine->info.device_secret);
++#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
++        ret = __device_auth_load(&engine->info, &engine->info.device_secret, &engine->info.rtc_app_id);
+         if (ret != 0) {
+-            LOGE("Failed to register device error code: %d", ret);
+-            goto err_out_label;
++#endif
++            ret = volc_device_register(&engine->info, &engine->info.device_secret);
++            if (ret != 0) {
++                LOGE("Failed to register device error code: %d", ret);
++                goto err_out_label;
++            }
++#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
++            if (__device_auth_save(&engine->info) != 0) {
++                LOGE("Failed to persist device credentials");
++                ret = VOLC_ERR_FAILED;
++                goto err_out_label;
++            }
+         }
++#endif
+     } else {
+         LOGE("IoT configuration is NULL");
+         goto err_out_label;
+@@ -276,7 +423,7 @@ int volc_create(volc_engine_t* handle, const char* config_json, volc_event_handl
+     engine->status = VOLC_RT_STATE_CREATED;
+     *handle = (volc_engine_t)engine;
+     cJSON_Delete(config);
+-    LOGI("Engine created successfully at: %llu ms", volc_osal_get_time_ms());
++    LOGI("Engine created successfully at: %" PRIu64 " ms", volc_osal_get_time_ms());
+     return 0;
+ err_out_label:
+     _iot_info_free(&engine->info);

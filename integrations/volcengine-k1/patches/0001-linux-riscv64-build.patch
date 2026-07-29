@@ -1,0 +1,146 @@
+diff --git a/volc_conv_ai/cmake/linux.cmake b/volc_conv_ai/cmake/linux.cmake
+index 566bf19..2353487 100644
+--- a/volc_conv_ai/cmake/linux.cmake
++++ b/volc_conv_ai/cmake/linux.cmake
+@@ -4,6 +4,7 @@ option(ENABLE_RTC_MODE "Enable Conv AI RTC mode" ON)
+ option(ENABLE_WS_MODE  "Enable Conv AI WS mode"  OFF)
+ option(ENABLE_CJSON "Enable cJSON" ON)
+ option(ENABLE_MBEDTLS "Enable Mbedtls" ON)
++option(USE_SYSTEM_CRYPTO "Use system mbedTLS and zlib libraries" OFF)
+ option(ENABLE_SAMPLE "Enable sample" ON)
+ 
+ #  系统抽象层代码
+@@ -19,7 +20,10 @@ set(MBEDTLS_LIBRARY_FILE "${MBEDTLS_PREBUILT_DIR}/lib/libmbedtls.a")
+ set(MBEDTLS_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/../third_party/mbedtls)
+ 
+ #  使用第三方开源库构建
+-if(NOT EXISTS "${MBEDTLS_LIBRARY_FILE}" AND NOT EXISTS "${MBEDTLS_SOURCE_DIR}/CMakeLists.txt")
++if(USE_SYSTEM_CRYPTO)
++    message(STATUS "use system mbedTLS and zlib")
++elseif(NOT EXISTS "${MBEDTLS_LIBRARY_FILE}" AND
++       NOT EXISTS "${MBEDTLS_SOURCE_DIR}/CMakeLists.txt")
+     message(STATUS "start download and compile mbedtls...")
+     include(ExternalProject)
+     ExternalProject_Add(
+@@ -52,6 +56,17 @@ add_library(volc_conv_ai_a STATIC
+     "${CMAKE_CURRENT_LIST_DIR}/../src/util/cJSON/cJSON.c"
+ )
+ 
++if(ENABLE_WS_MODE)
++    message(STATUS "use low load WS mode")
++    target_sources(volc_conv_ai_a PRIVATE
++        ${VOLC_CONV_AI_LOW_LOAD_SRCS}
++    )
++    target_compile_definitions(volc_conv_ai_a PRIVATE ENABLE_WS_MODE)
++    target_include_directories(volc_conv_ai_a PUBLIC
++        ${VOLC_CONV_AI_LOW_LOAD_INCS}
++    )
++endif()
++
+ #  cJSON库 头文件目录
+ if(ENABLE_CJSON)
+     target_include_directories(volc_conv_ai_a PUBLIC
+@@ -59,23 +74,25 @@ if(ENABLE_CJSON)
+     )
+ endif()
+ 
+-add_library(mbedtls_static   STATIC IMPORTED GLOBAL)
+-add_library(mbedx509_static  STATIC IMPORTED GLOBAL)
+-add_library(zlib_static STATIC IMPORTED GLOBAL)
+-add_library(mbedcrypto_static STATIC IMPORTED GLOBAL)
++if(NOT USE_SYSTEM_CRYPTO)
++    add_library(mbedtls_static STATIC IMPORTED GLOBAL)
++    add_library(mbedx509_static STATIC IMPORTED GLOBAL)
++    add_library(zlib_static STATIC IMPORTED GLOBAL)
++    add_library(mbedcrypto_static STATIC IMPORTED GLOBAL)
+ 
+-set_target_properties(zlib_static PROPERTIES
+-    IMPORTED_LOCATION ${CMAKE_CURRENT_LIST_DIR}/../third_party/prebuilt/zlib/lib/libz.a
+-)
+-set_target_properties(mbedtls_static PROPERTIES
+-    IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedtls.a
+-)
+-set_target_properties(mbedx509_static PROPERTIES
+-    IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedx509.a
+-)
+-set_target_properties(mbedcrypto_static PROPERTIES
+-    IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedcrypto.a
+-)
++    set_target_properties(zlib_static PROPERTIES
++        IMPORTED_LOCATION ${CMAKE_CURRENT_LIST_DIR}/../third_party/prebuilt/zlib/lib/libz.a
++    )
++    set_target_properties(mbedtls_static PROPERTIES
++        IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedtls.a
++    )
++    set_target_properties(mbedx509_static PROPERTIES
++        IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedx509.a
++    )
++    set_target_properties(mbedcrypto_static PROPERTIES
++        IMPORTED_LOCATION ${MBEDTLS_PREBUILT_DIR}/lib/libmbedcrypto.a
++    )
++endif()
+ 
+ #  包括 火山引擎RTC Engine Lite库
+ if(ENABLE_RTC_MODE)
+@@ -95,9 +112,24 @@ if(ENABLE_RTC_MODE)
+     )
+ endif()
+ 
+-if(ENABLE_MBEDTLS)
++if(ENABLE_MBEDTLS AND USE_SYSTEM_CRYPTO)
++    find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h REQUIRED)
++    find_library(MBEDTLS_LIBRARY mbedtls REQUIRED)
++    find_library(MBEDX509_LIBRARY mbedx509 REQUIRED)
++    find_library(MBEDCRYPTO_LIBRARY mbedcrypto REQUIRED)
++    find_package(ZLIB REQUIRED)
++
++    target_include_directories(volc_conv_ai_a PUBLIC ${MBEDTLS_INCLUDE_DIR})
++    target_link_libraries(volc_conv_ai_a PRIVATE
++        ${MBEDTLS_LIBRARY}
++        ${MBEDX509_LIBRARY}
++        ${MBEDCRYPTO_LIBRARY}
++        ZLIB::ZLIB
++    )
++    target_compile_definitions(volc_conv_ai_a PRIVATE ENABLE_MBEDTLS)
++elseif(ENABLE_MBEDTLS)
+     target_include_directories(volc_conv_ai_a PUBLIC ${MBEDTLS_PREBUILT_DIR}/include)
+-    
++
+     target_link_libraries(volc_conv_ai_a PRIVATE
+         mbedtls_static
+         mbedx509_static
+@@ -113,4 +145,9 @@ target_link_libraries(volc_conv_ai_a PUBLIC pthread)
+ target_include_directories(volc_conv_ai_a PUBLIC
+     ${VOLC_CONV_AI_INCS}
+     ${VOLC_CONV_AI_PLATFORM_INCS}
+-)
+\ No newline at end of file
++)
++
++set_target_properties(volc_conv_ai_a PROPERTIES
++    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
++    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
++)
+diff --git a/volc_conv_ai/osal/src/linux/volc_osal.c b/volc_conv_ai/osal/src/linux/volc_osal.c
+index e6671be..e05fcdd 100644
+--- a/volc_conv_ai/osal/src/linux/volc_osal.c
++++ b/volc_conv_ai/osal/src/linux/volc_osal.c
+@@ -134,7 +134,8 @@ int volc_osal_thread_detach(volc_osal_tid_t thread) {
+ }
+ 
+ void volc_osal_thread_exit(volc_osal_tid_t thread) {
+-    pthread_exit((pthread_t)thread);
++    (void)thread;
++    pthread_exit(NULL);
+ }
+ 
+ void volc_osal_thread_sleep(int time_ms) {
+@@ -149,7 +150,7 @@ int volc_osal_get_platform_info(char* info, size_t size) {
+     if (NULL == info || size <= 0) {
+         return -1;
+     }
+-    snprintf(info, size, "macos");
++    snprintf(info, size, "linux");
+     return 0;
+ }
+ 

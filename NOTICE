@@ -1,0 +1,17 @@
+AI Cat Controller
+Copyright 2026 Mars680-star contributors
+
+This repository contains integration patches and selected application-layer
+files derived from or designed to work with:
+
+1. Volcengine ConversationalAI-Embedded-Kit-2.0
+   Upstream: https://github.com/volcengine/ConversationalAI-Embedded-Kit-2.0
+   Base commit: 2c94f96f3aad4094e0e818cbb031149fd4384ead
+   License: Apache License 2.0
+
+2. SpaceMIT AI Toy application interfaces
+   The retained ai-toy-app source files preserve their original copyright and
+   SPDX notices.
+
+The complete vendor SDK trees, binary libraries, models and credentials are
+not redistributed by this repository.

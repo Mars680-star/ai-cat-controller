@@ -1,0 +1,20 @@
+[Unit]
+Description=Local wake word detector for Volcengine Conversational AI
+After=volc-conv-ai.service
+Requires=volc-conv-ai.service
+
+[Service]
+Type=simple
+User=root
+Group=pulse-access
+SupplementaryGroups=root
+Environment=HOME=/root
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+WorkingDirectory=/root/ConversationalAI-Embedded-Kit-2.0/examples/low_load_solution/linux_k1/wake_word/build
+ExecStart=/root/ConversationalAI-Embedded-Kit-2.0/examples/low_load_solution/linux_k1/wake_word/build/volc_k1_wake_word --phrase 小安小安
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

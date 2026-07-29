@@ -1,0 +1,52 @@
+diff --git a/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.c b/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.c
+index 3da1951..0542df6 100644
+--- a/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.c
++++ b/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.c
+@@ -32,6 +32,7 @@
+ #include "util/volc_log.h"
+ #include "util/volc_base64.h"
+ #include "mbedtls/sha1.h"
++#include "mbedtls/version.h"
+ 
+ #define WEBSOCKET_SSL_DEFAULT_PORT 443
+ #define WEBSOCKET_TCP_DEFAULT_PORT 80
+@@ -870,7 +871,7 @@ static int ws_connect(volc_ws_client_t* client, const char* host, int port, int
+     strncat((char*) expected_server_text, expected_server_magic, sizeof(expected_server_text) - sizeof(client_key) - 1);
+ 
+     size_t key_len = strlen((char*) expected_server_text);
+-#if 0
++#if MBEDTLS_VERSION_NUMBER < 0x03000000
+     int ret = mbedtls_sha1_ret(expected_server_text, key_len, expected_server_sha1);
+ #else
+     int ret = mbedtls_sha1(expected_server_text, key_len, expected_server_sha1);
+@@ -1332,7 +1333,7 @@ static void free_client(volc_ws_client_t* client)
+     HAL_SAFE_FREE(client);
+ }
+ 
+-#if defined(PLATFORM_MACOS)
++#if defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+ void* volc_ws_client_task(void* thread_param)
+ #else
+ void volc_ws_client_task(void* thread_param)
+@@ -1455,7 +1456,7 @@ void volc_ws_client_task(void* thread_param)
+     }
+     client->exit = true;
+     volc_osal_thread_exit(NULL);
+-#if defined(PLATFORM_MACOS)
++#if defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+     return NULL;
+ #else
+     return;
+diff --git a/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.h b/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.h
+index 88c198a..895aac2 100644
+--- a/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.h
++++ b/volc_conv_ai/src/transports/low_load/third_party/websocket/websocket.h
+@@ -135,7 +135,7 @@ typedef struct {
+ 
+ volc_ws_client_t* volc_ws_client_init(const volc_ws_config_t* input);
+ int volc_ws_client_destroy(volc_ws_client_t* client);
+-#if defined(PLATFORM_MACOS)
++#if defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+ void* volc_ws_client_task(void* thread_param);
+ #else
+ void volc_ws_client_task(void* thread_param);

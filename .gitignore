@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+conv_ai_config.json
+.volc_conv_ai_*.json
+*device_secret*
+*product_secret*
+
+# Native build outputs and downloaded assets
+**/build/
+**/dist/
+**/vendor/
+**/third_party/
+*.o
+*.a
+*.so
+*.so.*
+*.onnx
+*.bin
+*.pcm
+*.wav
+*.mp3
+*.h264
+
+# Complete vendor trees must stay outside this repository
+/ConversationalAI-Embedded-Kit-2.0/
+/starburst_aidialog_*/
+/ai-toy/
+/spacemit_robot/
+
+# Editors and operating system
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp
+tmp/

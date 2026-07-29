@@ -1,0 +1,16 @@
+{
+  "mode": 1,
+  "bot_id": "REPLACE_WITH_BOT_ID",
+  "ver": 1,
+  "iot": {
+    "instance_id": "REPLACE_WITH_INSTANCE_ID",
+    "product_key": "REPLACE_WITH_PRODUCT_KEY",
+    "product_secret": "REPLACE_WITH_PRODUCT_SECRET",
+    "device_name": "REPLACE_WITH_K1_SERIAL_NUMBER"
+  },
+  "ws": {
+    "audio": {
+      "codec": 4
+    }
+  }
+}
