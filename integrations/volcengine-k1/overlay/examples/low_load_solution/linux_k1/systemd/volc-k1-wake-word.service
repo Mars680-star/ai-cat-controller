@@ -1,7 +1,7 @@
 [Unit]
 Description=Local wake word detector for Volcengine Conversational AI
 After=volc-conv-ai.service
-Requires=volc-conv-ai.service
+Wants=volc-conv-ai.service
 
 [Service]
 Type=simple

@@ -16,7 +16,7 @@
 
 | 文件或目录 | 主要内容 |
 |---|---|
-| `examples/low_load_solution/macos/volc_conv_ai_demo.c` | 修复录放音和多线程缓冲；增加连续上行、15 秒追问窗口、`SIGUSR1` 唤醒/继续、`SIGUSR2` 打断/结束、原子状态文件、断线退出重启和 `shake_head` Function Calling。 |
+| `examples/low_load_solution/macos/volc_conv_ai_demo.c` | 修复录放音和多线程缓冲；增加连续上行、播放排空后的 30 秒追问窗口、`SIGUSR1` 唤醒/继续、`SIGUSR2` 打断/结束、原子状态文件、断线退出重启和 `shake_head` Function Calling。 |
 | `examples/low_load_solution/linux_k1/CMakeLists.txt` | 新增 K1/riscv64 WebSocket 构建入口，禁用 x86 RTC，链接 PulseAudio 和系统 TLS 库。 |
 | `examples/low_load_solution/linux_k1/configs/conv_ai_config.example.json` | 增加脱敏的 K1 配置模板；实际密钥只保存在板端构建目录。 |
 | `examples/low_load_solution/linux_k1/README.md` | 增加构建、运行、Function Calling 和 systemd 使用说明。 |
@@ -43,7 +43,7 @@
 - PulseAudio 双向音频、播放小块化和环形缓冲互斥保护。
 - 设备首次注册后缓存凭据，重启直接复用。
 - 无键盘守护进程模式：`SIGUSR1` 开始/继续对话，`SIGUSR2` 打断并结束。
-- 首次唤醒后连续上传麦克风；回答结束后 15 秒内可直接追问。
+- 首次唤醒后连续上传麦克风；回答播放完成并响起短提示音后，30 秒内可直接追问。
 - “小安小安”本地唤醒；连续会话期间通过
   `/run/ai-cat/dialog-session-active` 暂停唤醒采集，会话结束立即恢复。
 - `/run/ai-cat/dialog-status.json` 输出
@@ -106,7 +106,7 @@
 - 断网、DNS 故障、服务器限流、配额耗尽、密钥过期等异常恢复。
 - 24 小时以上长稳、内存泄漏、压力和高并发测试。
 - 不同麦克风、远场、强噪声和大量人员环境下的唤醒率与误唤醒率。
-- 真人在回答期间插话、15 秒追问窗口和网页状态提示的最终体验验收。
+- 真人在回答期间插话、30 秒追问窗口和网页状态提示的最终体验验收。
 - 除 `shake_head` 外的其他硬件 Function Calling。
 
 ## 2026-07-30 回退点

@@ -9,6 +9,8 @@ contain the complete vendor SDK.
 - `upstream.lock`: tested vendor repository URL and commit.
 - `patches/`: changes to tracked vendor SDK files.
 - `overlay/`: new K1 example, service units, and wake-word entry point.
+- `overlay/.../systemd/ai-cat-echo-cancel.pa`: paired PulseAudio WebRTC AEC
+  routing for the K1 microphone and speaker.
 - `scripts/prepare_sdk.sh`: reconstructs the tested SDK tree from upstream.
 
 The directly readable dialog implementation is also kept at

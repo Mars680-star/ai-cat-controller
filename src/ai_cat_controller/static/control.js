@@ -104,6 +104,7 @@
     activeView: "connection",
     toastTimer: null,
     refreshing: false,
+    dialogsRefreshing: false,
     voiceStatus: null,
   };
 
@@ -129,6 +130,8 @@
     answering: "正在回答",
     followup_listening: "等待继续追问",
     interrupted: "回答已打断",
+    echo_guard: "已停止回声循环",
+    recovering: "正在恢复云端连接",
     offline: "语音服务离线",
     unavailable: "状态不可用",
     waking: "正在请求聆听",
@@ -561,7 +564,7 @@
     ui.dialogList.replaceChildren();
     ui.dialogList.classList.toggle("empty-state", messages.length === 0);
     if (messages.length === 0) {
-      ui.dialogList.textContent = "暂无对话记录";
+      ui.dialogList.textContent = "暂无真实语音字幕记录";
       return;
     }
     [...messages].reverse().forEach((message) => {
@@ -580,13 +583,18 @@
   }
 
   async function refreshDialogs() {
-    if (!state.petId) {
+    if (!state.petId || state.dialogsRefreshing) {
       return;
     }
-    const payload = await apiRequest(
-      `/api/v1/pets/${encodeURIComponent(state.petId)}/dialogs`,
-    );
-    renderDialogs(payload.data);
+    state.dialogsRefreshing = true;
+    try {
+      const payload = await apiRequest(
+        `/api/v1/pets/${encodeURIComponent(state.petId)}/dialogs`,
+      );
+      renderDialogs(payload.data);
+    } finally {
+      state.dialogsRefreshing = false;
+    }
   }
 
   function renderVoiceStatus(data) {
@@ -871,6 +879,7 @@
       state.activeView === "history"
     ) {
       refreshVoiceStatus().catch(reportError);
+      refreshDialogs().catch(reportError);
     }
-  }, 1000);
+  }, 2000);
 })();

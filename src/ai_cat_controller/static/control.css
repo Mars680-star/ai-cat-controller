@@ -845,7 +845,8 @@ textarea:focus-visible {
 }
 
 .voice-state-dot.unavailable,
-.voice-state-dot.offline {
+.voice-state-dot.offline,
+.voice-state-dot.echo_guard {
   background: #77736a;
   border-color: #d7d2c8;
 }

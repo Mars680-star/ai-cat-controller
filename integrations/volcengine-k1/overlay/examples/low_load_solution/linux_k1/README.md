@@ -8,7 +8,7 @@ bundled RTC library is x86-64-only, so RTC mode is intentionally disabled.
 ```bash
 apt update
 apt install -y cmake build-essential pkg-config \
-  libmbedtls-dev zlib1g-dev libpulse-dev pulseaudio
+  libcurl4-openssl-dev libmbedtls-dev zlib1g-dev libpulse-dev pulseaudio
 ```
 
 ## Configure
@@ -74,6 +74,19 @@ The K1 implementation executes `/usr/bin/ai-toy_app motor head_lr 2` and sends
 a `function_call_output` event back to the bot. Verify that command manually
 before testing the voice-triggered action.
 
+## Weather function call
+
+The demo also handles `get_weather`, `get_current_weather`, and
+`check_weather`. The tool accepts either a `location` or `city` string. It
+resolves the city and requests current/day forecast data from Open-Meteo over
+HTTPS, then returns a short Chinese result to the bot. City coordinates are
+cached for the lifetime of the process.
+
+If the model sends `当前城市`, set `AI_CAT_DEFAULT_CITY` in the service
+environment. Without it, the tool asks the model to request a city instead of
+guessing the device location. Open-Meteo is suitable for development
+validation; review provider licensing and availability before production.
+
 ## systemd service mode
 
 The demo accepts two signals and can run without a terminal:
@@ -89,6 +102,8 @@ building:
 systemctl disable --now toy_voice.service
 install -m 0644 systemd/volc-pulseaudio.service /etc/systemd/system/
 install -m 0644 systemd/volc-conv-ai.service /etc/systemd/system/
+install -m 0644 systemd/ai-cat-echo-cancel.pa \
+  /etc/pulse/system.pa.d/ai-cat-echo-cancel.pa
 systemctl daemon-reload
 systemctl enable --now volc-conv-ai.service
 ```
@@ -104,4 +119,14 @@ journalctl -u volc-conv-ai.service -f
 ```
 
 The local wake-word process sends `SIGUSR1` after matching its phrase and pauses
-its own capture while `/run/ai-cat/dialog-session-active` exists.
+its own capture while `/run/ai-cat/dialog-session-active` exists. It uses a
+weak systemd dependency on the cloud dialog service, so an idle WebSocket
+reconnect does not reload the large local wake-word model. Ordinary local ASR
+transcripts are not logged by default; add `--debug-transcripts` manually when
+diagnosing wake recognition. Audio is not sent to the cloud until the phrase
+matches and the dialog service receives `SIGUSR1`.
+
+The PulseAudio snippet routes both playback and capture through a paired WebRTC
+echo canceller. The dialog also stops a session if it still detects three
+answer-to-listening transitions within ten seconds, preventing an acoustic
+feedback loop from generating repeated cloud requests.

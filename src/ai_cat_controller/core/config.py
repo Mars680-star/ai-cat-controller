@@ -40,6 +40,7 @@ class Settings(BaseModel):
     hardware_binary: Path = Path("/usr/bin/ai-toy_app")
     systemctl_binary: Path = Path("/usr/bin/systemctl")
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
+    dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
     dialog_service: str = "volc-conv-ai.service"
     wake_service: str = "volc-k1-wake-word.service"
     pulseaudio_service: str = "volc-pulseaudio.service"
@@ -100,6 +101,10 @@ class Settings(BaseModel):
             "systemctl_binary": source.get("AI_CAT_SYSTEMCTL_BINARY", "/usr/bin/systemctl"),
             "dialog_status_path": source.get(
                 "AI_CAT_DIALOG_STATUS_PATH", "/run/ai-cat/dialog-status.json"
+            ),
+            "dialog_event_path": source.get(
+                "AI_CAT_DIALOG_EVENT_PATH",
+                "/var/lib/ai-cat-controller/dialog-events.jsonl",
             ),
             "dialog_service": source.get(
                 "AI_CAT_DIALOG_SERVICE", "volc-conv-ai.service"

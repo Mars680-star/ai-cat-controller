@@ -137,6 +137,7 @@ bool triggerConversation() {
 int main(int argc, char** argv) {
     std::string wake_phrase = "小安小安";
     std::string model_dir = "/root/.cache/sensevoice";
+    bool debug_transcripts = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -144,9 +145,12 @@ int main(int argc, char** argv) {
             wake_phrase = argv[++i];
         } else if (arg == "--model-dir" && i + 1 < argc) {
             model_dir = argv[++i];
+        } else if (arg == "--debug-transcripts") {
+            debug_transcripts = true;
         } else if (arg == "--help") {
             std::cout << "Usage: " << argv[0]
-                      << " [--phrase 小安小安] [--model-dir PATH]" << std::endl;
+                      << " [--phrase 小安小安] [--model-dir PATH]"
+                      << " [--debug-transcripts]" << std::endl;
             return 0;
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
@@ -295,9 +299,12 @@ int main(int argc, char** argv) {
             const std::vector<float> audio = normalizeAudio(utterance);
             const std::string recognized = model.recognize(audio);
             const std::string normalized = normalizeText(recognized);
-            std::cout << "[WakeWord] ASR: " << recognized << std::endl;
+            const bool matched = matchesWakePhrase(normalized, wake_phrase);
 
-            if (matchesWakePhrase(normalized, wake_phrase)) {
+            if (debug_transcripts || matched) {
+                std::cout << "[WakeWord] ASR: " << recognized << std::endl;
+            }
+            if (matched) {
                 std::cout << "[WakeWord] Matched: " << wake_phrase << std::endl;
                 if (triggerConversation()) {
                     resume_not_before =

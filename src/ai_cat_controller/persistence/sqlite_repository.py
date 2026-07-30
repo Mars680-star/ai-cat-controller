@@ -499,6 +499,51 @@ class SQLiteRepository:
             )
         return conversation_id, [user_message, assistant_message]
 
+    def import_native_dialog_events(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        events: list[dict[str, Any]],
+    ) -> int:
+        imported = 0
+        with self._connect() as connection:
+            pet = self._owned_pet_row(connection, user_id, pet_id)
+            serial_number = str(pet["serial_number"])
+            bound_at = str(pet["bound_at"] or "")
+            for event in events:
+                if event["device_serial"] != serial_number:
+                    continue
+                if bound_at and event["created_at"] < bound_at:
+                    continue
+                message_id = _stable_id(
+                    "msg",
+                    f"{serial_number}:{event['event_id']}",
+                )
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO dialog_history(
+                        message_id, conversation_id, pet_id, user_id, role,
+                        content, voice_id, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        message_id,
+                        event["conversation_id"],
+                        pet_id,
+                        user_id,
+                        event["role"],
+                        event["content"],
+                        "volcengine_tts"
+                        if event["role"] == "assistant"
+                        else None,
+                        event["created_at"],
+                    ),
+                )
+                imported += int(cursor.rowcount == 1)
+        return imported
+
     def list_dialogs(
         self, user_id: str, pet_id: str, limit: int = 50
     ) -> list[dict[str, Any]]:

@@ -1,4 +1,5 @@
 import time
+import json
 
 from fastapi.testclient import TestClient
 
@@ -226,6 +227,68 @@ def test_dialog_history_settings_device_status_and_feedback(
     )
     assert feedback.status_code == 200
     assert feedback.json()["data"]["feedback_id"].startswith("fb_")
+
+
+def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> None:
+    event_path = tmp_path / "dialog-events.jsonl"
+    settings = Settings(
+        hardware_driver="mock",
+        motion_cooldown_seconds=0.0,
+        data_path=tmp_path / "native-dialog.db",
+        dialog_event_path=event_path,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        headers, _ = _login(client, code="native-dialog-user")
+        pet_id = _bind(client, headers, serial="K1-NATIVE-HISTORY")["pet"]["pet_id"]
+        created_at_ms = int(time.time() * 1000) + 100
+        events = [
+            {
+                "event_id": "event-user-1",
+                "conversation_id": "native-K1-NATIVE-HISTORY-1",
+                "device_serial": "K1-NATIVE-HISTORY",
+                "role": "user",
+                "content": "今天星期几？",
+                "created_at_ms": created_at_ms,
+            },
+            {
+                "event_id": "event-assistant-1",
+                "conversation_id": "native-K1-NATIVE-HISTORY-1",
+                "device_serial": "K1-NATIVE-HISTORY",
+                "role": "assistant",
+                "content": "今天是星期四。",
+                "created_at_ms": created_at_ms + 1,
+            },
+            {
+                "event_id": "event-other-device",
+                "conversation_id": "native-other-1",
+                "device_serial": "OTHER-K1",
+                "role": "user",
+                "content": "不应导入",
+                "created_at_ms": created_at_ms,
+            },
+        ]
+        event_path.write_text(
+            "\n".join(json.dumps(event, ensure_ascii=False) for event in events)
+            + "\n{malformed}\n",
+            encoding="utf-8",
+        )
+
+        first = client.get(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+        ).json()["data"]
+        second = client.get(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+        ).json()["data"]
+
+        assert [message["content"] for message in first] == [
+            "今天是星期四。",
+            "今天星期几？",
+        ]
+        assert second == first
+        assert first[0]["voice_id"] == "volcengine_tts"
 
 
 def test_critical_data_survives_application_restart(tmp_path) -> None:

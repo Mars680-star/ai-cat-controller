@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 from ai_cat_controller.core.config import Settings
@@ -24,6 +27,10 @@ from ai_cat_controller.domain.intimacy import (
 from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
 from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 from ai_cat_controller.services.motion_service import MotionService
+
+LOGGER = logging.getLogger(__name__)
+MAX_NATIVE_DIALOG_FILE_BYTES = 4 * 1024 * 1024
+MAX_NATIVE_DIALOG_LINE_BYTES = 16 * 1024
 
 
 class ProductMockService:
@@ -374,9 +381,74 @@ class ProductMockService:
     async def dialog_history(
         self, user_id: str, pet_id: str
     ) -> list[dict[str, Any]]:
+        events = await asyncio.to_thread(self._read_native_dialog_events)
+        if events:
+            imported = await asyncio.to_thread(
+                self._repository.import_native_dialog_events,
+                user_id=user_id,
+                pet_id=pet_id,
+                events=events,
+            )
+            if imported:
+                LOGGER.info("imported %d native dialog messages", imported)
         return await asyncio.to_thread(
             self._repository.list_dialogs, user_id, pet_id, 50
         )
+
+    def _read_native_dialog_events(self) -> list[dict[str, Any]]:
+        path = self._settings.dialog_event_path
+        try:
+            if path.stat().st_size > MAX_NATIVE_DIALOG_FILE_BYTES:
+                LOGGER.warning("native dialog event file exceeds size limit: %s", path)
+                return []
+            lines = path.read_bytes().splitlines()
+        except FileNotFoundError:
+            return []
+        except OSError:
+            LOGGER.exception("failed to read native dialog events: %s", path)
+            return []
+
+        events: list[dict[str, Any]] = []
+        for line in lines:
+            if not line or len(line) > MAX_NATIVE_DIALOG_LINE_BYTES:
+                continue
+            try:
+                payload = json.loads(line)
+                event_id = str(payload["event_id"]).strip()
+                conversation_id = str(payload["conversation_id"]).strip()
+                device_serial = str(payload["device_serial"]).strip()
+                role = str(payload["role"]).strip()
+                content = str(payload["content"]).strip()
+                created_at_ms = int(payload["created_at_ms"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                not event_id
+                or len(event_id) > 256
+                or not conversation_id
+                or len(conversation_id) > 256
+                or not device_serial
+                or len(device_serial) > 64
+                or role not in {"user", "assistant"}
+                or not content
+                or len(content) > 8192
+                or created_at_ms <= 0
+            ):
+                continue
+            events.append(
+                {
+                    "event_id": event_id,
+                    "conversation_id": conversation_id,
+                    "device_serial": device_serial,
+                    "role": role,
+                    "content": content,
+                    "created_at": datetime.fromtimestamp(
+                        created_at_ms / 1000,
+                        timezone.utc,
+                    ).isoformat(),
+                }
+            )
+        return events
 
     async def update_settings(
         self,

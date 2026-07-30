@@ -1,5 +1,5 @@
 diff --git a/examples/low_load_solution/macos/volc_conv_ai_demo.c b/examples/low_load_solution/macos/volc_conv_ai_demo.c
-index 2fcdf94..af14ed2 100644
+index 2fcdf94..a92b05c 100644
 --- a/examples/low_load_solution/macos/volc_conv_ai_demo.c
 +++ b/examples/low_load_solution/macos/volc_conv_ai_demo.c
 @@ -1,4 +1,21 @@
@@ -12,19 +12,19 @@ index 2fcdf94..af14ed2 100644
 + *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
 + *   3. 麦克风在连续会话内持续上行，由服务端 VAD 自动判定每句话结束。
 + *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
-+ *   5. 云端 Function Calling 可异步执行 K1 摇头命令并回传结果。
++ *   5. 云端 Function Calling 可异步执行 K1 摇头和实时天气查询。
 + *
 + * 并发模型：
 + *   - 主线程：录音上传、键盘/信号状态机和 SDK 控制命令。
 + *   - SDK 回调线程：连接事件、对话状态、消息和下行音频。
 + *   - 播放线程：消费环形缓冲中的 TTS 音频。
-+ *   - 工具线程：执行可能阻塞的电机命令，避免阻塞 SDK 回调。
++ *   - 工具线程：执行可能阻塞的电机命令或网络查询，避免阻塞 SDK 回调。
 + */
 +
  #include <stdio.h>
  #include <stdlib.h>
  #include <unistd.h>
-@@ -9,6 +26,9 @@
+@@ -9,7 +26,11 @@
  #include <stdbool.h>
  #include <string.h>
  #include <pthread.h>
@@ -32,24 +32,46 @@ index 2fcdf94..af14ed2 100644
 +#include <sys/stat.h>
 +#include <sys/wait.h>
  
++#include <curl/curl.h>
  #include <pulse/simple.h>
  #include <pulse/error.h>
-@@ -22,13 +42,22 @@
+ 
+@@ -22,13 +43,41 @@
  #define AUDIO_CHANNEL_NUM 1
  #define AUDIO_FRAME_PER_SECOND (32000)
  #define AUDIO_FRAME_MS (1000 / (AUDIO_FRAME_PER_SECOND / AUDIO_FRAME_LEN))
 +#define AUDIO_PLAYBACK_CHUNK_MS 20
 +#define FUNCTION_NAME_MAX_LEN 64
 +#define FUNCTION_CALL_ID_MAX_LEN 128
-+#define WAKE_SPEECH_TIMEOUT_MS 15000
-+#define FOLLOW_UP_WINDOW_MS 15000
++#define FUNCTION_ARGUMENTS_MAX_LEN 512
++#define WEATHER_LOCATION_MAX_LEN 128
++#define HTTP_RESPONSE_MAX_BYTES (128 * 1024)
++#define WAKE_SPEECH_TIMEOUT_MS 30000
++#define FOLLOW_UP_WINDOW_MS 30000
++#define THINKING_TIMEOUT_MS 30000
++#define LOCAL_VAD_SPEECH_RMS 250
++#define LOCAL_VAD_START_FRAMES 2
++#define LOCAL_VAD_SILENCE_FRAMES 15
++#define LOCAL_VAD_MAX_UTTERANCE_MS 8000
++#define HEAD_SHAKE_COOLDOWN_MS 8000
++#define PLAYBACK_CAPTURE_GUARD_MS 350
++#define WAKE_TONE_DURATION_MS 350
++#define FOLLOW_UP_TONE_DURATION_MS 140
++#define WAKE_TONE_POST_GUARD_MS 120
++#define BARGE_IN_GUARD_WINDOW_MS 10000
++#define BARGE_IN_GUARD_LIMIT 3
 +#define DIALOG_STATUS_DIR "/run/ai-cat"
 +#define DIALOG_STATUS_PATH DIALOG_STATUS_DIR "/dialog-status.json"
 +#define DIALOG_STATUS_TMP_PATH DIALOG_STATUS_DIR "/dialog-status.json.tmp"
 +#define DIALOG_SESSION_MARKER DIALOG_STATUS_DIR "/dialog-session-active"
++#define DIALOG_EVENT_DIR "/var/lib/ai-cat-controller"
++#define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
++#define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
++#define DEVICE_SERIAL_MAX_LEN 64
  
  #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
- #define WS_SESSION_UPDATE "{\"event_id\":\"event_OgjwihjHg\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"model\":\"\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":0}},\"agent_config\":{\"WelcomeMessage\":\"这是一个覆盖智能体上的欢迎语.\"}}}"
+-#define WS_SESSION_UPDATE "{\"event_id\":\"event_OgjwihjHg\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"model\":\"\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":0}},\"agent_config\":{\"WelcomeMessage\":\"这是一个覆盖智能体上的欢迎语.\"}}}"
++#define WS_SESSION_UPDATE "{\"event_id\":\"event_ai_cat_session_config\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"config\":{\"ASRConfig\":{\"VADConfig\":{\"SilenceTime\":800,\"AIVAD\":false},\"InterruptConfig\":{\"InterruptSpeechDuration\":600}},\"SubtitleConfig\":{\"DisableRTSSubtitle\":false,\"SubtitleMode\":1}}}}"
  
  typedef struct {
 -	uint8_t* audio_rec_buf;
@@ -59,15 +81,18 @@ index 2fcdf94..af14ed2 100644
      char* bot_id;
      char* video_rec_buf;
      int video_frame_len;
-@@ -37,6 +66,7 @@ typedef struct {
+@@ -37,27 +86,90 @@ typedef struct {
      int sample_rate;
      int audio_frame_ms;
      volc_ringbuf_t ring_buf;
-+	    pthread_mutex_t ring_buf_mutex;
- 	pa_simple* p_capture;
- 	pa_simple* p_playback;
+-	pa_simple* p_capture;
+-	pa_simple* p_playback;
++    pthread_mutex_t ring_buf_mutex;
++    pthread_mutex_t playback_mutex;
++    pa_simple* p_capture;
++    pa_simple* p_playback;
      pa_sample_spec format;
-@@ -44,20 +74,51 @@ typedef struct {
+     pthread_t audio_playback_task;
      volc_engine_t engine;
  } realtime_ws_demo_t;
  
@@ -91,16 +116,36 @@ index 2fcdf94..af14ed2 100644
  static volatile sig_atomic_t session_update = false;
 +static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
 +static volatile sig_atomic_t interrupt_only_request = false; /* SIGUSR2 只打断，不开始录音 */
++static volatile sig_atomic_t wake_tone_after_interrupt = false;
++static volatile sig_atomic_t follow_up_prepare_request = false;
++static volatile sig_atomic_t echo_guard_request = false;     /* 连续插话触发回声保护 */
++static volatile sig_atomic_t echo_guard_active = false;      /* 等待下一次唤醒解除保护 */
 +static volatile sig_atomic_t session_active = false;          /* 一次唤醒后的连续对话窗口 */
 +static volatile sig_atomic_t waiting_for_speech = false;      /* 等待用户开始说话 */
++static volatile sig_atomic_t playback_capture_guard = false;  /* TTS 播放时暂停上行，阻断自回声 */
++static volatile sig_atomic_t playback_write_active = false;   /* 播放线程已取出但尚未写完的音频块 */
++static volatile sig_atomic_t tool_capture_guard = false;      /* 工具执行至回复结束期间暂停上行 */
 +static uint64_t speech_start_deadline_ms = 0;                 /* 等待首句/追问的截止时间 */
 +static uint64_t follow_up_deadline_ms = 0;                    /* 无需唤醒的追问窗口 */
++static uint64_t thinking_deadline_ms = 0;                     /* 云端思考超时后重建连接 */
++static uint64_t playback_capture_guard_until_ms = 0;
++static bool local_speech_detected = false;                    /* 本地保底 VAD 已确认人声 */
++static unsigned int local_speech_frames = 0;
++static unsigned int local_silence_frames = 0;
++static uint64_t local_speech_started_ms = 0;
++static uint64_t barge_in_window_started_ms = 0;               /* 连续插话计数窗口起点 */
++static unsigned int barge_in_count = 0;                       /* 窗口内插话次数 */
++static pthread_mutex_t barge_in_guard_mutex = PTHREAD_MUTEX_INITIALIZER;
  static struct termios original_term;
 +static bool terminal_configured = false;
  static int tick = 0;
 +extern char** environ;
 +static pthread_mutex_t dialog_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 +static unsigned long dialog_status_sequence = 0;
++static pthread_mutex_t dialog_event_mutex = PTHREAD_MUTEX_INITIALIZER;
++static unsigned long dialog_event_sequence = 0;
++static unsigned long dialog_turn_sequence = 0;
++static char device_serial[DEVICE_SERIAL_MAX_LEN + 1] = "unknown";
 +
 +/* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
 +typedef struct {
@@ -111,10 +156,20 @@ index 2fcdf94..af14ed2 100644
 +typedef struct {
 +    realtime_ws_demo_t* demo;
 +    char call_id[FUNCTION_CALL_ID_MAX_LEN];
++    char name[FUNCTION_NAME_MAX_LEN];
++    char arguments[FUNCTION_ARGUMENTS_MAX_LEN];
 +} function_call_task_t;
  
 +static pending_function_call_t pending_function_call;
 +static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
++static pthread_mutex_t head_motor_mutex = PTHREAD_MUTEX_INITIALIZER;
++static uint64_t head_shake_last_started_ms = 0;
++static pthread_once_t curl_init_once = PTHREAD_ONCE_INIT;
++static pthread_mutex_t weather_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
++static char cached_weather_location[WEATHER_LOCATION_MAX_LEN];
++static char cached_weather_place_name[WEATHER_LOCATION_MAX_LEN];
++static double cached_weather_latitude;
++static double cached_weather_longitude;
 +
 +/* 调试辅助：需要观察上行帧率时可在主循环中启用。 */
  static void __get_fps(void) {
@@ -123,11 +178,205 @@ index 2fcdf94..af14ed2 100644
      static int fps = 0;
      struct timespec now_time;
      fps++;
-@@ -75,84 +136,181 @@ static uint64_t __get_time_ms(void) {
+@@ -75,84 +187,380 @@ static uint64_t __get_time_ms(void) {
      return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
  }
  
 -// 恢复终端设置
++static void __reset_barge_in_guard(void) {
++    pthread_mutex_lock(&barge_in_guard_mutex);
++    barge_in_window_started_ms = 0;
++    barge_in_count = 0;
++    pthread_mutex_unlock(&barge_in_guard_mutex);
++}
++
++static void __reset_local_vad(void) {
++    local_speech_detected = false;
++    local_speech_frames = 0;
++    local_silence_frames = 0;
++    local_speech_started_ms = 0;
++}
++
++static bool __local_vad_should_commit(
++    const uint8_t* pcm,
++    size_t pcm_len,
++    bool* speech_started
++) {
++    const int16_t* samples = (const int16_t*)pcm;
++    size_t sample_count = pcm_len / sizeof(*samples);
++    uint64_t sum_squares = 0;
++
++    *speech_started = false;
++    if (sample_count == 0) {
++        return false;
++    }
++    for (size_t i = 0; i < sample_count; i++) {
++        int32_t sample = samples[i];
++        sum_squares += (uint64_t)(sample * sample);
++    }
++
++    bool has_speech =
++        sum_squares >
++        (uint64_t)LOCAL_VAD_SPEECH_RMS *
++            LOCAL_VAD_SPEECH_RMS *
++            sample_count;
++    if (
++        local_speech_detected &&
++        __get_time_ms() - local_speech_started_ms >=
++            LOCAL_VAD_MAX_UTTERANCE_MS
++    ) {
++        printf("local VAD fallback: maximum utterance duration reached\n");
++        return true;
++    }
++    if (has_speech) {
++        local_silence_frames = 0;
++        if (!local_speech_detected) {
++            local_speech_frames++;
++            if (local_speech_frames >= LOCAL_VAD_START_FRAMES) {
++                local_speech_detected = true;
++                local_speech_started_ms = __get_time_ms();
++                *speech_started = true;
++            }
++        }
++        return false;
++    }
++
++    local_speech_frames = 0;
++    if (!local_speech_detected) {
++        return false;
++    }
++    local_silence_frames++;
++    return local_silence_frames >= LOCAL_VAD_SILENCE_FRAMES;
++}
++
++/*
++ * 正常用户偶尔插话不会触发保护；扬声器回灌通常会在数秒内重复形成
++ * ANSWERING -> LISTENING 循环。达到阈值后由主线程中止云端回答和本地会话。
++ */
++static void __record_barge_in(uint64_t now_ms) {
++    pthread_mutex_lock(&barge_in_guard_mutex);
++    if (
++        barge_in_window_started_ms == 0 ||
++        now_ms - barge_in_window_started_ms > BARGE_IN_GUARD_WINDOW_MS
++    ) {
++        barge_in_window_started_ms = now_ms;
++        barge_in_count = 1;
++        pthread_mutex_unlock(&barge_in_guard_mutex);
++        return;
++    }
++
++    barge_in_count++;
++    if (barge_in_count >= BARGE_IN_GUARD_LIMIT) {
++        echo_guard_request = true;
++    }
++    pthread_mutex_unlock(&barge_in_guard_mutex);
++}
++
++static void __load_device_serial(void) {
++    FILE* fp = fopen(DEVICE_SERIAL_PATH, "rb");
++    size_t len;
++
++    if (fp == NULL) {
++        return;
++    }
++    len = fread(device_serial, 1, DEVICE_SERIAL_MAX_LEN, fp);
++    fclose(fp);
++    while (
++        len > 0 &&
++        (device_serial[len - 1] == '\0' ||
++         device_serial[len - 1] == '\n' ||
++         device_serial[len - 1] == '\r')
++    ) {
++        len--;
++    }
++    device_serial[len] = '\0';
++    if (len == 0) {
++        snprintf(device_serial, sizeof(device_serial), "unknown");
++    }
++}
++
++/*
++ * Final cloud transcripts are appended as bounded JSON lines. FastAPI imports
++ * them idempotently into SQLite and associates them with the bound device.
++ */
++static void __write_dialog_event(
++    const char* role,
++    const char* content,
++    const char* cloud_event_id
++) {
++    cJSON* root = NULL;
++    char* json = NULL;
++    FILE* fp = NULL;
++    char generated_event_id[96];
++    char conversation_id[128];
++    size_t content_len;
++
++    if (role == NULL || content == NULL || content[0] == '\0') {
++        return;
++    }
++    content_len = strlen(content);
++    if (content_len > 8192) {
++        printf("dialog transcript ignored: text is too long\n");
++        return;
++    }
++
++    pthread_mutex_lock(&dialog_event_mutex);
++    if (strcmp(role, "user") == 0 || dialog_turn_sequence == 0) {
++        dialog_turn_sequence++;
++    }
++    dialog_event_sequence++;
++    snprintf(
++        generated_event_id,
++        sizeof(generated_event_id),
++        "native-%lu",
++        dialog_event_sequence
++    );
++    snprintf(
++        conversation_id,
++        sizeof(conversation_id),
++        "native-%s-%lu",
++        device_serial,
++        dialog_turn_sequence
++    );
++
++    if (mkdir(DIALOG_EVENT_DIR, 0750) != 0 && errno != EEXIST) {
++        pthread_mutex_unlock(&dialog_event_mutex);
++        return;
++    }
++    root = cJSON_CreateObject();
++    if (root == NULL) {
++        pthread_mutex_unlock(&dialog_event_mutex);
++        return;
++    }
++    cJSON_AddStringToObject(
++        root,
++        "event_id",
++        cloud_event_id != NULL && cloud_event_id[0] != '\0'
++            ? cloud_event_id
++            : generated_event_id
++    );
++    cJSON_AddStringToObject(root, "conversation_id", conversation_id);
++    cJSON_AddStringToObject(root, "device_serial", device_serial);
++    cJSON_AddStringToObject(root, "role", role);
++    cJSON_AddStringToObject(root, "content", content);
++    cJSON_AddNumberToObject(root, "created_at_ms", (double)__get_time_ms());
++    json = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
++    if (json != NULL) {
++        fp = fopen(DIALOG_EVENT_PATH, "ab");
++        if (fp != NULL) {
++            fwrite(json, 1, strlen(json), fp);
++            fputc('\n', fp);
++            fflush(fp);
++            fsync(fileno(fp));
++            fclose(fp);
++            printf("dialog transcript [%s]: %s\n", role, content);
++        }
++        free(json);
++    }
++    pthread_mutex_unlock(&dialog_event_mutex);
++}
++
 +/*
 + * 对话状态通过固定 JSON 文件提供给 FastAPI。先写临时文件再 rename，
 + * 读取端永远只会看到一份完整 JSON；会话 marker 供唤醒词进程协调录音占用。
@@ -187,10 +436,15 @@ index 2fcdf94..af14ed2 100644
 +
 +static void __end_continuous_session(const char* message) {
 +    running = false;
++    ai_playing = false;
 +    session_active = false;
 +    waiting_for_speech = false;
++    follow_up_prepare_request = false;
 +    speech_start_deadline_ms = 0;
 +    follow_up_deadline_ms = 0;
++    thinking_deadline_ms = 0;
++    __reset_local_vad();
++    __reset_barge_in_guard();
 +    __write_dialog_status("ready", message);
 +}
 +
@@ -338,12 +592,12 @@ index 2fcdf94..af14ed2 100644
 +    sigaction(SIGTERM, &sa, NULL);
 +    sigaction(SIGUSR1, &sa, NULL);
 +    sigaction(SIGUSR2, &sa, NULL);
- 
--    // 设置标准输入为异步模式
++
 +    if (!isatty(STDIN_FILENO)) {
 +        return;
 +    }
-+
+ 
+-    // 设置标准输入为异步模式
 +    // 保存原始终端设置
 +    if (tcgetattr(STDIN_FILENO, &original_term) != 0) {
 +        return;
@@ -363,7 +617,7 @@ index 2fcdf94..af14ed2 100644
      // 修改终端设置：禁用行缓冲和回显
      struct termios term = original_term;
      term.c_lflag &= ~(ICANON | ECHO);
-@@ -160,6 +318,7 @@ static void __setup_async_io(void) {
+@@ -160,6 +568,7 @@ static void __setup_async_io(void) {
  }
  
  static char* __load_config_from_file(const char* filename) {
@@ -371,7 +625,7 @@ index 2fcdf94..af14ed2 100644
      FILE* config_fp = fopen(filename, "rb");
      if (config_fp == NULL) {
          printf("failed to open %s for reading.\n", filename);
-@@ -181,7 +340,7 @@ static char* __load_config_from_file(const char* filename) {
+@@ -181,7 +590,7 @@ static char* __load_config_from_file(const char* filename) {
      }
      memset(config_data, 0, config_len + 1);
      size_t read_size = fread(config_data, 1, config_len, config_fp);
@@ -380,7 +634,7 @@ index 2fcdf94..af14ed2 100644
          printf("Failed to read %s, expected %d bytes, got %zu bytes.\n", filename, config_len, read_size);
          free(config_data);
          fclose(config_fp);
-@@ -192,6 +351,7 @@ static char* __load_config_from_file(const char* filename) {
+@@ -192,6 +601,7 @@ static char* __load_config_from_file(const char* filename) {
  }
  
  static int __load_video_file(realtime_ws_demo_t* demo) {
@@ -388,7 +642,7 @@ index 2fcdf94..af14ed2 100644
      FILE* video_fp = fopen("send_video.h264", "rb");
      if (video_fp == NULL) {
          printf("failed to open send_video.h264 for reading.\n");
-@@ -213,7 +373,7 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
+@@ -213,7 +623,7 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
      }
      memset(demo->video_rec_buf, 0, demo->video_frame_len + 1);
      size_t read_size = fread(demo->video_rec_buf, 1, demo->video_frame_len, video_fp);
@@ -397,9 +651,92 @@ index 2fcdf94..af14ed2 100644
          printf("Failed to read send_video.h264, expected %d bytes, got %zu bytes.\n", demo->video_frame_len, read_size);
          free(demo->video_rec_buf);
          fclose(video_fp);
-@@ -224,25 +384,33 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
+@@ -223,26 +633,142 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
+     return 0;
  }
  
++static int __play_ready_tone(
++    realtime_ws_demo_t* demo,
++    int duration_ms,
++    const char* description
++) {
++    static const int16_t wave[16] = {
++        0, 3444, 6363, 8316, 9000, 8316, 6363, 3444,
++        0, -3444, -6363, -8316, -9000, -8316, -6363, -3444,
++    };
++    int sample_count;
++    int fade_samples;
++    int16_t* tone;
++    int error = 0;
++    int ret = 0;
++
++    if (demo == NULL || demo->p_playback == NULL || demo->sample_rate <= 0) {
++        return -1;
++    }
++    sample_count = demo->sample_rate * duration_ms / 1000;
++    fade_samples = demo->sample_rate / 200;
++    tone = calloc((size_t)sample_count, sizeof(*tone));
++    if (tone == NULL) {
++        return -1;
++    }
++    for (int i = 0; i < sample_count; i++) {
++        int envelope = fade_samples;
++        if (i < envelope) {
++            envelope = i;
++        }
++        if (sample_count - i - 1 < envelope) {
++            envelope = sample_count - i - 1;
++        }
++        tone[i] = (int16_t)(
++            (int32_t)wave[i % 16] * envelope / fade_samples
++        );
++    }
++
++    /*
++     * 直接写播放流并 drain，保证用户先听到确认音，随后才开放麦克风。
++     * playback_mutex 防止后台 TTS 线程同时操作同一个 pa_simple 句柄。
++     */
++    playback_capture_guard = true;
++    pthread_mutex_lock(&demo->playback_mutex);
++    if (
++        pa_simple_write(
++            demo->p_playback,
++            (char*)tone,
++            sample_count * sizeof(*tone),
++            &error
++        ) < 0 ||
++        pa_simple_drain(demo->p_playback, &error) < 0
++    ) {
++        printf("wake confirmation tone playback failed: %s\n", pa_strerror(error));
++        ret = -1;
++    } else {
++        printf("%s played\n", description);
++    }
++    pthread_mutex_unlock(&demo->playback_mutex);
++    playback_capture_guard_until_ms =
++        __get_time_ms() + WAKE_TONE_POST_GUARD_MS;
++    free(tone);
++    return ret;
++}
++
++static int __flush_capture_buffer(realtime_ws_demo_t* demo) {
++    int error = 0;
++
++    if (demo == NULL || demo->p_capture == NULL) {
++        return -1;
++    }
++    if (pa_simple_flush(demo->p_capture, &error) < 0) {
++        fprintf(
++            stderr,
++            "capture buffer flush failed: %s\n",
++            pa_strerror(error)
++        );
++        return -1;
++    }
++    printf("capture buffer flushed; live listening starts now\n");
++    return 0;
++}
++
  static void* __audio_playback_task(void* arg) {
 +    /*
 +     * SDK 回调只负责快速写环形缓冲，本线程以 20 ms 小块持续播放，
@@ -408,6 +745,7 @@ index 2fcdf94..af14ed2 100644
      int len = 0;
      int error  = 0;
 +    int playback_chunk_len = 0;
++    int playback_read_len = 0;
      uint8_t *buffer = NULL;
      realtime_ws_demo_t* demo = (realtime_ws_demo_t*)arg;
 -    buffer = (uint8_t *)malloc(demo->frame_len);
@@ -428,19 +766,44 @@ index 2fcdf94..af14ed2 100644
 -            } else {
 -                usleep(100 * 1000);
 +        pthread_mutex_lock(&demo->ring_buf_mutex);
-+        len = volc_ringbuf_read(demo->ring_buf, (char *)buffer, playback_chunk_len);
++        playback_read_len = volc_ringbuf_getdatasize(demo->ring_buf);
++        if (playback_read_len > playback_chunk_len) {
++            playback_read_len = playback_chunk_len;
++        }
++        len = playback_read_len > 0
++            ? volc_ringbuf_read(
++                demo->ring_buf,
++                (char *)buffer,
++                playback_read_len
++            )
++            : 0;
++        if (len > 0) {
++            playback_write_active = true;
++        }
 +        pthread_mutex_unlock(&demo->ring_buf_mutex);
 +        if (len > 0) {
++            playback_capture_guard = true;
++            playback_capture_guard_until_ms =
++                __get_time_ms() + PLAYBACK_CAPTURE_GUARD_MS;
++            pthread_mutex_lock(&demo->playback_mutex);
 +            if (pa_simple_write(demo->p_playback, buffer, len, &error) < 0) {
 +                printf("pa_simple_write error: %s\n", pa_strerror(error));
              }
++            pthread_mutex_unlock(&demo->playback_mutex);
++            playback_write_active = false;
 +        } else {
++            if (
++                playback_capture_guard &&
++                __get_time_ms() >= playback_capture_guard_until_ms
++            ) {
++                playback_capture_guard = false;
++            }
 +            usleep(10 * 1000);
 +        }
      }
      free(buffer);
      return NULL;
-@@ -251,14 +419,22 @@ static void* __audio_playback_task(void* arg) {
+@@ -251,14 +777,22 @@ static void* __audio_playback_task(void* arg) {
  static bool is_ready = false;
  static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user_data)
  {
@@ -463,7 +826,7 @@ index 2fcdf94..af14ed2 100644
              break;
          default:
              printf("Volc Engine event: %d\n", event->code);
-@@ -268,43 +444,98 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
+@@ -268,43 +802,133 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
  
  static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_e status, void* user_data)
  {
@@ -471,13 +834,22 @@ index 2fcdf94..af14ed2 100644
 +    uint64_t now_ms = __get_time_ms();
 +
 +    /*
-+     * 连续对话期间不能在 THINKING/ANSWERING 停止上行，否则云端永远听不到
-+     * 用户插话，InterruptMode=0 也无法生效。LISTENING 可能发生在 AI 回答时，
-+     * 此时立即清空本地 TTS 缓冲，避免残余语音继续播放。
++     * 普通 THINKING 阶段保持上行以支持用户插话。Function Calling 和实际
++     * TTS 播放期间由独立 capture guard 阻断电机噪声与扬声器回声。
 +     */
      printf("conversation status changed: %d\n", status);
 -    if (status == VOLC_CONV_STATUS_THINKING) {
++    if (echo_guard_active) {
++        running = false;
++        ai_playing = false;
++        __write_dialog_status(
++            "echo_guard",
++            "检测到扬声器回声，已停止本次对话，请重新唤醒"
++        );
++        return;
++    }
 +    if (status == VOLC_CONV_STATUS_LISTENING) {
++        thinking_deadline_ms = 0;
 +        if (!session_active) {
 +            __write_dialog_status("ready", "等待唤醒词“小安小安”");
 +            return;
@@ -486,6 +858,7 @@ index 2fcdf94..af14ed2 100644
 +            pthread_mutex_lock(&demo->ring_buf_mutex);
 +            volc_ringbuf_clear(demo->ring_buf);
 +            pthread_mutex_unlock(&demo->ring_buf_mutex);
++            __record_barge_in(now_ms);
 +        }
 +        ai_playing = false;
 +        running = true;
@@ -496,35 +869,60 @@ index 2fcdf94..af14ed2 100644
 +                : "正在接收语音"
 +        );
 +    } else if (status == VOLC_CONV_STATUS_THINKING) {
++        __reset_local_vad();
 +        running = session_active;
 +        waiting_for_speech = false;
 +        speech_start_deadline_ms = 0;
 +        follow_up_deadline_ms = 0;
++        thinking_deadline_ms = now_ms + THINKING_TIMEOUT_MS;
 +        ai_playing = true;
 +        __write_dialog_status("thinking", "问题已收到，正在思考");
 +    } else if (status == VOLC_CONV_STATUS_ANSWERING) {
++        __reset_local_vad();
 +        running = session_active;
 +        waiting_for_speech = false;
 +        speech_start_deadline_ms = 0;
 +        follow_up_deadline_ms = 0;
++        thinking_deadline_ms = 0;
 +        ai_playing = true;
-+        __write_dialog_status("answering", "正在回答，可以直接说话打断");
++        __write_dialog_status("answering", "正在回答");
 +    } else if (
 +        status == VOLC_CONV_STATUS_INTERRUPTED ||
 +        status == VOLC_CONV_STATUS_ANSWER_FINISH
 +    ) {
++        __reset_local_vad();
++        tool_capture_guard = false;
 +        ai_playing = false;
++        thinking_deadline_ms = 0;
++        if (status == VOLC_CONV_STATUS_ANSWER_FINISH) {
++            __reset_barge_in_guard();
++        }
 +        if (session_active) {
-+            running = true;
-+            waiting_for_speech = true;
-+            follow_up_deadline_ms = now_ms + FOLLOW_UP_WINDOW_MS;
-+            speech_start_deadline_ms = follow_up_deadline_ms;
-+            __write_dialog_status(
-+                "followup_listening",
-+                status == VOLC_CONV_STATUS_INTERRUPTED
-+                    ? "回答已打断，可以直接继续说"
-+                    : "回答结束，15 秒内可以直接追问"
-+            );
++            if (status == VOLC_CONV_STATUS_ANSWER_FINISH) {
++                /*
++                 * SDK 的完成事件可能早于扬声器真正播放完毕。主线程等待播放
++                 * 队列排空后再清缓冲并开放追问，避免尾音被当作用户输入。
++                 */
++                running = false;
++                waiting_for_speech = false;
++                follow_up_deadline_ms = 0;
++                speech_start_deadline_ms = 0;
++                playback_capture_guard = true;
++                follow_up_prepare_request = true;
++                __write_dialog_status(
++                    "followup_preparing",
++                    "回答播放完毕后将提示您继续追问"
++                );
++            } else {
++                running = true;
++                waiting_for_speech = true;
++                follow_up_deadline_ms = now_ms + FOLLOW_UP_WINDOW_MS;
++                speech_start_deadline_ms = follow_up_deadline_ms;
++                __write_dialog_status(
++                    "followup_listening",
++                    "回答已打断，可以直接继续说"
++                );
++            }
 +        } else {
 +            running = false;
 +            __write_dialog_status(
@@ -579,7 +977,7 @@ index 2fcdf94..af14ed2 100644
      if (NULL == root) {
          return;
      }
-@@ -322,101 +553,187 @@ static void __on_subtitle_message_received(cJSON* root) {
+@@ -322,103 +946,668 @@ static void __on_subtitle_message_received(cJSON* root) {
      }
  }
  
@@ -606,21 +1004,21 @@ index 2fcdf94..af14ed2 100644
 +        cJSON_Delete(item);
 +        return -1;
 +    }
-+
-+    snprintf(event_id, sizeof(event_id), "event_%s", call_id);
  
 -    cJSON_AddItemToObject(content_item, "type", cJSON_CreateString(mode));
 -    cJSON_AddItemToObject(content_item, "text", cJSON_CreateString(content_str));
 -    cJSON_AddItemToArray(content, content_item);
 -    cJSON_AddItemToObject(item, "content", content);
++    snprintf(event_id, sizeof(event_id), "event_%s", call_id);
+ 
+-    char* json_str = cJSON_Print(root);
 +    cJSON_AddStringToObject(root, "event_id", event_id);
 +    cJSON_AddStringToObject(root, "type", "conversation.item.create");
 +    cJSON_AddItemToObject(root, "item", item);
 +    cJSON_AddStringToObject(item, "type", "function_call_output");
 +    cJSON_AddStringToObject(item, "call_id", call_id);
 +    cJSON_AddStringToObject(item, "output", output);
- 
--    char* json_str = cJSON_Print(root);
++
 +    json_str = cJSON_PrintUnformatted(root);
 +    cJSON_Delete(root);
      if (json_str == NULL) {
@@ -638,6 +1036,349 @@ index 2fcdf94..af14ed2 100644
 +    msg_info.is_binary = true;
 +    ret = volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
 +    free(json_str);
++    return ret;
++}
++
++typedef struct {
++    char* data;
++    size_t size;
++} http_response_t;
++
++static void __initialize_curl(void) {
++    curl_global_init(CURL_GLOBAL_DEFAULT);
++}
++
++static size_t __write_http_response(
++    void* contents,
++    size_t element_size,
++    size_t element_count,
++    void* user_data
++) {
++    size_t incoming_size = element_size * element_count;
++    http_response_t* response = (http_response_t*)user_data;
++    char* resized;
++
++    if (
++        response == NULL ||
++        incoming_size > HTTP_RESPONSE_MAX_BYTES ||
++        response->size > HTTP_RESPONSE_MAX_BYTES - incoming_size
++    ) {
++        return 0;
++    }
++    resized = realloc(response->data, response->size + incoming_size + 1);
++    if (resized == NULL) {
++        return 0;
++    }
++    response->data = resized;
++    memcpy(response->data + response->size, contents, incoming_size);
++    response->size += incoming_size;
++    response->data[response->size] = '\0';
++    return incoming_size;
++}
++
++static cJSON* __http_get_json(const char* url) {
++    http_response_t response = {0};
++    CURL* curl;
++    CURLcode result;
++    long status_code = 0;
++    cJSON* json = NULL;
++
++    pthread_once(&curl_init_once, __initialize_curl);
++    curl = curl_easy_init();
++    if (curl == NULL) {
++        return NULL;
++    }
++    curl_easy_setopt(curl, CURLOPT_URL, url);
++    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
++    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
++    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
++    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 7000L);
++    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ai-cat-controller/0.1");
++    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, __write_http_response);
++    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
++    result = curl_easy_perform(curl);
++    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
++    curl_easy_cleanup(curl);
++
++    if (result == CURLE_OK && status_code >= 200 && status_code < 300) {
++        json = cJSON_Parse(response.data);
++    } else {
++        fprintf(
++            stderr,
++            "weather HTTP request failed: curl=%d, status=%ld\n",
++            (int)result,
++            status_code
++        );
++    }
++    free(response.data);
++    return json;
++}
++
++static bool __is_weather_function(const char* name) {
++    return name != NULL && (
++        strcmp(name, "get_weather") == 0 ||
++        strcmp(name, "get_current_weather") == 0 ||
++        strcmp(name, "check_weather") == 0
++    );
++}
++
++static const char* __weather_description(int code) {
++    if (code == 0) {
++        return "晴";
++    }
++    if (code == 1 || code == 2) {
++        return "少云";
++    }
++    if (code == 3) {
++        return "阴";
++    }
++    if (code == 45 || code == 48) {
++        return "有雾";
++    }
++    if (code >= 51 && code <= 57) {
++        return "毛毛雨";
++    }
++    if (code >= 61 && code <= 67) {
++        return "有雨";
++    }
++    if (code >= 71 && code <= 77) {
++        return "有雪";
++    }
++    if (code >= 80 && code <= 82) {
++        return "有阵雨";
++    }
++    if (code >= 85 && code <= 86) {
++        return "有阵雪";
++    }
++    if (code >= 95 && code <= 99) {
++        return "有雷暴";
++    }
++    return "天气状况未知";
++}
++
++static cJSON* __first_array_item(cJSON* object, const char* name) {
++    cJSON* array = cJSON_GetObjectItemCaseSensitive(object, name);
++
++    if (!cJSON_IsArray(array) || cJSON_GetArraySize(array) == 0) {
++        return NULL;
++    }
++    return cJSON_GetArrayItem(array, 0);
++}
++
++static int __query_weather(
++    const char* requested_location,
++    char* output,
++    size_t output_size
++) {
++    const char* default_location;
++    const char* location = requested_location;
++    char geocoding_url[1024];
++    char forecast_url[1024];
++    char* escaped_location;
++    cJSON* geocoding = NULL;
++    cJSON* forecast = NULL;
++    cJSON* results;
++    cJSON* place;
++    cJSON* place_name;
++    cJSON* latitude;
++    cJSON* longitude;
++    cJSON* current;
++    cJSON* daily;
++    cJSON* temperature;
++    cJSON* apparent_temperature;
++    cJSON* humidity;
++    cJSON* wind_speed;
++    cJSON* weather_code;
++    cJSON* maximum_temperature;
++    cJSON* minimum_temperature;
++    cJSON* precipitation_probability;
++    CURL* curl;
++    char resolved_place_name[WEATHER_LOCATION_MAX_LEN] = {0};
++    double resolved_latitude = 0;
++    double resolved_longitude = 0;
++    bool location_cache_hit = false;
++    int ret = -1;
++
++    if (output == NULL || output_size == 0) {
++        return -1;
++    }
++    output[0] = '\0';
++    if (
++        location == NULL ||
++        location[0] == '\0' ||
++        strstr(location, "当前") != NULL ||
++        strcmp(location, "本地") == 0 ||
++        strcmp(location, "这里") == 0
++    ) {
++        default_location = getenv("AI_CAT_DEFAULT_CITY");
++        if (default_location == NULL || default_location[0] == '\0') {
++            snprintf(
++                output,
++                output_size,
++                "设备尚未设置所在城市，请询问用户要查询哪个城市的天气。"
++            );
++            return 0;
++        }
++        location = default_location;
++    }
++
++    pthread_mutex_lock(&weather_cache_mutex);
++    if (strcmp(cached_weather_location, location) == 0) {
++        snprintf(
++            resolved_place_name,
++            sizeof(resolved_place_name),
++            "%s",
++            cached_weather_place_name
++        );
++        resolved_latitude = cached_weather_latitude;
++        resolved_longitude = cached_weather_longitude;
++        location_cache_hit = true;
++    }
++    pthread_mutex_unlock(&weather_cache_mutex);
++
++    if (!location_cache_hit) {
++        pthread_once(&curl_init_once, __initialize_curl);
++        curl = curl_easy_init();
++        if (curl == NULL) {
++            snprintf(output, output_size, "天气服务暂时不可用，请稍后再试。");
++            return -1;
++        }
++        escaped_location = curl_easy_escape(curl, location, 0);
++        if (escaped_location == NULL) {
++            curl_easy_cleanup(curl);
++            snprintf(output, output_size, "无法解析城市名称，请换一个城市名称再试。");
++            return -1;
++        }
++        snprintf(
++            geocoding_url,
++            sizeof(geocoding_url),
++            "https://geocoding-api.open-meteo.com/v1/search"
++            "?name=%s&count=1&language=zh&format=json",
++            escaped_location
++        );
++        curl_free(escaped_location);
++        curl_easy_cleanup(curl);
++
++        geocoding = __http_get_json(geocoding_url);
++        results = geocoding == NULL
++            ? NULL
++            : cJSON_GetObjectItemCaseSensitive(geocoding, "results");
++        place = cJSON_IsArray(results) ? cJSON_GetArrayItem(results, 0) : NULL;
++        place_name = cJSON_GetObjectItemCaseSensitive(place, "name");
++        latitude = cJSON_GetObjectItemCaseSensitive(place, "latitude");
++        longitude = cJSON_GetObjectItemCaseSensitive(place, "longitude");
++        if (
++            !cJSON_IsString(place_name) ||
++            !cJSON_IsNumber(latitude) ||
++            !cJSON_IsNumber(longitude)
++        ) {
++            snprintf(
++                output,
++                output_size,
++                "没有找到“%s”的天气信息，请确认城市名称。",
++                location
++            );
++            goto cleanup;
++        }
++        snprintf(
++            resolved_place_name,
++            sizeof(resolved_place_name),
++            "%s",
++            place_name->valuestring
++        );
++        resolved_latitude = latitude->valuedouble;
++        resolved_longitude = longitude->valuedouble;
++        pthread_mutex_lock(&weather_cache_mutex);
++        snprintf(
++            cached_weather_location,
++            sizeof(cached_weather_location),
++            "%s",
++            location
++        );
++        snprintf(
++            cached_weather_place_name,
++            sizeof(cached_weather_place_name),
++            "%s",
++            resolved_place_name
++        );
++        cached_weather_latitude = resolved_latitude;
++        cached_weather_longitude = resolved_longitude;
++        pthread_mutex_unlock(&weather_cache_mutex);
++    }
++
++    snprintf(
++        forecast_url,
++        sizeof(forecast_url),
++        "https://api.open-meteo.com/v1/forecast"
++        "?latitude=%.6f&longitude=%.6f"
++        "&current=temperature_2m,apparent_temperature,"
++        "relative_humidity_2m,weather_code,wind_speed_10m"
++        "&daily=temperature_2m_max,temperature_2m_min,"
++        "precipitation_probability_max"
++        "&timezone=auto&forecast_days=1",
++        resolved_latitude,
++        resolved_longitude
++    );
++    forecast = __http_get_json(forecast_url);
++    current = forecast == NULL
++        ? NULL
++        : cJSON_GetObjectItemCaseSensitive(forecast, "current");
++    daily = forecast == NULL
++        ? NULL
++        : cJSON_GetObjectItemCaseSensitive(forecast, "daily");
++    temperature = cJSON_GetObjectItemCaseSensitive(current, "temperature_2m");
++    apparent_temperature =
++        cJSON_GetObjectItemCaseSensitive(current, "apparent_temperature");
++    humidity =
++        cJSON_GetObjectItemCaseSensitive(current, "relative_humidity_2m");
++    wind_speed = cJSON_GetObjectItemCaseSensitive(current, "wind_speed_10m");
++    weather_code = cJSON_GetObjectItemCaseSensitive(current, "weather_code");
++    maximum_temperature = __first_array_item(daily, "temperature_2m_max");
++    minimum_temperature = __first_array_item(daily, "temperature_2m_min");
++    precipitation_probability =
++        __first_array_item(daily, "precipitation_probability_max");
++    if (
++        !cJSON_IsNumber(temperature) ||
++        !cJSON_IsNumber(apparent_temperature) ||
++        !cJSON_IsNumber(humidity) ||
++        !cJSON_IsNumber(wind_speed) ||
++        !cJSON_IsNumber(weather_code) ||
++        !cJSON_IsNumber(maximum_temperature) ||
++        !cJSON_IsNumber(minimum_temperature)
++    ) {
++        snprintf(output, output_size, "天气服务返回数据不完整，请稍后再试。");
++        goto cleanup;
++    }
++
++    snprintf(
++        output,
++        output_size,
++        "%s现在%s，%.0f度；今天最低%.0f度、最高%.0f度%s。",
++        resolved_place_name,
++        __weather_description(weather_code->valueint),
++        temperature->valuedouble,
++        minimum_temperature->valuedouble,
++        maximum_temperature->valuedouble,
++        cJSON_IsNumber(precipitation_probability)
++            ? precipitation_probability->valuedouble >= 40
++                ? "，有较高降雨概率"
++                : "，降雨概率较低"
++            : ""
++    );
++    printf(
++        "weather query source=Open-Meteo, location=%s, cache_hit=%d, "
++        "apparent=%.1f, humidity=%.0f, wind=%.1f\n",
++        resolved_place_name,
++        location_cache_hit,
++        apparent_temperature->valuedouble,
++        humidity->valuedouble,
++        wind_speed->valuedouble
++    );
++    ret = 0;
++
++cleanup:
++    cJSON_Delete(geocoding);
++    cJSON_Delete(forecast);
 +    return ret;
 +}
 +
@@ -670,24 +1411,109 @@ index 2fcdf94..af14ed2 100644
 +    if (ret < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
 +        fprintf(stderr, "head motor command failed\n");
 +        return -1;
-     }
++    }
 +    return 0;
 +}
 +
 +static void* __run_function_call(void* arg) {
-+    /* 电机动作可能持续数秒，必须放到工作线程，不能阻塞 SDK 消息回调。 */
++    /* 电机动作和天气网络请求都可能阻塞，不能占用 SDK 消息回调线程。 */
 +    function_call_task_t* task = (function_call_task_t*)arg;
-+    int ret;
++    char output[768];
++    cJSON* arguments;
++    cJSON* location_obj;
++    const char* location = NULL;
++    int ret = -1;
 +
 +    if (task == NULL) {
 +        return NULL;
 +    }
-+    printf("executing shake_head, call_id=%s\n", task->call_id);
-+    ret = __run_head_shake();
++    if (strcmp(task->name, "shake_head") == 0) {
++        uint64_t now_ms;
++        if (pthread_mutex_trylock(&head_motor_mutex) != 0) {
++            ret = 0;
++            snprintf(
++                output,
++                sizeof(output),
++                "摇头动作正在执行，本次重复请求已忽略"
++            );
++            printf(
++                "duplicate shake_head ignored while motor is busy, call_id=%s\n",
++                task->call_id
++            );
++        } else {
++            now_ms = __get_time_ms();
++            if (
++                head_shake_last_started_ms != 0 &&
++                now_ms - head_shake_last_started_ms < HEAD_SHAKE_COOLDOWN_MS
++            ) {
++                ret = 0;
++                snprintf(
++                    output,
++                    sizeof(output),
++                    "刚刚已经完成摇头，本次重复请求已忽略"
++                );
++                printf(
++                    "duplicate shake_head ignored during cooldown, call_id=%s\n",
++                    task->call_id
++                );
++            } else {
++                head_shake_last_started_ms = now_ms;
++                printf("executing shake_head, call_id=%s\n", task->call_id);
++                ret = __run_head_shake();
++                snprintf(
++                    output,
++                    sizeof(output),
++                    "%s",
++                    ret == 0 ? "摇头动作已完成" : "摇头动作执行失败"
++                );
++            }
++            pthread_mutex_unlock(&head_motor_mutex);
++        }
++    } else if (__is_weather_function(task->name)) {
++        arguments = cJSON_Parse(task->arguments);
++        location_obj = arguments == NULL
++            ? NULL
++            : cJSON_GetObjectItemCaseSensitive(arguments, "location");
++        if (!cJSON_IsString(location_obj) && arguments != NULL) {
++            location_obj = cJSON_GetObjectItemCaseSensitive(arguments, "city");
++        }
++        if (cJSON_IsString(location_obj)) {
++            location = location_obj->valuestring;
++        }
++        printf(
++            "executing %s, location=%s, call_id=%s\n",
++            task->name,
++            location == NULL ? "(not provided)" : location,
++            task->call_id
++        );
++        if (location != NULL && strstr(location, "当前") == NULL) {
++            char status_message[WEATHER_LOCATION_MAX_LEN + 32];
++            snprintf(
++                status_message,
++                sizeof(status_message),
++                "正在查询%s天气",
++                location
++            );
++            __write_dialog_status("thinking", status_message);
++        } else {
++            __write_dialog_status("thinking", "正在确认天气查询城市");
++        }
++        ret = __query_weather(location, output, sizeof(output));
++        cJSON_Delete(arguments);
++    } else {
++        snprintf(output, sizeof(output), "设备端未配置此工具，无法执行。");
+     }
 +    __send_function_call_output(
 +        task->demo,
 +        task->call_id,
-+        ret == 0 ? "摇头动作已完成" : "摇头动作执行失败");
++        output
++    );
++    printf(
++        "function call completed: name=%s, call_id=%s, ret=%d\n",
++        task->name,
++        task->call_id,
++        ret
++    );
 +    free(task);
 +    return NULL;
  }
@@ -742,7 +1568,7 @@ index 2fcdf94..af14ed2 100644
 -    } else {
 +    name = name_obj->valuestring;
 +    call_id = call_id_obj->valuestring;
-+    if (strcmp(name, "shake_head") != 0) {
++    if (strcmp(name, "shake_head") != 0 && !__is_weather_function(name)) {
          printf("unknown function call name: %s\n", name);
 +        return;
      }
@@ -756,7 +1582,7 @@ index 2fcdf94..af14ed2 100644
 +    snprintf(pending_function_call.name, sizeof(pending_function_call.name), "%s", name);
 +    snprintf(pending_function_call.call_id, sizeof(pending_function_call.call_id), "%s", call_id);
 +    pthread_mutex_unlock(&function_call_mutex);
-+    printf("shake_head function call received, call_id=%s\n", call_id);
++    printf("%s function call received, call_id=%s\n", name, call_id);
  }
  
  static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSON* root) {
@@ -769,7 +1595,11 @@ index 2fcdf94..af14ed2 100644
 -    cJSON* name_obj = NULL;
 -    if (NULL == root) {
 +    cJSON* call_id_obj;
++    cJSON* name_obj;
++    cJSON* arguments_obj;
 +    function_call_task_t* task;
++    const char* name;
++    const char* arguments;
 +    int ret;
 +
 +    if (root == NULL) {
@@ -778,6 +1608,34 @@ index 2fcdf94..af14ed2 100644
 +    call_id_obj = cJSON_GetObjectItem(root, "call_id");
 +    if (!cJSON_IsString(call_id_obj)) {
 +        printf("function call arguments missing call_id\n");
++        return;
++    }
++    name_obj = cJSON_GetObjectItem(root, "name");
++    name = cJSON_IsString(name_obj) ? name_obj->valuestring : NULL;
++    if (
++        name != NULL &&
++        strcmp(name, "shake_head") != 0 &&
++        !__is_weather_function(name)
++    ) {
++        tool_capture_guard = true;
++        ret = __send_function_call_output(
++            demo,
++            call_id_obj->valuestring,
++            "设备端未配置此工具，无法提供可靠的实时结果。请直接向用户说明当前无法完成该查询。"
++        );
++        printf(
++            "unsupported function call completed: name=%s, call_id=%s, ret=%d\n",
++            name,
++            call_id_obj->valuestring,
++            ret
++        );
++        if (ret >= 0) {
++            thinking_deadline_ms = __get_time_ms() + THINKING_TIMEOUT_MS;
++            __write_dialog_status(
++                "thinking",
++                "设备工具不可用，正在生成说明"
++            );
++        }
          return;
      }
 -    printf("function_call_arguments done received\n");
@@ -790,31 +1648,46 @@ index 2fcdf94..af14ed2 100644
 -        printf("function_call_arguments done\n");
 -        pthread_create(&msg_thread, NULL, __handle_msg_message_thread, demo);
 -        pthread_detach(msg_thread);
--    }
--    printf("function_call_arguments done processing completed\n");
++    arguments_obj = cJSON_GetObjectItem(root, "arguments");
++    arguments = cJSON_IsString(arguments_obj) ? arguments_obj->valuestring : "{}";
 +
 +    task = calloc(1, sizeof(*task));
 +    if (task == NULL) {
-+        __send_function_call_output(demo, call_id_obj->valuestring, "摇头动作执行失败");
++        __send_function_call_output(
++            demo,
++            call_id_obj->valuestring,
++            "设备暂时无法执行工具，请稍后再试。"
++        );
 +        return;
 +    }
 +
 +    pthread_mutex_lock(&function_call_mutex);
-+    if (strcmp(pending_function_call.name, "shake_head") != 0 ||
++    if (
++        pending_function_call.name[0] == '\0' ||
 +        strcmp(pending_function_call.call_id, call_id_obj->valuestring) != 0) {
 +        pthread_mutex_unlock(&function_call_mutex);
 +        free(task);
 +        printf("no matching function call for call_id=%s\n", call_id_obj->valuestring);
++        __send_function_call_output(
++            demo,
++            call_id_obj->valuestring,
++            "设备端未找到匹配的工具调用，无法执行。请直接向用户说明操作失败。"
++        );
 +        return;
-+    }
+     }
+-    printf("function_call_arguments done processing completed\n");
 +    task->demo = demo;
 +    snprintf(task->call_id, sizeof(task->call_id), "%s", pending_function_call.call_id);
++    snprintf(task->name, sizeof(task->name), "%s", pending_function_call.name);
++    snprintf(task->arguments, sizeof(task->arguments), "%s", arguments);
 +    pending_function_call.name[0] = '\0';
 +    pending_function_call.call_id[0] = '\0';
++    tool_capture_guard = true;
 +    pthread_mutex_unlock(&function_call_mutex);
 +
 +    ret = pthread_create(&msg_thread, NULL, __run_function_call, task);
 +    if (ret != 0) {
++        tool_capture_guard = false;
 +        fprintf(stderr, "failed to create function call thread: %s\n", strerror(ret));
 +        __send_function_call_output(demo, task->call_id, "摇头动作执行失败");
 +        free(task);
@@ -827,8 +1700,52 @@ index 2fcdf94..af14ed2 100644
 +    /* WS JSON 消息路由：工具调用单独处理，其余事件原样打印便于调试。 */
      cJSON* root = NULL;
      cJSON* type_obj = NULL;
++    cJSON* transcript_obj = NULL;
++    cJSON* event_id_obj = NULL;
++    const char* type = NULL;
      root = cJSON_Parse((const char*)message);
-@@ -440,6 +757,7 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
+     if (NULL == root) {
+         printf("parse json buffer failed\n");
+@@ -426,9 +1615,36 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
+     }
+     printf("ws message size:%zu data:%s\n", size, (char*)message);
+     type_obj = cJSON_GetObjectItem(root, "type");
+-    if (type_obj != NULL && strcmp("conversation.item.created", cJSON_GetStringValue(type_obj)) == 0) {
++    type = cJSON_GetStringValue(type_obj);
++    if (
++        type != NULL &&
++        strcmp(type, "conversation.item.input_audio_transcription.completed") == 0
++    ) {
++        transcript_obj = cJSON_GetObjectItem(root, "transcript");
++        event_id_obj = cJSON_GetObjectItem(root, "event_id");
++        if (cJSON_IsString(transcript_obj)) {
++            __write_dialog_event(
++                "user",
++                transcript_obj->valuestring,
++                cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
++            );
++        }
++    } else if (
++        type != NULL &&
++        strcmp(type, "response.audio_transcript.done") == 0
++    ) {
++        transcript_obj = cJSON_GetObjectItem(root, "transcript");
++        event_id_obj = cJSON_GetObjectItem(root, "event_id");
++        if (cJSON_IsString(transcript_obj)) {
++            __write_dialog_event(
++                "assistant",
++                transcript_obj->valuestring,
++                cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
++            );
++        }
++    } else if (type != NULL && strcmp("conversation.item.created", type) == 0) {
+         __handle_ws_conversation_item_created_call(demo, root);
+-    } else if(type_obj != NULL && strcmp("response.function_call_arguments.done", cJSON_GetStringValue(type_obj)) == 0) {
++    } else if(type != NULL && strcmp("response.function_call_arguments.done", type) == 0) {
+         __handle_function_call_arguments_done(demo, root);
+     } else {
+         printf("%s\n", (char*)message);
+@@ -440,6 +1656,7 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
  }
  
  static void __handle_rtc_message(realtime_ws_demo_t* demo, const void* message, size_t size) {
@@ -836,7 +1753,7 @@ index 2fcdf94..af14ed2 100644
      cJSON* root = NULL;
      if (((uint8_t*)message)[0] == 's' && ((uint8_t*)message)[1] == 'u' && ((uint8_t*)message)[2] == 'b' && ((uint8_t*)message)[3] == 'v') {
          // root = cJSON_Parse(((uint8_t *)message) + 8);
-@@ -454,7 +772,8 @@ static void __handle_rtc_message(realtime_ws_demo_t* demo, const void* message,
+@@ -454,7 +1671,8 @@ static void __handle_rtc_message(realtime_ws_demo_t* demo, const void* message,
  }
  
  static void _on_volc_message_data(volc_engine_t handle, const void* message, size_t size, volc_message_info_t* info_ptr, void* user_data)
@@ -846,7 +1763,7 @@ index 2fcdf94..af14ed2 100644
      realtime_ws_demo_t* demo = (realtime_ws_demo_t*)user_data;
      static int cnt = 0;
      printf("--------------%d----------------\r\n", cnt++);
-@@ -472,6 +791,10 @@ static void _on_volc_message_data(volc_engine_t handle, const void* message, siz
+@@ -472,6 +1690,10 @@ static void _on_volc_message_data(volc_engine_t handle, const void* message, siz
  }
  
  static int __parse_demo_config(const char* config, realtime_ws_demo_t* handle) {
@@ -857,7 +1774,7 @@ index 2fcdf94..af14ed2 100644
      cJSON* root = NULL;
      cJSON* obj_item = NULL;
      if (NULL == config) {
-@@ -528,9 +851,9 @@ static int _build_ws_message(const char* msg, uint8_t** out_buf, size_t* out_len
+@@ -528,9 +1750,9 @@ static int _build_ws_message(const char* msg, uint8_t** out_buf, size_t* out_len
  }
  
  static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
@@ -868,12 +1785,13 @@ index 2fcdf94..af14ed2 100644
      int ret = _build_ws_message(WS_BUFFER_CLEAR, &clear, &clear_len);
      if (ret != 0) {
          printf("build clear message failed");
-@@ -550,6 +873,13 @@ int main(int argc, const char* argv[]){
+@@ -550,6 +1772,14 @@ int main(int argc, const char* argv[]){
      uint64_t diff_time_ms = 0;
  	realtime_ws_demo_t demo = {0};
  
 +    setvbuf(stdout, NULL, _IOLBF, 0);
 +    setvbuf(stderr, NULL, _IOLBF, 0);
++    __load_device_serial();
 +    session_active = false;
 +    unlink(DIALOG_SESSION_MARKER);
 +    __write_dialog_status("starting", "语音服务正在启动");
@@ -882,7 +1800,7 @@ index 2fcdf94..af14ed2 100644
  	if ((config_data = __load_config_from_file("conv_ai_config.json")) == NULL) {
  		printf("load config from file fail\n");
  		return -1;
-@@ -565,7 +895,6 @@ int main(int argc, const char* argv[]){
+@@ -565,7 +1795,6 @@ int main(int argc, const char* argv[]){
          return -1;
      }
  
@@ -890,11 +1808,12 @@ index 2fcdf94..af14ed2 100644
  	demo.audio_rec_buf = (uint8_t*)malloc(demo.frame_len);
  	if (demo.audio_rec_buf == NULL) {
  		printf("malloc audio rec buf fail\n");
-@@ -576,7 +905,12 @@ int main(int argc, const char* argv[]){
+@@ -576,7 +1805,13 @@ int main(int argc, const char* argv[]){
          printf("create ring buf fail\n");
          goto err_out_label;
      }
 +    pthread_mutex_init(&demo.ring_buf_mutex, NULL);
++    pthread_mutex_init(&demo.playback_mutex, NULL);
  
 +    /*
 +     * 阶段 2：创建一条单声道 PulseAudio 录音流和一条播放流。
@@ -903,7 +1822,7 @@ index 2fcdf94..af14ed2 100644
      demo.format.format = PA_SAMPLE_S16NE;
      demo.format.rate = demo.sample_rate;
      demo.format.channels = AUDIO_CHANNEL_NUM;
-@@ -609,6 +943,10 @@ int main(int argc, const char* argv[]){
+@@ -609,6 +1844,10 @@ int main(int argc, const char* argv[]){
      volc_opt_t opt = {0};
      opt.mode = demo.mode;
  
@@ -914,7 +1833,7 @@ index 2fcdf94..af14ed2 100644
      // // create后直接destroy
      // printf("创建后直接销毁\n");
      // volc_destroy(demo.engine);
-@@ -624,7 +962,7 @@ int main(int argc, const char* argv[]){
+@@ -624,7 +1863,7 @@ int main(int argc, const char* argv[]){
  
      // 验证引擎为NULL 调用start、stop、destroy 程序不崩溃
      // volc_start(demo.engine, &opt);
@@ -923,7 +1842,7 @@ index 2fcdf94..af14ed2 100644
      // volc_start(NULL, &opt);
      // volc_stop(NULL);
      // volc_destroy(NULL);
-@@ -641,13 +979,20 @@ int main(int argc, const char* argv[]){
+@@ -641,13 +1880,26 @@ int main(int argc, const char* argv[]){
  
  
      opt.bot_id = demo.bot_id;
@@ -941,19 +1860,25 @@ index 2fcdf94..af14ed2 100644
 +        goto err_out_label;
 +    }
      printf("volc realtime is ready.\n");
++    error = volc_update(
++        demo.engine,
++        WS_SESSION_UPDATE,
++        strlen(WS_SESSION_UPDATE)
++    );
++    printf("session update result: %d\n", error);
 +    __write_dialog_status("ready", "等待唤醒词“小安小安”");
  
  
      __setup_async_io();
-@@ -659,7 +1004,47 @@ int main(int argc, const char* argv[]){
+@@ -659,40 +1911,268 @@ int main(int argc, const char* argv[]){
      volc_audio_frame_info_t info = {0};
      info.data_type = VOLC_AUDIO_DATA_TYPE_PCM;
      volc_video_frame_info_t video_info = {0};
 +
 +    /*
 +     * 阶段 4：主状态机。
-+     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。服务端 VAD
-+     * 根据静音自动判定句尾，客户端不对正常语句主动发送 commit。
++     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。云端 VAD
++     * 负责判定和提交句尾；本地能量 VAD 只更新可见状态，不提交缓冲区。
 +     */
      while (!exit_request) {
 +        __poll_keyboard();
@@ -964,39 +1889,181 @@ index 2fcdf94..af14ed2 100644
 +         */
 +        if (wake_request) {
 +            wake_request = false;
++            follow_up_prepare_request = false;
++            echo_guard_active = false;
++            echo_guard_request = false;
++            __reset_barge_in_guard();
 +            session_active = true;
 +            waiting_for_speech = true;
 +            speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
 +            follow_up_deadline_ms = 0;
-+            __write_dialog_status("wake_detected", "已听到唤醒词，请开始说话");
++            thinking_deadline_ms = 0;
++            tool_capture_guard = false;
++            __reset_local_vad();
++            __write_dialog_status("wake_detected", "已唤醒，请在提示音后说话");
 +            if (ai_playing) {
 +                interrupt = true;
 +                start_after_interrupt = true;
++                wake_tone_after_interrupt = true;
 +                ai_playing = false;
 +                printf("wakeup signal: interrupting current response\n");
 +            } else {
++                running = false;
++                __play_ready_tone(
++                    &demo,
++                    WAKE_TONE_DURATION_MS,
++                    "wake confirmation tone"
++                );
++                __flush_capture_buffer(&demo);
++                speech_start_deadline_ms =
++                    __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
 +                running = true;
 +                printf("wakeup signal: listening\n");
 +            }
 +        }
 +        if (interrupt_only_request) {
 +            interrupt_only_request = false;
++            follow_up_prepare_request = false;
++            echo_guard_active = false;
++            echo_guard_request = false;
++            __reset_barge_in_guard();
 +            session_active = false;
 +            waiting_for_speech = false;
 +            speech_start_deadline_ms = 0;
 +            follow_up_deadline_ms = 0;
++            thinking_deadline_ms = 0;
++            tool_capture_guard = false;
++            __reset_local_vad();
 +            running = false;
++            ai_playing = false;
 +            start_after_interrupt = false;
 +            interrupt = true;
 +            __write_dialog_status("interrupted", "已请求打断当前回答");
 +        }
++        if (echo_guard_request) {
++            echo_guard_request = false;
++            follow_up_prepare_request = false;
++            echo_guard_active = true;
++            session_active = false;
++            waiting_for_speech = false;
++            speech_start_deadline_ms = 0;
++            follow_up_deadline_ms = 0;
++            thinking_deadline_ms = 0;
++            tool_capture_guard = false;
++            __reset_local_vad();
++            running = false;
++            ai_playing = false;
++            start_after_interrupt = false;
++            interrupt = true;
++            __write_dialog_status(
++                "echo_guard",
++                "检测到扬声器回声，已停止本次对话，请重新唤醒"
++            );
++            printf("echo guard: repeated barge-in loop stopped\n");
++        }
++        if (follow_up_prepare_request && session_active) {
++            int playback_pending = 0;
++
++            pthread_mutex_lock(&demo.ring_buf_mutex);
++            playback_pending =
++                volc_ringbuf_getdatasize(demo.ring_buf) > 0 ||
++                playback_write_active;
++            pthread_mutex_unlock(&demo.ring_buf_mutex);
++            if (!playback_pending) {
++                /*
++                 * 短提示音前先 drain，确保 PulseAudio 中排队的 TTS 已真正
++                 * 播放完。提示音结束后同时复位云端和本地录音缓冲。
++                 */
++                __play_ready_tone(
++                    &demo,
++                    FOLLOW_UP_TONE_DURATION_MS,
++                    "follow-up ready tone"
++                );
++                _ws_clear_buffer(&demo);
++                __flush_capture_buffer(&demo);
++                __reset_local_vad();
++                follow_up_prepare_request = false;
++                playback_capture_guard = false;
++                waiting_for_speech = true;
++                follow_up_deadline_ms =
++                    __get_time_ms() + FOLLOW_UP_WINDOW_MS;
++                speech_start_deadline_ms = follow_up_deadline_ms;
++                running = true;
++                __write_dialog_status(
++                    "followup_listening",
++                    "提示音后 30 秒内可以直接追问"
++                );
++                printf("follow-up capture ready\n");
++            }
++        }
          // printf("volc....................\n");
          if (running) {
++            bool local_speech_started_now = false;
++            bool local_endpoint_detected = false;
++            bool suppress_capture = false;
++            int send_result = 0;
++
              last_time_ms = __get_time_ms();
-@@ -670,29 +1055,52 @@ int main(int argc, const char* argv[]){
+             // __get_fps();
+             if (pa_simple_read(demo.p_capture, demo.audio_rec_buf, demo.frame_len, &error) < 0) {
+                 fprintf(stderr, "录音失败: %s\n", pa_strerror(error));
+                 break;
              }
-             info.commit = false;
-             volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
+-            info.commit = false;
+-            volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
++            suppress_capture =
++                tool_capture_guard ||
++                (
++                    playback_capture_guard &&
++                    __get_time_ms() < playback_capture_guard_until_ms
++                );
++            if (suppress_capture) {
++                __reset_local_vad();
++            } else if (waiting_for_speech) {
++                local_endpoint_detected = __local_vad_should_commit(
++                    demo.audio_rec_buf,
++                    demo.frame_len,
++                    &local_speech_started_now
++                );
++                if (local_speech_started_now) {
++                    speech_start_deadline_ms = 0;
++                    __write_dialog_status(
++                        "listening",
++                        "已检测到语音，等待说完"
++                    );
++                }
++            }
++            if (!suppress_capture) {
++                /*
++                 * 当前云端会话固定为 server_vad。官方协议要求该模式只发送
++                 * append，由服务端判停并自动创建 response；本地 VAD 只用于
++                 * 状态提示，不能额外 commit，否则同一轮可能被提交两次。
++                 */
++                info.commit = false;
++                send_result = volc_send_audio_data(
++                    demo.engine,
++                    demo.audio_rec_buf,
++                    demo.frame_len,
++                    &info
++                );
++                if (send_result < 0) {
++                    fprintf(stderr, "audio upload failed, ret=%d\n", send_result);
++                } else if (local_endpoint_detected && waiting_for_speech) {
++                    __reset_local_vad();
++                    waiting_for_speech = false;
++                    speech_start_deadline_ms = 0;
++                    follow_up_deadline_ms = 0;
++                    thinking_deadline_ms =
++                        __get_time_ms() + THINKING_TIMEOUT_MS;
++                    __write_dialog_status(
++                        "processing_audio",
++                        "已检测到句尾，等待云端识别"
++                    );
++                    printf(
++                        "local VAD: utterance ended; waiting for server VAD\n"
++                    );
++                }
++            }
 +            if (
 +                waiting_for_speech &&
 +                speech_start_deadline_ms != 0 &&
@@ -1029,6 +2096,25 @@ index 2fcdf94..af14ed2 100644
 -            }
              usleep(100000);
          }
++        if (
++            thinking_deadline_ms != 0 &&
++            __get_time_ms() >= thinking_deadline_ms
++        ) {
++            session_active = false;
++            waiting_for_speech = false;
++            speech_start_deadline_ms = 0;
++            follow_up_deadline_ms = 0;
++            thinking_deadline_ms = 0;
++            __reset_local_vad();
++            running = false;
++            ai_playing = false;
++            __write_dialog_status(
++                "recovering",
++                "云端响应超时，正在重新连接"
++            );
++            printf("thinking timeout: restarting cloud session\n");
++            exit_request = true;
++        }
          if (video_upload) {
 +            /* 视频为可选调试路径，当前 K1 默认没有加载 send_video.h264。 */
              video_info.data_type = VOLC_VIDEO_DATA_TYPE_H264;
@@ -1047,6 +2133,15 @@ index 2fcdf94..af14ed2 100644
 +                start_after_interrupt = false;
 +                session_active = true;
 +                waiting_for_speech = true;
++                if (wake_tone_after_interrupt) {
++                    wake_tone_after_interrupt = false;
++                    __play_ready_tone(
++                        &demo,
++                        WAKE_TONE_DURATION_MS,
++                        "wake confirmation tone"
++                    );
++                }
++                __flush_capture_buffer(&demo);
 +                speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
 +                running = true;
 +                __write_dialog_status("listening", "回答已打断，请继续说话");
@@ -1055,7 +2150,7 @@ index 2fcdf94..af14ed2 100644
          }
          if (clear) {
              clear = false;
-@@ -716,12 +1124,21 @@ int main(int argc, const char* argv[]){
+@@ -716,12 +2196,22 @@ int main(int argc, const char* argv[]){
              volc_update(demo.engine, WS_SESSION_UPDATE, strlen(WS_SESSION_UPDATE));
          }
      }
@@ -1072,12 +2167,13 @@ index 2fcdf94..af14ed2 100644
  	}
 +	if (demo.ring_buf) {
 +        pthread_mutex_destroy(&demo.ring_buf_mutex);
++        pthread_mutex_destroy(&demo.playback_mutex);
 +        volc_ringbuf_destroy(demo.ring_buf);
 +    }
  	if (demo.p_capture) {
  		pa_simple_free(demo.p_capture);
  	}
-@@ -731,4 +1148,4 @@ err_out_label:
+@@ -731,4 +2221,4 @@ err_out_label:
  	}
  	getchar();
  	return 0;
