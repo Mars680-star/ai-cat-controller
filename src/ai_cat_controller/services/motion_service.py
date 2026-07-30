@@ -37,6 +37,7 @@ class MotionService:
         self._cooldown_until = 0.0
         self._stopping = False
         self._last_error: str | None = None
+        self._completion_futures: dict[str, asyncio.Future[str]] = {}
 
     @property
     def current_action(self) -> str:
@@ -50,22 +51,25 @@ class MotionService:
         self,
         generation: int,
         action_name: str,
-        operation: Callable[[float, int], Awaitable[None]],
-        intensity: float,
+        operation: Callable[[], Awaitable[None]],
         duration_ms: int,
+        execution_token: str | None,
     ) -> None:
         timeout = max(
             self._command_timeout_seconds,
             duration_ms / 1000.0 + 0.5,
         )
+        outcome = "completed"
         try:
             LOGGER.info("motion started: %s", action_name)
-            await asyncio.wait_for(operation(intensity, duration_ms), timeout=timeout)
+            await asyncio.wait_for(operation(), timeout=timeout)
             LOGGER.info("motion completed: %s", action_name)
         except asyncio.CancelledError:
+            outcome = "cancelled"
             LOGGER.info("motion cancelled: %s", action_name)
             raise
         except TimeoutError:
+            outcome = "timed_out"
             self._last_error = f"{action_name} timed out"
             LOGGER.error("motion timed out: %s", action_name)
             try:
@@ -76,9 +80,14 @@ class MotionService:
             except Exception:
                 LOGGER.exception("adapter stop failed after motion timeout")
         except Exception as exc:
+            outcome = "failed"
             self._last_error = str(exc)
             LOGGER.exception("motion failed: %s", action_name)
         finally:
+            if execution_token is not None:
+                completion = self._completion_futures.get(execution_token)
+                if completion is not None and not completion.done():
+                    completion.set_result(outcome)
             async with self._lock:
                 if generation == self._generation:
                     self._task = None
@@ -89,15 +98,23 @@ class MotionService:
     async def _start(
         self,
         *,
-        capability: Capability,
+        capabilities: tuple[Capability, ...],
         action_name: str,
-        operation: Callable[[float, int], Awaitable[None]],
-        intensity: float,
+        operation: Callable[[], Awaitable[None]],
         duration_ms: int,
         request_id: str | None,
+        track_completion: bool = False,
     ) -> dict[str, Any]:
-        if not self._adapter.supports(capability):
-            raise AdapterNotImplementedError(f"当前适配器不支持动作: {action_name}")
+        unsupported = [
+            capability
+            for capability in capabilities
+            if not self._adapter.supports(capability)
+        ]
+        if unsupported:
+            raise AdapterNotImplementedError(
+                f"当前适配器不支持动作: {action_name}",
+                details={"capabilities": [item.value for item in unsupported]},
+            )
 
         async with self._lock:
             if self._stopping or (self._task is not None and not self._task.done()):
@@ -110,13 +127,22 @@ class MotionService:
             self._current_action = action_name
             self._current_request_id = request_id
             self._last_error = None
+            execution_token = (
+                f"motion-{generation}-{time.monotonic_ns()}"
+                if track_completion
+                else None
+            )
+            if execution_token is not None:
+                self._completion_futures[execution_token] = (
+                    asyncio.get_running_loop().create_future()
+                )
             self._task = asyncio.create_task(
                 self._execute(
                     generation,
                     action_name,
                     operation,
-                    intensity,
                     duration_ms,
+                    execution_token,
                 ),
                 name=f"ai-cat-{action_name}-{generation}",
             )
@@ -125,16 +151,16 @@ class MotionService:
             "action": action_name,
             "request_id": request_id,
             "state": "running",
+            "execution_token": execution_token,
         }
 
     async def shake_head(
         self, intensity: float, duration_ms: int, request_id: str | None
     ) -> dict[str, Any]:
         return await self._start(
-            capability=Capability.SHAKE_HEAD,
+            capabilities=(Capability.SHAKE_HEAD,),
             action_name="head_shake",
-            operation=self._adapter.shake_head,
-            intensity=intensity,
+            operation=lambda: self._adapter.shake_head(intensity, duration_ms),
             duration_ms=duration_ms,
             request_id=request_id,
         )
@@ -143,10 +169,9 @@ class MotionService:
         self, intensity: float, duration_ms: int, request_id: str | None
     ) -> dict[str, Any]:
         return await self._start(
-            capability=Capability.NOD_HEAD,
+            capabilities=(Capability.NOD_HEAD,),
             action_name="head_nod",
-            operation=self._adapter.nod_head,
-            intensity=intensity,
+            operation=lambda: self._adapter.nod_head(intensity, duration_ms),
             duration_ms=duration_ms,
             request_id=request_id,
         )
@@ -155,13 +180,59 @@ class MotionService:
         self, intensity: float, duration_ms: int, request_id: str | None
     ) -> dict[str, Any]:
         return await self._start(
-            capability=Capability.WAG_TAIL,
+            capabilities=(Capability.WAG_TAIL,),
             action_name="tail_wag",
-            operation=self._adapter.wag_tail,
-            intensity=intensity,
+            operation=lambda: self._adapter.wag_tail(intensity, duration_ms),
             duration_ms=duration_ms,
             request_id=request_id,
         )
+
+    async def run_sequence(
+        self,
+        *,
+        action_name: str,
+        steps: tuple[tuple[Capability, float, int], ...],
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        """Run an allowlisted sequence while keeping the scheduler serialized."""
+
+        if not steps:
+            raise ValueError("motion sequence must contain at least one step")
+
+        async def operation() -> None:
+            operations = {
+                Capability.SHAKE_HEAD: self._adapter.shake_head,
+                Capability.NOD_HEAD: self._adapter.nod_head,
+                Capability.WAG_TAIL: self._adapter.wag_tail,
+            }
+            for capability, intensity, duration_ms in steps:
+                await operations[capability](intensity, duration_ms)
+
+        return await self._start(
+            capabilities=tuple(step[0] for step in steps),
+            action_name=action_name,
+            operation=operation,
+            duration_ms=sum(step[2] for step in steps),
+            request_id=request_id,
+            track_completion=True,
+        )
+
+    async def await_execution(
+        self,
+        execution_token: str,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        completion = self._completion_futures.get(execution_token)
+        if completion is None:
+            raise ValueError("unknown motion execution token")
+        try:
+            if timeout is None:
+                return await asyncio.shield(completion)
+            return await asyncio.wait_for(asyncio.shield(completion), timeout=timeout)
+        finally:
+            if completion.done():
+                self._completion_futures.pop(execution_token, None)
 
     async def stop(self) -> dict[str, Any]:
         if not self._adapter.supports(Capability.STOP_MOTION):

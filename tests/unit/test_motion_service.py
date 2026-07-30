@@ -1,6 +1,7 @@
 import pytest
 
 from ai_cat_controller.adapters.mock import MockAiCatAdapter
+from ai_cat_controller.adapters.base import Capability
 from ai_cat_controller.core.errors import ActionConflictError
 from ai_cat_controller.services.motion_service import MotionService
 
@@ -65,3 +66,25 @@ async def test_motion_finishes_without_blocking_caller() -> None:
     assert result["state"] == "running"
     assert running == "tail_wag"
     assert service.current_action == "idle"
+
+
+@pytest.mark.asyncio
+async def test_motion_sequence_reports_completion() -> None:
+    adapter = MockAiCatAdapter(SERVICES)
+    await adapter.connect()
+    service = MotionService(
+        adapter,
+        command_timeout_seconds=1.0,
+        cooldown_seconds=0.0,
+    )
+
+    result = await service.run_sequence(
+        action_name="greeting_combo",
+        steps=(
+            (Capability.NOD_HEAD, 0.4, 10),
+        ),
+        request_id="sequence",
+    )
+    outcome = await service.await_execution(result["execution_token"])
+
+    assert outcome == "completed"

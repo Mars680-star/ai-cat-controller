@@ -7,6 +7,7 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.services.device_service import DeviceService
 from ai_cat_controller.services.dialog_service import DialogService
 from ai_cat_controller.services.motion_service import MotionService
+from ai_cat_controller.services.product_mock_service import ProductMockService
 
 
 @dataclass(slots=True)
@@ -16,3 +17,4 @@ class AppServices:
     device: DeviceService
     motion: MotionService
     dialog: DialogService
+    product: ProductMockService

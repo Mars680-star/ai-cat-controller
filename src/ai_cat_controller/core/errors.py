@@ -30,6 +30,11 @@ class DeviceUnavailableError(AiCatError):
     code = "device_unavailable"
 
 
+class ResourceNotFoundError(AiCatError):
+    status_code = 404
+    code = "resource_not_found"
+
+
 class ActionConflictError(AiCatError):
     status_code = 409
     code = "action_conflict"

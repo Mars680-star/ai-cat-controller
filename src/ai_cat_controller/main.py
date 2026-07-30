@@ -18,9 +18,11 @@ from ai_cat_controller.api.router import router as api_router
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.logging import configure_logging
 from ai_cat_controller.core.state import AppServices
+from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 from ai_cat_controller.services.device_service import DeviceService
 from ai_cat_controller.services.dialog_service import DialogService
 from ai_cat_controller.services.motion_service import MotionService
+from ai_cat_controller.services.product_mock_service import ProductMockService
 from ai_cat_controller.web.router import router as web_router
 
 LOGGER = logging.getLogger(__name__)
@@ -49,12 +51,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         dialog = DialogService(adapter)
         device = DeviceService(adapter, resolved_settings, motion, dialog)
+        product = ProductMockService(
+            SQLiteRepository(resolved_settings.data_path),
+            motion,
+            resolved_settings,
+        )
+        await product.initialize()
         application.state.services = AppServices(
             settings=resolved_settings,
             adapter=adapter,
             device=device,
             motion=motion,
             dialog=dialog,
+            product=product,
         )
         LOGGER.info("AI Cat Controller started in %s mode", resolved_settings.hardware_driver)
         try:
@@ -62,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await _cleanup("dialog service", dialog.shutdown)
             await _cleanup("motion service", motion.shutdown)
+            await _cleanup("product mock service", product.shutdown)
             await _cleanup("adapter", adapter.close)
             LOGGER.info("AI Cat Controller stopped")
 
