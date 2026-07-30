@@ -34,6 +34,9 @@ class DeviceService:
 
     async def get_device_status(self) -> dict[str, Any]:
         adapter_status = await self._adapter.get_device_status()
+        dialog_state = adapter_status.get("dialog_state", self._dialog.state)
+        if self._dialog.state in {"waking", "interrupting"}:
+            dialog_state = self._dialog.state
         adapter_status.update(
             {
                 "adapter_mode": self._settings.hardware_driver,
@@ -41,7 +44,7 @@ class DeviceService:
                 "platform": platform.platform(),
                 "python_version": sys.version.split()[0],
                 "current_action": self._motion.current_action,
-                "dialog_state": self._dialog.state,
+                "dialog_state": dialog_state,
                 "last_error": self._motion.last_error,
                 "uptime_seconds": max(0.0, time.monotonic() - self._started_at),
             }

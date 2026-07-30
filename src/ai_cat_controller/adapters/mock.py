@@ -62,6 +62,29 @@ class MockAiCatAdapter(AiCatAdapter):
                 for name, state in self.service_states.items()
             ]
 
+    async def get_dialog_status(self) -> dict[str, Any]:
+        async with self._state_lock:
+            state_map = {
+                "idle": ("ready", "等待开始语音测试"),
+                "awake": ("listening", "Mock 正在聆听"),
+                "interrupted": ("interrupted", "Mock 回答已打断"),
+            }
+            state, message = state_map.get(
+                self.dialog_state,
+                (self.dialog_state, "Mock 对话状态"),
+            )
+            return {
+                "state": state,
+                "message": message,
+                "session_active": self.dialog_state == "awake",
+                "can_interrupt": self.dialog_state == "awake",
+                "follow_up_deadline_ms": 0,
+                "updated_at_ms": int(time.time() * 1000),
+                "sequence": 0,
+                "source": "mock",
+                "stale": False,
+            }
+
     async def _run_motion(
         self, action: str, part: str, intensity: float, duration_ms: int
     ) -> None:

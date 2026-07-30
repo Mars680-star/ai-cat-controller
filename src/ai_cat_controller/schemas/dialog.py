@@ -25,3 +25,15 @@ class DialogActionData(BaseModel):
     dialog_state: str
     request_id: str | None
     changed: bool
+
+
+class DialogStatusData(BaseModel):
+    state: str
+    message: str
+    session_active: bool
+    can_interrupt: bool
+    follow_up_deadline_ms: int
+    updated_at_ms: int
+    sequence: int
+    source: str
+    stale: bool

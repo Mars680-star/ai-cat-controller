@@ -10,6 +10,8 @@ Type=simple
 User=root
 Group=pulse-access
 SupplementaryGroups=root
+RuntimeDirectory=ai-cat
+RuntimeDirectoryMode=0755
 Environment=HOME=/root
 Environment=PULSE_SERVER=unix:/var/run/pulse/native
 WorkingDirectory=/root/ConversationalAI-Embedded-Kit-2.0/examples/low_load_solution/linux_k1/build

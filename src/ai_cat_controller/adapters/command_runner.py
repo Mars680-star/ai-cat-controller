@@ -23,20 +23,31 @@ class CommandRunner:
         allowed_executables: frozenset[str],
         allowed_services: frozenset[str],
         timeout_seconds: float,
+        allowed_service_signals: dict[str, frozenset[str]] | None = None,
         max_output_bytes: int = 16_384,
     ) -> None:
         self._allowed_executables = allowed_executables
         self._allowed_services = allowed_services
+        self._allowed_service_signals = allowed_service_signals or {}
         self._timeout_seconds = timeout_seconds
         self._max_output_bytes = max_output_bytes
 
     def _validate(self, executable: str, args: list[str]) -> None:
         if executable not in self._allowed_executables:
             raise CommandNotAllowedError(f"可执行文件不在白名单中: {executable}")
-        if len(args) != 2 or args[0] not in {"is-active", "is-enabled"}:
-            raise CommandNotAllowedError("systemctl 只允许 is-active 和 is-enabled")
-        if args[1] not in self._allowed_services:
-            raise CommandNotAllowedError(f"服务名称不在白名单中: {args[1]}")
+        if (
+            len(args) == 2
+            and args[0] in {"is-active", "is-enabled"}
+            and args[1] in self._allowed_services
+        ):
+            return
+        if len(args) == 3 and args[0] == "kill" and args[1].startswith("--signal="):
+            signal_name = args[1].removeprefix("--signal=")
+            if signal_name in self._allowed_service_signals.get(
+                args[2], frozenset()
+            ):
+                return
+        raise CommandNotAllowedError("systemctl 参数不在固定查询或对话信号白名单中")
 
     def _decode(self, value: bytes) -> str:
         return value[: self._max_output_bytes].decode("utf-8", errors="replace").strip()

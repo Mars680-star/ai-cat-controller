@@ -39,6 +39,7 @@ class Settings(BaseModel):
 
     hardware_binary: Path = Path("/usr/bin/ai-toy_app")
     systemctl_binary: Path = Path("/usr/bin/systemctl")
+    dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_service: str = "volc-conv-ai.service"
     wake_service: str = "volc-k1-wake-word.service"
     pulseaudio_service: str = "volc-pulseaudio.service"
@@ -97,6 +98,9 @@ class Settings(BaseModel):
             "intimacy_daily_cap": source.get("AI_CAT_INTIMACY_DAILY_CAP", "20"),
             "hardware_binary": source.get("AI_CAT_HARDWARE_BINARY", "/usr/bin/ai-toy_app"),
             "systemctl_binary": source.get("AI_CAT_SYSTEMCTL_BINARY", "/usr/bin/systemctl"),
+            "dialog_status_path": source.get(
+                "AI_CAT_DIALOG_STATUS_PATH", "/run/ai-cat/dialog-status.json"
+            ),
             "dialog_service": source.get(
                 "AI_CAT_DIALOG_SERVICE", "volc-conv-ai.service"
             ),

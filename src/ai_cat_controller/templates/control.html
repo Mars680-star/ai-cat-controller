@@ -293,6 +293,32 @@
           </div>
           <span id="dialog-voice" class="state-label">--</span>
         </div>
+        <section class="voice-debug-panel" aria-labelledby="voice-debug-title">
+          <div class="voice-phase">
+            <span id="voice-state-dot" class="voice-state-dot unavailable"
+                  aria-hidden="true"></span>
+            <div>
+              <span>真机语音状态</span>
+              <h3 id="voice-debug-title" role="status" aria-live="polite">
+                等待状态
+              </h3>
+              <p id="voice-state-message">正在读取对话服务状态</p>
+            </div>
+          </div>
+          <div class="voice-timing">
+            <span>当前阶段</span>
+            <strong id="voice-state-elapsed">--</strong>
+            <small id="voice-followup-remaining">--</small>
+          </div>
+          <div class="voice-actions">
+            <button id="voice-start" class="button primary" type="button">
+              开始或继续聆听
+            </button>
+            <button id="voice-interrupt" class="button secondary" type="button">
+              打断并结束
+            </button>
+          </div>
+        </section>
         <div id="dialog-list" class="dialog-list empty-state">暂无对话记录</div>
         <form id="dialog-form" class="dialog-composer">
           <input id="dialog-input" maxlength="500" required

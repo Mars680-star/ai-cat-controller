@@ -14,7 +14,7 @@ SERVICES = (
 
 
 @pytest.mark.asyncio
-async def test_repeated_wake_does_not_repeat_transition() -> None:
+async def test_repeated_wake_can_start_another_listening_turn() -> None:
     adapter = MockAiCatAdapter(SERVICES)
     await adapter.connect()
     service = DialogService(adapter)
@@ -23,7 +23,7 @@ async def test_repeated_wake_does_not_repeat_transition() -> None:
     second = await service.wake()
 
     assert first["changed"] is True
-    assert second["changed"] is False
+    assert second["changed"] is True
 
 
 @pytest.mark.asyncio
@@ -66,3 +66,33 @@ async def test_interrupt_cancels_in_progress_wake() -> None:
 
     assert result["dialog_state"] == "interrupted"
     assert wake_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_failed_wake_does_not_leave_service_waking() -> None:
+    class FailingAdapter(MockAiCatAdapter):
+        async def wake_dialog(self) -> None:
+            raise RuntimeError("simulated wake failure")
+
+    adapter = FailingAdapter(SERVICES)
+    service = DialogService(adapter)
+
+    with pytest.raises(RuntimeError, match="simulated wake failure"):
+        await service.wake()
+
+    assert service.state == "error"
+
+
+@pytest.mark.asyncio
+async def test_failed_interrupt_does_not_leave_service_interrupting() -> None:
+    class FailingAdapter(MockAiCatAdapter):
+        async def interrupt_dialog(self) -> None:
+            raise RuntimeError("simulated interrupt failure")
+
+    adapter = FailingAdapter(SERVICES)
+    service = DialogService(adapter)
+
+    with pytest.raises(RuntimeError, match="simulated interrupt failure"):
+        await service.interrupt()
+
+    assert service.state == "error"

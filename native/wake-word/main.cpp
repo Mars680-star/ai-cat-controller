@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <spawn.h>
 #include <string>
+#include <sys/wait.h>
 #include <vector>
 
 #include <unistd.h>
@@ -16,6 +18,8 @@
 
 #include "backends/sensevoice/sensevoice_model.hpp"
 #include "ten_vad.h"
+
+extern char** environ;
 
 namespace {
 
@@ -27,7 +31,8 @@ constexpr size_t kPreSpeechSamples = 8000;
 constexpr size_t kMinUtteranceSamples = 8000;
 constexpr size_t kMaxUtteranceSamples = 80000;
 constexpr float kVadThreshold = 0.5f;
-constexpr auto kWakeCooldown = std::chrono::seconds(20);
+constexpr auto kTriggerSettleDelay = std::chrono::seconds(1);
+constexpr const char* kDialogSessionMarker = "/run/ai-cat/dialog-session-active";
 
 volatile std::sig_atomic_t exit_requested = 0;
 
@@ -98,8 +103,28 @@ std::vector<float> normalizeAudio(const std::vector<int16_t>& samples) {
 }
 
 bool triggerConversation() {
-    const int status = std::system("/bin/systemctl kill -s SIGUSR1 volc-conv-ai.service");
-    if (status != 0) {
+    pid_t pid = -1;
+    char systemctl[] = "systemctl";
+    char kill[] = "kill";
+    char signal[] = "--signal=SIGUSR1";
+    char service[] = "volc-conv-ai.service";
+    char* argv[] = {systemctl, kill, signal, service, nullptr};
+    const int spawn_status = posix_spawn(
+        &pid,
+        "/bin/systemctl",
+        nullptr,
+        nullptr,
+        argv,
+        environ);
+    if (spawn_status != 0) {
+        std::cerr << "[WakeWord] Failed to start systemctl: "
+                  << spawn_status << std::endl;
+        return false;
+    }
+    int child_status = 0;
+    if (waitpid(pid, &child_status, 0) < 0 ||
+        !WIFEXITED(child_status) ||
+        WEXITSTATUS(child_status) != 0) {
         std::cerr << "[WakeWord] Failed to signal volc-conv-ai.service" << std::endl;
         return false;
     }
@@ -186,12 +211,28 @@ int main(int argc, char** argv) {
     bool recording = false;
     int speech_run = 0;
     int silence_run = 0;
-    auto cooldown_until = std::chrono::steady_clock::time_point::min();
+    auto resume_not_before = std::chrono::steady_clock::time_point::min();
 
     std::cout << "[WakeWord] Listening" << std::endl;
     while (!exit_requested) {
+        if (access(kDialogSessionMarker, F_OK) == 0) {
+            if (capture != nullptr) {
+                pa_simple_free(capture);
+                capture = nullptr;
+                recording = false;
+                speech_run = 0;
+                silence_run = 0;
+                utterance.clear();
+                pre_speech.clear();
+                std::cout << "[WakeWord] Capture paused for active conversation"
+                          << std::endl;
+            }
+            usleep(50 * 1000);
+            continue;
+        }
+
         if (capture == nullptr) {
-            if (std::chrono::steady_clock::now() < cooldown_until) {
+            if (std::chrono::steady_clock::now() < resume_not_before) {
                 usleep(50 * 1000);
                 continue;
             }
@@ -214,7 +255,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-        if (std::chrono::steady_clock::now() < cooldown_until) {
+        if (std::chrono::steady_clock::now() < resume_not_before) {
             continue;
         }
 
@@ -259,10 +300,12 @@ int main(int argc, char** argv) {
             if (matchesWakePhrase(normalized, wake_phrase)) {
                 std::cout << "[WakeWord] Matched: " << wake_phrase << std::endl;
                 if (triggerConversation()) {
-                    cooldown_until = std::chrono::steady_clock::now() + kWakeCooldown;
+                    resume_not_before =
+                        std::chrono::steady_clock::now() + kTriggerSettleDelay;
                     pa_simple_free(capture);
                     capture = nullptr;
-                    std::cout << "[WakeWord] Capture paused for conversation" << std::endl;
+                    std::cout << "[WakeWord] Waiting for dialog session marker"
+                              << std::endl;
                 }
             }
         }

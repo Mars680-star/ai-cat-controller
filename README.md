@@ -1,7 +1,8 @@
 # AI Cat Controller
 
 SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock、浏览器端
-小程序流程替身、完整 Mock 适配器和只读 Local K1 框架；默认配置不会控制真实硬件。
+小程序流程替身、完整 Mock 适配器和保守的 Local K1 对话控制；默认配置不会
+控制真实硬件。
 
 ## 当前能力
 
@@ -12,11 +13,12 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - 7 个安全预设动作、异步结果、重复请求幂等和离线拒绝。
 - SQLite 持久化，进程重启后恢复性格、亲密度和历史。
 - API Key、动作串行、停止取消、超时和退出清理。
-- Local K1 固定 systemd 服务只读状态查询。
+- Local K1 固定 systemd 服务状态查询、对话唤醒/打断和实时阶段显示。
 - 火山引擎 K1 补丁、唤醒词入口和硬件应用源码。
 
-Local K1 的真实动作和对话控制仍返回 `501`，不会调用电机或发送信号。产品
-Mock 的对话是本地模板，逻辑音色 ID 未映射到火山引擎真实音色。
+Local K1 的真实电机动作仍返回 `501`。对话 API 只允许向
+`volc-conv-ai.service` 发送固定的 `SIGUSR1`/`SIGUSR2`；产品 Mock 的对话
+仍是本地模板，逻辑音色 ID 未映射到火山引擎真实音色。
 
 ## 目录
 
@@ -108,8 +110,9 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 
 - HTTP 请求不能指定可执行文件、服务名或 Shell 参数。
 - Python 代码不使用 `os.system`、`shell=True` 或 Shell 字符串拼接。
-- Local K1 第一阶段只允许固定服务的 `is-active` 和 `is-enabled`。
-- 不执行 `systemctl start/stop/restart/kill`。
+- Local K1 只允许固定服务的 `is-active`、`is-enabled`，以及对话服务的
+  `SIGUSR1`/`SIGUSR2`。
+- 不执行 `systemctl start/stop/restart`，也不接受请求传入任意信号或服务名。
 - 不执行真实电机、DDS 或 ROS2 操作。
 - 首次开放真机动作前，必须确认独立停止接口并把设备放在安全空旷区域。
 - 正式远程控制需要 HTTPS、鉴权和受控中转，不能直接暴露公网端口。
@@ -127,3 +130,4 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - `docs/system-interaction-flow.md`
 - `docs/personality-and-growth.md`
 - `docs/product-mock-validation.md`
+- `docs/voice-dialog-testing.md`

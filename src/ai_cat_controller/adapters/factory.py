@@ -14,6 +14,9 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
     runner = CommandRunner(
         allowed_executables=frozenset({"/usr/bin/systemctl", "/bin/systemctl"}),
         allowed_services=frozenset(settings.service_names),
+        allowed_service_signals={
+            settings.dialog_service: frozenset({"SIGUSR1", "SIGUSR2"})
+        },
         timeout_seconds=settings.command_timeout_seconds,
     )
     return LocalK1Adapter(settings, runner)

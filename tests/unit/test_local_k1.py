@@ -1,3 +1,5 @@
+import os
+import time
 from typing import Any
 
 import pytest
@@ -75,8 +77,6 @@ async def test_one_service_failure_does_not_fail_status_response() -> None:
         ("nod_head", (0.5, 600)),
         ("wag_tail", (0.5, 600)),
         ("stop_motion", ()),
-        ("wake_dialog", ()),
-        ("interrupt_dialog", ()),
     ],
 )
 async def test_local_actions_are_not_implemented(
@@ -86,3 +86,126 @@ async def test_local_actions_are_not_implemented(
 
     with pytest.raises(AdapterNotImplementedError):
         await getattr(adapter, method)(*args)
+
+
+@pytest.mark.asyncio
+async def test_local_dialog_control_uses_fixed_signals() -> None:
+    runner = FakeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    await adapter.wake_dialog()
+    await adapter.interrupt_dialog()
+
+    assert runner.calls == [
+        (
+            "/usr/bin/systemctl",
+            ("kill", "--signal=SIGUSR1", "volc-conv-ai.service"),
+        ),
+        (
+            "/usr/bin/systemctl",
+            ("kill", "--signal=SIGUSR2", "volc-conv-ai.service"),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_dialog_status_reads_fixed_json_file(tmp_path) -> None:
+    status_path = tmp_path / "dialog-status.json"
+    status_path.write_text(
+        """
+        {
+          "state": "thinking",
+          "message": "问题已收到，正在思考",
+          "session_active": true,
+          "can_interrupt": true,
+          "follow_up_deadline_ms": 0,
+          "updated_at_ms": 9999999999999,
+          "sequence": 7
+        }
+        """,
+        encoding="utf-8",
+    )
+    settings = local_settings().model_copy(
+        update={"dialog_status_path": status_path}
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_dialog_status()
+
+    assert result["state"] == "thinking"
+    assert result["session_active"] is True
+    assert result["sequence"] == 7
+    assert result["source"] == "local_k1"
+
+
+@pytest.mark.asyncio
+async def test_local_dialog_status_tolerates_invalid_numeric_fields(tmp_path) -> None:
+    status_path = tmp_path / "dialog-status.json"
+    status_path.write_text(
+        """
+        {
+          "state": "listening",
+          "follow_up_deadline_ms": "invalid",
+          "updated_at_ms": null,
+          "sequence": {}
+        }
+        """,
+        encoding="utf-8",
+    )
+    settings = local_settings().model_copy(
+        update={"dialog_status_path": status_path}
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_dialog_status()
+
+    assert result["state"] == "listening"
+    assert result["follow_up_deadline_ms"] == 0
+    assert result["updated_at_ms"] == 0
+    assert result["sequence"] == 0
+
+
+@pytest.mark.asyncio
+async def test_old_dialog_status_is_current_while_native_pid_exists(tmp_path) -> None:
+    status_path = tmp_path / "dialog-status.json"
+    status_path.write_text(
+        f"""
+        {{
+          "state": "ready",
+          "updated_at_ms": {int(time.time() * 1000) - 60_000},
+          "pid": {os.getpid()}
+        }}
+        """,
+        encoding="utf-8",
+    )
+    settings = local_settings().model_copy(
+        update={"dialog_status_path": status_path}
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_dialog_status()
+
+    assert result["stale"] is False
+
+
+@pytest.mark.asyncio
+async def test_old_dialog_status_is_stale_when_native_pid_is_gone(tmp_path) -> None:
+    status_path = tmp_path / "dialog-status.json"
+    status_path.write_text(
+        f"""
+        {{
+          "state": "ready",
+          "updated_at_ms": {int(time.time() * 1000) - 60_000},
+          "pid": 99999999
+        }}
+        """,
+        encoding="utf-8",
+    )
+    settings = local_settings().model_copy(
+        update={"dialog_status_path": status_path}
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_dialog_status()
+
+    assert result["stale"] is True

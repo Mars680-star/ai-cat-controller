@@ -784,6 +784,88 @@ textarea:focus-visible {
   border-radius: 7px;
 }
 
+.voice-debug-panel {
+  margin-bottom: 16px;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px auto;
+  align-items: center;
+  gap: 20px;
+  background: #fff8dc;
+  border: 1px solid #e5cf79;
+  border-radius: 7px;
+}
+
+.voice-phase {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.voice-phase > div {
+  min-width: 0;
+}
+
+.voice-phase span,
+.voice-timing span,
+.voice-timing small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.voice-phase h3 {
+  margin-top: 2px;
+}
+
+.voice-phase p {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: #5d5645;
+  font-size: 0.8rem;
+}
+
+.voice-state-dot {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  background: var(--success);
+  border: 3px solid #c9e3d7;
+  border-radius: 50%;
+}
+
+.voice-state-dot.thinking {
+  background: var(--yellow);
+  border-color: #f2dea6;
+}
+
+.voice-state-dot.answering {
+  background: #d85d4b;
+  border-color: #f1c8c1;
+}
+
+.voice-state-dot.unavailable,
+.voice-state-dot.offline {
+  background: #77736a;
+  border-color: #d7d2c8;
+}
+
+.voice-timing {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.voice-timing strong {
+  font-size: 1.05rem;
+}
+
+.voice-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 8px;
+}
+
 .dialog-message {
   width: fit-content;
   max-width: min(78%, 620px);
@@ -954,6 +1036,14 @@ textarea:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .voice-debug-panel {
+    grid-template-columns: minmax(0, 1fr) 110px;
+  }
+
+  .voice-actions {
+    grid-column: 1 / -1;
+  }
+
   .toast {
     bottom: 78px;
   }
@@ -1048,6 +1138,16 @@ textarea:focus-visible {
 
   .dialog-list {
     height: calc(100vh - 290px);
+  }
+
+  .voice-debug-panel {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .voice-actions {
+    grid-column: auto;
+    grid-template-columns: 1fr;
   }
 
   .dialog-message {

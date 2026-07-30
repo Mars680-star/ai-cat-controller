@@ -67,6 +67,13 @@
     interactionHistory: $("#interaction-history"),
     dialogPetName: $("#dialog-pet-name"),
     dialogVoice: $("#dialog-voice"),
+    voiceStateDot: $("#voice-state-dot"),
+    voiceStateTitle: $("#voice-debug-title"),
+    voiceStateMessage: $("#voice-state-message"),
+    voiceStateElapsed: $("#voice-state-elapsed"),
+    voiceFollowupRemaining: $("#voice-followup-remaining"),
+    voiceStart: $("#voice-start"),
+    voiceInterrupt: $("#voice-interrupt"),
     dialogList: $("#dialog-list"),
     dialogForm: $("#dialog-form"),
     dialogInput: $("#dialog-input"),
@@ -97,6 +104,7 @@
     activeView: "connection",
     toastTimer: null,
     refreshing: false,
+    voiceStatus: null,
   };
 
   const statusLabels = {
@@ -109,6 +117,22 @@
     cancelled: "已取消",
     failed: "失败",
     timed_out: "超时",
+  };
+
+  const voiceStateLabels = {
+    starting: "语音服务启动中",
+    connecting: "正在连接云端",
+    ready: "等待唤醒词",
+    wake_detected: "已听到唤醒词",
+    listening: "正在聆听",
+    thinking: "正在思考",
+    answering: "正在回答",
+    followup_listening: "等待继续追问",
+    interrupted: "回答已打断",
+    offline: "语音服务离线",
+    unavailable: "状态不可用",
+    waking: "正在请求聆听",
+    interrupting: "正在请求打断",
   };
 
   function showToast(message, level = "info") {
@@ -188,7 +212,7 @@
       } else if (viewName === "growth") {
         refreshIntimacy().catch(reportError);
       } else if (viewName === "history") {
-        refreshDialogs().catch(reportError);
+        Promise.all([refreshDialogs(), refreshVoiceStatus()]).catch(reportError);
       }
     }
   }
@@ -565,6 +589,55 @@
     renderDialogs(payload.data);
   }
 
+  function renderVoiceStatus(data) {
+    state.voiceStatus = data;
+    const now = Date.now();
+    const elapsedMs = data.updated_at_ms > 0
+      ? Math.max(now - data.updated_at_ms, 0)
+      : 0;
+    const remainingMs = data.follow_up_deadline_ms > 0
+      ? Math.max(data.follow_up_deadline_ms - now, 0)
+      : 0;
+    ui.voiceStateTitle.textContent =
+      voiceStateLabels[data.state] || data.state;
+    ui.voiceStateMessage.textContent = data.stale
+      ? `${data.message || "没有收到新状态"}（状态可能已过期）`
+      : data.message;
+    ui.voiceStateElapsed.textContent = data.updated_at_ms > 0
+      ? `${Math.floor(elapsedMs / 1000)} 秒`
+      : "--";
+    ui.voiceFollowupRemaining.textContent = remainingMs > 0
+      ? `追问窗口剩余 ${Math.ceil(remainingMs / 1000)} 秒`
+      : (data.session_active ? "连续会话进行中" : "尚未进入连续会话");
+    ui.voiceStateDot.className =
+      `voice-state-dot ${data.stale ? "unavailable" : data.state}`;
+    ui.voiceInterrupt.disabled =
+      !data.can_interrupt && !data.session_active;
+  }
+
+  async function refreshVoiceStatus() {
+    const payload = await apiRequest("/api/v1/dialog/status");
+    renderVoiceStatus(payload.data);
+  }
+
+  async function controlVoice(endpoint) {
+    ui.voiceStart.disabled = true;
+    ui.voiceInterrupt.disabled = true;
+    try {
+      const payload = await apiRequest(endpoint, {
+        method: "POST",
+        body: JSON.stringify({request_id: `web-voice-${Date.now()}`}),
+      });
+      showToast(payload.message);
+      window.setTimeout(() => refreshVoiceStatus().catch(reportError), 150);
+      window.setTimeout(() => refreshVoiceStatus().catch(reportError), 700);
+    } finally {
+      window.setTimeout(() => {
+        ui.voiceStart.disabled = false;
+      }, 800);
+    }
+  }
+
   async function sendDialog() {
     const content = ui.dialogInput.value.trim();
     if (!content) {
@@ -726,6 +799,12 @@
     event.preventDefault();
     sendDialog().catch(reportError);
   });
+  ui.voiceStart.addEventListener("click", () => {
+    controlVoice("/api/v1/dialog/wake").catch(reportError);
+  });
+  ui.voiceInterrupt.addEventListener("click", () => {
+    controlVoice("/api/v1/dialog/interrupt").catch(reportError);
+  });
   ui.settingsVolume.addEventListener("input", () => {
     ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%`;
   });
@@ -785,4 +864,13 @@
       reportError(error);
     }
   }, 5000);
+  window.setInterval(() => {
+    if (
+      state.sessionToken &&
+      !document.hidden &&
+      state.activeView === "history"
+    ) {
+      refreshVoiceStatus().catch(reportError);
+    }
+  }, 1000);
 })();

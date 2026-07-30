@@ -5,7 +5,7 @@
  * 核心流程：
  *   1. main() 读取 conv_ai_config.json，初始化 PulseAudio 和 SDK。
  *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
- *   3. SDK 检测到用户说完后回调对话状态，主循环提交当前音频段。
+ *   3. 麦克风在连续会话内持续上行，由服务端 VAD 自动判定每句话结束。
  *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
  *   5. 云端 Function Calling 可异步执行 K1 摇头命令并回传结果。
  *
@@ -27,6 +27,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 #include <pulse/simple.h>
@@ -44,6 +45,12 @@
 #define AUDIO_PLAYBACK_CHUNK_MS 20
 #define FUNCTION_NAME_MAX_LEN 64
 #define FUNCTION_CALL_ID_MAX_LEN 128
+#define WAKE_SPEECH_TIMEOUT_MS 15000
+#define FOLLOW_UP_WINDOW_MS 15000
+#define DIALOG_STATUS_DIR "/run/ai-cat"
+#define DIALOG_STATUS_PATH DIALOG_STATUS_DIR "/dialog-status.json"
+#define DIALOG_STATUS_TMP_PATH DIALOG_STATUS_DIR "/dialog-status.json.tmp"
+#define DIALOG_SESSION_MARKER DIALOG_STATUS_DIR "/dialog-session-active"
 
 #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
 #define WS_SESSION_UPDATE "{\"event_id\":\"event_OgjwihjHg\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"model\":\"\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":0}},\"agent_config\":{\"WelcomeMessage\":\"这是一个覆盖智能体上的欢迎语.\"}}}"
@@ -51,7 +58,6 @@
 typedef struct {
     /* 上行音频、可选视频和云端下行播放所需的运行时资源。 */
     uint8_t* audio_rec_buf;
-    bool commit;                  /* 是否需要提交当前一轮输入音频 */
     char* bot_id;
     char* video_rec_buf;
     int video_frame_len;
@@ -84,11 +90,17 @@ static volatile sig_atomic_t video_upload = false;
 static volatile sig_atomic_t exit_request = false;           /* 主线程和播放线程退出条件 */
 static volatile sig_atomic_t session_update = false;
 static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
-static uint64_t wake_capture_deadline_ms = 0;                 /* 唤醒收音的最晚截止时间 */
+static volatile sig_atomic_t interrupt_only_request = false; /* SIGUSR2 只打断，不开始录音 */
+static volatile sig_atomic_t session_active = false;          /* 一次唤醒后的连续对话窗口 */
+static volatile sig_atomic_t waiting_for_speech = false;      /* 等待用户开始说话 */
+static uint64_t speech_start_deadline_ms = 0;                 /* 等待首句/追问的截止时间 */
+static uint64_t follow_up_deadline_ms = 0;                    /* 无需唤醒的追问窗口 */
 static struct termios original_term;
 static bool terminal_configured = false;
 static int tick = 0;
 extern char** environ;
+static pthread_mutex_t dialog_status_mutex = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long dialog_status_sequence = 0;
 
 /* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
 typedef struct {
@@ -106,7 +118,7 @@ static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* 调试辅助：需要观察上行帧率时可在主循环中启用。 */
 static void __get_fps(void) {
-    static uint64_t last_sec = 0;
+    static time_t last_sec = 0;
     static int fps = 0;
     struct timespec now_time;
     fps++;
@@ -124,6 +136,72 @@ static uint64_t __get_time_ms(void) {
     return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
 }
 
+/*
+ * 对话状态通过固定 JSON 文件提供给 FastAPI。先写临时文件再 rename，
+ * 读取端永远只会看到一份完整 JSON；会话 marker 供唤醒词进程协调录音占用。
+ */
+static void __write_dialog_status(const char* state, const char* message) {
+    cJSON* root = NULL;
+    char* json = NULL;
+    FILE* fp = NULL;
+
+    pthread_mutex_lock(&dialog_status_mutex);
+    if (mkdir(DIALOG_STATUS_DIR, 0755) != 0 && errno != EEXIST) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+
+    if (session_active) {
+        FILE* marker = fopen(DIALOG_SESSION_MARKER, "wb");
+        if (marker != NULL) {
+            fclose(marker);
+        }
+    } else {
+        unlink(DIALOG_SESSION_MARKER);
+    }
+
+    root = cJSON_CreateObject();
+    if (root == NULL) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+    cJSON_AddStringToObject(root, "state", state);
+    cJSON_AddStringToObject(root, "message", message);
+    cJSON_AddBoolToObject(root, "session_active", session_active != 0);
+    cJSON_AddBoolToObject(root, "can_interrupt", ai_playing != 0);
+    cJSON_AddNumberToObject(root, "follow_up_deadline_ms", (double)follow_up_deadline_ms);
+    cJSON_AddNumberToObject(root, "updated_at_ms", (double)__get_time_ms());
+    cJSON_AddNumberToObject(root, "sequence", (double)++dialog_status_sequence);
+    cJSON_AddNumberToObject(root, "pid", (double)getpid());
+    json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == NULL) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+
+    fp = fopen(DIALOG_STATUS_TMP_PATH, "wb");
+    if (fp != NULL) {
+        fwrite(json, 1, strlen(json), fp);
+        fputc('\n', fp);
+        fflush(fp);
+        fsync(fileno(fp));
+        fclose(fp);
+        rename(DIALOG_STATUS_TMP_PATH, DIALOG_STATUS_PATH);
+    }
+    free(json);
+    pthread_mutex_unlock(&dialog_status_mutex);
+}
+
+static void __end_continuous_session(const char* message) {
+    running = false;
+    session_active = false;
+    waiting_for_speech = false;
+    speech_start_deadline_ms = 0;
+    follow_up_deadline_ms = 0;
+    __write_dialog_status("ready", message);
+}
+
 /* 仅交互运行时恢复终端；systemd 模式没有 TTY，不执行任何操作。 */
 static void __restore_terminal(void) {
     if (terminal_configured) {
@@ -138,22 +216,17 @@ static void __handle_key(char key) {
      */
     switch (key) {
         case ' ':
-            if (ai_playing && !running) {
-                printf("\n状态: 打断AI并开始下一轮录音\n");
-                interrupt = true;
-                start_after_interrupt = true;
-                ai_playing = false;
+            if (session_active) {
+                printf("\n状态: 打断并结束连续对话\n");
+                interrupt_only_request = true;
             } else {
-                running = !running;
-                printf("\n状态: %s\n", running ? "运行中" : "已停止");
+                printf("\n状态: 开始连续对话\n");
+                wake_request = true;
             }
             break;
         case 'i':
-            printf("\n状态: 打断\n");
-            running = false;
-            ai_playing = false;
-            start_after_interrupt = false;
-            interrupt = true;
+            printf("\n状态: 打断并结束连续对话\n");
+            interrupt_only_request = true;
             break;
         case 'o':
             printf("\n状态: stop\n");
@@ -196,12 +269,14 @@ static void __poll_keyboard(void) {
 }
 
 /*
- * SIGUSR1 是无终端模式的“一轮对话”触发入口，由本地唤醒词服务发送。
+ * SIGUSR1 开始或继续一轮对话；SIGUSR2 只打断当前回答并结束连续会话。
  * SIGINT/SIGTERM 只请求退出，让主循环和播放线程有机会正常收尾。
  */
 static void __handle_signal(int sig) {
     if (sig == SIGUSR1) {
         wake_request = true;
+    } else if (sig == SIGUSR2) {
+        interrupt_only_request = true;
     } else if (sig == SIGINT || sig == SIGTERM) {
         exit_request = true;
     }
@@ -219,6 +294,7 @@ static void __setup_async_io(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGUSR2, &sa, NULL);
 
     if (!isatty(STDIN_FILENO)) {
         return;
@@ -264,7 +340,7 @@ static char* __load_config_from_file(const char* filename) {
     }
     memset(config_data, 0, config_len + 1);
     size_t read_size = fread(config_data, 1, config_len, config_fp);
-    if (read_size != config_len) {
+    if (read_size != (size_t)config_len) {
         printf("Failed to read %s, expected %d bytes, got %zu bytes.\n", filename, config_len, read_size);
         free(config_data);
         fclose(config_fp);
@@ -297,7 +373,7 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
     }
     memset(demo->video_rec_buf, 0, demo->video_frame_len + 1);
     size_t read_size = fread(demo->video_rec_buf, 1, demo->video_frame_len, video_fp);
-    if (read_size != demo->video_frame_len) {
+    if (read_size != (size_t)demo->video_frame_len) {
         printf("Failed to read send_video.h264, expected %d bytes, got %zu bytes.\n", demo->video_frame_len, read_size);
         free(demo->video_rec_buf);
         fclose(video_fp);
@@ -351,10 +427,13 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
         case VOLC_EV_CONNECTED:
             is_ready = true;
             printf("Volc Engine connected\n");
+            __write_dialog_status("ready", "等待唤醒词“小安小安”");
             break;
         case VOLC_EV_DISCONNECTED:
             is_ready = false;
             printf("Volc Engine disconnected\n");
+            session_active = false;
+            __write_dialog_status("offline", "云端连接已断开，服务正在重连");
             exit_request = true;
             break;
         default:
@@ -365,17 +444,72 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
 
 static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_e status, void* user_data)
 {
+    realtime_ws_demo_t* demo = (realtime_ws_demo_t*)user_data;
+    uint64_t now_ms = __get_time_ms();
+
     /*
-     * 云端进入 THINKING/ANSWERING 表示本轮收音已经结束，应停止上行。
-     * ANSWER_FINISH/INTERRUPTED 则释放“AI 正在回答”状态，允许下一轮唤醒。
+     * 连续对话期间不能在 THINKING/ANSWERING 停止上行，否则云端永远听不到
+     * 用户插话，InterruptMode=0 也无法生效。LISTENING 可能发生在 AI 回答时，
+     * 此时立即清空本地 TTS 缓冲，避免残余语音继续播放。
      */
     printf("conversation status changed: %d\n", status);
-    if (status == VOLC_CONV_STATUS_THINKING || status == VOLC_CONV_STATUS_ANSWERING) {
-        running = false;
-        wake_capture_deadline_ms = 0;
-        ai_playing = true;
-    } else if (status == VOLC_CONV_STATUS_INTERRUPTED || status == VOLC_CONV_STATUS_ANSWER_FINISH) {
+    if (status == VOLC_CONV_STATUS_LISTENING) {
+        if (!session_active) {
+            __write_dialog_status("ready", "等待唤醒词“小安小安”");
+            return;
+        }
+        if (ai_playing && demo != NULL) {
+            pthread_mutex_lock(&demo->ring_buf_mutex);
+            volc_ringbuf_clear(demo->ring_buf);
+            pthread_mutex_unlock(&demo->ring_buf_mutex);
+        }
         ai_playing = false;
+        running = true;
+        __write_dialog_status(
+            "listening",
+            waiting_for_speech
+                ? "麦克风已开启，请开始说话"
+                : "正在接收语音"
+        );
+    } else if (status == VOLC_CONV_STATUS_THINKING) {
+        running = session_active;
+        waiting_for_speech = false;
+        speech_start_deadline_ms = 0;
+        follow_up_deadline_ms = 0;
+        ai_playing = true;
+        __write_dialog_status("thinking", "问题已收到，正在思考");
+    } else if (status == VOLC_CONV_STATUS_ANSWERING) {
+        running = session_active;
+        waiting_for_speech = false;
+        speech_start_deadline_ms = 0;
+        follow_up_deadline_ms = 0;
+        ai_playing = true;
+        __write_dialog_status("answering", "正在回答，可以直接说话打断");
+    } else if (
+        status == VOLC_CONV_STATUS_INTERRUPTED ||
+        status == VOLC_CONV_STATUS_ANSWER_FINISH
+    ) {
+        ai_playing = false;
+        if (session_active) {
+            running = true;
+            waiting_for_speech = true;
+            follow_up_deadline_ms = now_ms + FOLLOW_UP_WINDOW_MS;
+            speech_start_deadline_ms = follow_up_deadline_ms;
+            __write_dialog_status(
+                "followup_listening",
+                status == VOLC_CONV_STATUS_INTERRUPTED
+                    ? "回答已打断，可以直接继续说"
+                    : "回答结束，15 秒内可以直接追问"
+            );
+        } else {
+            running = false;
+            __write_dialog_status(
+                status == VOLC_CONV_STATUS_INTERRUPTED ? "interrupted" : "ready",
+                status == VOLC_CONV_STATUS_INTERRUPTED
+                    ? "回答已打断"
+                    : "等待唤醒词“小安小安”"
+            );
+        }
     }
 }
 
@@ -390,7 +524,7 @@ static void _on_volc_audio_data(volc_engine_t handle, const void* data_ptr, size
     pthread_mutex_lock(&demo->ring_buf_mutex);
     int written = volc_ringbuf_write(demo->ring_buf, (char *)data_ptr, data_len);
     pthread_mutex_unlock(&demo->ring_buf_mutex);
-    if (written != data_len) {
+    if (written < 0 || (size_t)written != data_len) {
         printf("write audio data to ring buf fail!!!!!!!!\n");
     }
 }
@@ -720,7 +854,6 @@ static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
     /* 清除云端尚未提交的输入音频，供交互调试按键使用。 */
     uint8_t* clear = NULL;
     size_t clear_len = 0;
-    volc_message_info_t msg_info = {0};
     int ret = _build_ws_message(WS_BUFFER_CLEAR, &clear, &clear_len);
     if (ret != 0) {
         printf("build clear message failed");
@@ -742,6 +875,9 @@ int main(int argc, const char* argv[]){
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    session_active = false;
+    unlink(DIALOG_SESSION_MARKER);
+    __write_dialog_status("starting", "语音服务正在启动");
 
     /* 阶段 1：读取配置并根据传输模式确定音频采样率和帧大小。 */
 	if ((config_data = __load_config_from_file("conv_ai_config.json")) == NULL) {
@@ -759,7 +895,6 @@ int main(int argc, const char* argv[]){
         return -1;
     }
 
-    demo.commit = false;
 	demo.audio_rec_buf = (uint8_t*)malloc(demo.frame_len);
 	if (demo.audio_rec_buf == NULL) {
 		printf("malloc audio rec buf fail\n");
@@ -844,6 +979,7 @@ int main(int argc, const char* argv[]){
 
 
     opt.bot_id = demo.bot_id;
+    __write_dialog_status("connecting", "正在连接火山引擎");
     volc_start(demo.engine, &opt);
 
     /* 阶段 3：等待云端 session 就绪后再接受唤醒，避免丢失首轮音频。 */
@@ -856,6 +992,7 @@ int main(int argc, const char* argv[]){
         goto err_out_label;
     }
     printf("volc realtime is ready.\n");
+    __write_dialog_status("ready", "等待唤醒词“小安小安”");
 
 
     __setup_async_io();
@@ -870,21 +1007,24 @@ int main(int argc, const char* argv[]){
 
     /*
      * 阶段 4：主状态机。
-     * running=true 时阻塞读取一帧麦克风 PCM 并上传；running=false 时，
-     * 若 demo.commit=true，则发送最后一帧并携带 commit 结束本轮输入。
+     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。服务端 VAD
+     * 根据静音自动判定句尾，客户端不对正常语句主动发送 commit。
      */
     while (!exit_request) {
         __poll_keyboard();
 
         /*
-         * 唤醒服务通过 SIGUSR1 进入这里。普通空闲状态直接开始收音；
-         * AI 正在回答时先安排 interrupt，再开始下一轮。6 秒截止时间用于
-         * 防止背景人声让云端 VAD 长时间无法判定句尾。
+         * SIGUSR1 只负责启动连续会话。会话激活后麦克风持续上传，
+         * 云端 VAD 负责判停，InterruptMode=0 负责在用户插话时打断 AI。
          */
         if (wake_request) {
             wake_request = false;
-            wake_capture_deadline_ms = __get_time_ms() + 6000;
-            if (ai_playing && !running) {
+            session_active = true;
+            waiting_for_speech = true;
+            speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
+            follow_up_deadline_ms = 0;
+            __write_dialog_status("wake_detected", "已听到唤醒词，请开始说话");
+            if (ai_playing) {
                 interrupt = true;
                 start_after_interrupt = true;
                 ai_playing = false;
@@ -893,6 +1033,17 @@ int main(int argc, const char* argv[]){
                 running = true;
                 printf("wakeup signal: listening\n");
             }
+        }
+        if (interrupt_only_request) {
+            interrupt_only_request = false;
+            session_active = false;
+            waiting_for_speech = false;
+            speech_start_deadline_ms = 0;
+            follow_up_deadline_ms = 0;
+            running = false;
+            start_after_interrupt = false;
+            interrupt = true;
+            __write_dialog_status("interrupted", "已请求打断当前回答");
         }
         // printf("volc....................\n");
         if (running) {
@@ -904,25 +1055,27 @@ int main(int argc, const char* argv[]){
             }
             info.commit = false;
             volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
-            if (wake_capture_deadline_ms != 0 &&
-                __get_time_ms() >= wake_capture_deadline_ms) {
-                running = false;
-                wake_capture_deadline_ms = 0;
-                printf("wake capture timeout: scheduling audio commit\n");
+            if (
+                waiting_for_speech &&
+                speech_start_deadline_ms != 0 &&
+                __get_time_ms() >= speech_start_deadline_ms
+            ) {
+                _ws_clear_buffer(&demo);
+                __end_continuous_session(
+                    follow_up_deadline_ms != 0
+                        ? "连续对话已结束，请重新说“小安小安”"
+                        : "没有听到问题，请重新说“小安小安”"
+                );
             }
             diff_time_ms = __get_time_ms() - last_time_ms;
-            if (diff_time_ms < demo.audio_frame_ms) {
-                usleep(demo.audio_frame_ms - diff_time_ms);
+            if (diff_time_ms < (uint64_t)demo.audio_frame_ms) {
+                usleep(
+                    (useconds_t)(
+                        ((uint64_t)demo.audio_frame_ms - diff_time_ms) * 1000
+                    )
+                );
             }
-            demo.commit = true;
         } else {
-            /* 每轮只提交一次，提交后等待云端 THINKING/ANSWERING 回调。 */
-            if (demo.commit) {
-                info.commit = true;
-                volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
-                demo.commit = false;
-                printf("stop send audio data\n");
-            }
             usleep(100000);
         }
         if (video_upload) {
@@ -941,8 +1094,12 @@ int main(int argc, const char* argv[]){
             volc_interrupt(demo.engine);
             if (start_after_interrupt) {
                 start_after_interrupt = false;
+                session_active = true;
+                waiting_for_speech = true;
+                speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
                 running = true;
-                printf("状态: 运行中\n");
+                __write_dialog_status("listening", "回答已打断，请继续说话");
+                printf("状态: 打断后继续聆听\n");
             }
         }
         if (clear) {
@@ -972,6 +1129,9 @@ int main(int argc, const char* argv[]){
     pthread_join(demo.audio_playback_task, NULL);
 
 err_out_label:
+    session_active = false;
+    unlink(DIALOG_SESSION_MARKER);
+    __write_dialog_status("offline", "语音服务已停止");
 	if (demo.audio_rec_buf) {
 		free(demo.audio_rec_buf);
 	}

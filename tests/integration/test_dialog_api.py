@@ -13,9 +13,17 @@ def test_wake_and_interrupt_dialog(client: TestClient) -> None:
     assert status_after_interrupt["dialog_state"] == "interrupted"
 
 
-def test_repeated_wake_is_idempotent(client: TestClient) -> None:
+def test_repeated_wake_requests_another_listening_turn(client: TestClient) -> None:
     first = client.post("/api/v1/dialog/wake")
     second = client.post("/api/v1/dialog/wake")
 
     assert first.json()["data"]["changed"] is True
-    assert second.json()["data"]["changed"] is False
+    assert second.json()["data"]["changed"] is True
+
+
+def test_dialog_status_is_visible(client: TestClient) -> None:
+    response = client.get("/api/v1/dialog/status")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["state"] == "ready"
+    assert response.json()["data"]["source"] == "mock"

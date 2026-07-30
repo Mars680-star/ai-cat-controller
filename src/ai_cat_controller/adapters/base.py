@@ -36,6 +36,9 @@ class AiCatAdapter(ABC):
     async def get_services_status(self) -> list[dict[str, Any]]: ...
 
     @abstractmethod
+    async def get_dialog_status(self) -> dict[str, Any]: ...
+
+    @abstractmethod
     async def shake_head(self, intensity: float, duration_ms: int) -> None: ...
 
     @abstractmethod
