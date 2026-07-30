@@ -1,6 +1,5 @@
-"""AI Cat controller package.
+"""AI Cat Controller package."""
 
-The FastAPI application will be added in the next implementation phase.
-"""
+__all__ = ["__version__"]
 
 __version__ = "0.1.0"
