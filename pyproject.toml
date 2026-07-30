@@ -35,6 +35,7 @@ where = ["src"]
 ai_cat_controller = [
   "static/*.css",
   "static/*.js",
+  "static/*.png",
   "templates/*.html"
 ]
 

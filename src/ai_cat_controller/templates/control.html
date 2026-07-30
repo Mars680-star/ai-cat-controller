@@ -4,113 +4,377 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>AI 猫控制器</title>
+  <title>AI 猫伴侣</title>
   <link rel="stylesheet" href="/static/control.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>AI 猫控制器</h1>
-      <p id="connection-label" class="connection-label">正在连接</p>
+    <div class="brand-block">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <div>
+        <h1>AI 猫伴侣</h1>
+        <p id="top-subtitle">产品体验 Mock</p>
+      </div>
     </div>
-    <span id="adapter-badge" class="mode-badge">UNKNOWN</span>
+    <div class="top-status">
+      <span id="connection-dot" class="status-dot offline" aria-hidden="true"></span>
+      <span id="connection-label">未登录</span>
+    </div>
   </header>
 
-  <section class="status-strip" aria-label="设备状态">
-    <div>
-      <span>当前动作</span>
-      <strong id="current-action">--</strong>
-    </div>
-    <div>
-      <span>对话状态</span>
-      <strong id="dialog-state">--</strong>
-    </div>
-    <div>
-      <span>运行时间</span>
-      <strong id="uptime">--</strong>
-    </div>
-  </section>
-
-  <main>
-    <section class="control-section" aria-labelledby="motion-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="motion-title">动作控制</h2>
-          <p>头部与尾部</p>
-        </div>
-        <button id="stop-motion" class="button danger" type="button">立即停止动作</button>
+  <main id="login-screen" class="login-screen">
+    <section class="login-panel" aria-labelledby="login-title">
+      <div class="login-visual">
+        <img src="/static/ai-cat-avatar.png" alt="白色 AI 机器猫">
       </div>
-
-      <div class="field-grid">
-        <label>
-          <span>动作强度 <output id="intensity-value">0.5</output></span>
-          <input id="intensity" type="range" min="0.1" max="1" step="0.1" value="0.5">
-        </label>
-        <label>
-          <span>持续时间 <output id="duration-value">600 ms</output></span>
-          <input id="duration" type="range" min="100" max="3000" step="100" value="600">
-        </label>
+      <div class="login-content">
+        <p class="eyebrow">浏览器测试入口</p>
+        <h2 id="login-title">登录体验账号</h2>
+        <form id="login-form" class="form-stack">
+          <label>
+            <span>Mock 登录码</span>
+            <input id="login-code" name="login_code" value="browser-demo-user"
+                   minlength="3" maxlength="64" required>
+          </label>
+          <label>
+            <span>用户昵称</span>
+            <input id="nickname" name="nickname" value="体验用户"
+                   minlength="1" maxlength="32" required>
+          </label>
+          <label>
+            <span>服务 API Key <small>仅服务启用鉴权时填写</small></span>
+            <input id="login-api-key" type="password" autocomplete="off"
+                   placeholder="默认 Mock 模式留空">
+          </label>
+          <button class="button primary" type="submit">进入控制台</button>
+        </form>
       </div>
-
-      <div class="action-grid">
-        <button class="button primary action-button" type="button"
-                data-endpoint="/api/v1/motion/head/shake">摇头</button>
-        <button class="button primary action-button" type="button"
-                data-endpoint="/api/v1/motion/head/nod">点头</button>
-        <button class="button primary action-button" type="button"
-                data-endpoint="/api/v1/motion/tail/wag">摇尾巴</button>
-      </div>
-    </section>
-
-    <section class="control-section" aria-labelledby="dialog-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="dialog-title">对话控制</h2>
-          <p>语音会话</p>
-        </div>
-      </div>
-      <div class="action-grid two-columns">
-        <button id="wake-dialog" class="button secondary" type="button">唤醒对话</button>
-        <button id="interrupt-dialog" class="button secondary" type="button">打断对话</button>
-      </div>
-    </section>
-
-    <section class="control-section" aria-labelledby="services-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="services-title">本地服务</h2>
-          <p id="hostname">--</p>
-        </div>
-      </div>
-      <div id="service-list" class="service-list" aria-live="polite"></div>
-    </section>
-
-    <section class="control-section" aria-labelledby="access-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="access-title">访问控制</h2>
-          <p>仅保存在当前页面内存</p>
-        </div>
-      </div>
-      <label class="api-key-field">
-        <span>API Key</span>
-        <input id="api-key" type="password" autocomplete="off"
-               placeholder="启用鉴权后填写">
-      </label>
-    </section>
-
-    <section class="control-section log-section" aria-labelledby="log-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="log-title">操作记录</h2>
-          <p>最近 30 条</p>
-        </div>
-        <button id="clear-log" class="button quiet" type="button">清空</button>
-      </div>
-      <ol id="operation-log" class="operation-log" aria-live="polite"></ol>
     </section>
   </main>
 
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="side-nav" aria-label="功能导航">
+      <div class="pet-mini-profile">
+        <img src="/static/ai-cat-avatar.png" alt="">
+        <div>
+          <strong id="nav-pet-name">等待绑定</strong>
+          <span id="nav-personality">暂无性格</span>
+        </div>
+      </div>
+      <nav class="nav-list">
+        <button class="nav-button active" data-view="connection" type="button">
+          <span aria-hidden="true">◎</span>连接
+        </button>
+        <button class="nav-button" data-view="home" type="button">
+          <span aria-hidden="true">⌂</span>主页
+        </button>
+        <button class="nav-button" data-view="motion" type="button">
+          <span aria-hidden="true">↔</span>运动
+        </button>
+        <button class="nav-button" data-view="growth" type="button">
+          <span aria-hidden="true">↑</span>培养
+        </button>
+        <button class="nav-button" data-view="history" type="button">
+          <span aria-hidden="true">◫</span>对话
+        </button>
+        <button class="nav-button" data-view="settings" type="button">
+          <span aria-hidden="true">⚙</span>设置
+        </button>
+      </nav>
+      <button id="logout-button" class="button quiet logout-button" type="button">
+        退出体验账号
+      </button>
+    </aside>
+
+    <div class="workspace">
+      <section id="view-connection" class="view active" data-view-panel="connection">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">设备连接</p>
+            <h2>绑定与网络</h2>
+          </div>
+          <span id="connection-mode" class="state-label">未绑定</span>
+        </div>
+
+        <section id="bind-section" class="form-section">
+          <form id="bind-form" class="form-grid">
+            <label>
+              <span>设备序列号</span>
+              <input id="device-serial" value="K1-MOCK-0001"
+                     minlength="4" maxlength="64" required>
+            </label>
+            <label>
+              <span>宠物名称</span>
+              <input id="bind-pet-name" value="小安"
+                     minlength="1" maxlength="20" required>
+            </label>
+            <label>
+              <span>Wi-Fi 名称</span>
+              <input id="network-name" value="家庭 Wi-Fi"
+                     minlength="1" maxlength="64" required>
+            </label>
+            <button class="button primary form-action" type="submit">绑定并开启性格盲盒</button>
+          </form>
+        </section>
+
+        <section id="connected-section" class="hidden">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>设备</span>
+              <strong id="connection-device-id">--</strong>
+              <small id="connection-serial">--</small>
+            </article>
+            <article class="metric">
+              <span>网络</span>
+              <strong id="connection-network">--</strong>
+              <small id="connection-network-name">--</small>
+            </article>
+            <article class="metric">
+              <span>最后在线</span>
+              <strong id="connection-last-seen">--</strong>
+              <small>Mock 状态</small>
+            </article>
+          </div>
+
+          <div class="section-heading">
+            <div>
+              <h3>设备状态模拟</h3>
+              <p>用于验证断网、重连和电量显示</p>
+            </div>
+            <button id="reconnect-button" class="button secondary" type="button">模拟重连</button>
+          </div>
+          <form id="device-status-form" class="device-state-form">
+            <label class="toggle-row">
+              <span>设备在线</span>
+              <input id="mock-online" type="checkbox" checked>
+            </label>
+            <label>
+              <span>网络状态</span>
+              <select id="mock-network-status">
+                <option value="online">在线</option>
+                <option value="weak">弱网</option>
+                <option value="offline">离线</option>
+              </select>
+            </label>
+            <label>
+              <span>电量 <output id="mock-battery-value">86%</output></span>
+              <input id="mock-battery" type="range" min="0" max="100" value="86">
+            </label>
+            <label class="toggle-row">
+              <span>正在充电</span>
+              <input id="mock-charging" type="checkbox">
+            </label>
+            <button class="button secondary" type="submit">应用状态</button>
+          </form>
+        </section>
+      </section>
+
+      <section id="view-home" class="view" data-view-panel="home">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">宠物主页</p>
+            <h2 id="home-pet-name">小安</h2>
+          </div>
+          <span id="home-online" class="state-label">--</span>
+        </div>
+
+        <div class="home-overview">
+          <img src="/static/ai-cat-avatar.png" alt="AI 机器猫宠物">
+          <div class="personality-summary">
+            <span id="home-personality-id" class="personality-code">--</span>
+            <h3 id="home-personality">等待性格盲盒</h3>
+            <p id="home-personality-description">绑定设备后显示宠物性格。</p>
+            <p id="home-language-style" class="muted">--</p>
+          </div>
+        </div>
+
+        <div class="metric-grid home-metrics">
+          <article class="metric accent-green">
+            <span>亲密度</span>
+            <strong id="home-intimacy">0</strong>
+            <small id="home-level">初次相遇</small>
+          </article>
+          <article class="metric accent-yellow">
+            <span>电量</span>
+            <strong id="home-battery">--</strong>
+            <small id="home-charging">未充电</small>
+          </article>
+          <article class="metric accent-coral">
+            <span>网络</span>
+            <strong id="home-network">--</strong>
+            <small id="home-network-name">--</small>
+          </article>
+        </div>
+        <div class="address-band">
+          <span>现在它会称呼你</span>
+          <strong id="home-address">--</strong>
+        </div>
+      </section>
+
+      <section id="view-motion" class="view" data-view-panel="motion">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">运动控制</p>
+            <h2>安全预设动作</h2>
+          </div>
+          <button id="stop-motion" class="button danger" type="button">停止当前动作</button>
+        </div>
+        <div id="action-grid" class="action-catalog" aria-live="polite"></div>
+        <div class="section-heading compact">
+          <div>
+            <h3>执行记录</h3>
+            <p>最近 20 条</p>
+          </div>
+          <button id="refresh-actions" class="icon-button" type="button"
+                  title="刷新执行记录" aria-label="刷新执行记录">↻</button>
+        </div>
+        <div id="action-executions" class="timeline empty-state">暂无动作记录</div>
+      </section>
+
+      <section id="view-growth" class="view" data-view-panel="growth">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">宠物培养</p>
+            <h2 id="growth-level">初次相遇</h2>
+          </div>
+          <span id="growth-badge" class="level-badge">NEW</span>
+        </div>
+        <div class="growth-score">
+          <strong id="growth-points">0</strong>
+          <span>亲密度</span>
+        </div>
+        <div class="progress-track" aria-label="亲密度升级进度">
+          <span id="growth-progress"></span>
+        </div>
+        <div class="progress-copy">
+          <span id="growth-progress-copy">0 / 20</span>
+          <span id="growth-daily-cap">每日上限 20</span>
+        </div>
+
+        <div class="section-heading compact">
+          <div>
+            <h3>互动记录</h3>
+            <p>同一请求不会重复计分</p>
+          </div>
+        </div>
+        <div class="interaction-grid">
+          <button class="interaction-button" data-event="daily_check_in" type="button">
+            <strong>每日见面</strong><span>+3</span>
+          </button>
+          <button class="interaction-button" data-event="touch" type="button">
+            <strong>触摸反馈</strong><span>+1</span>
+          </button>
+          <button class="interaction-button" data-event="completed_task" type="button">
+            <strong>完成任务</strong><span>+5</span>
+          </button>
+          <button class="interaction-button subtract" data-event="ignored_greeting" type="button">
+            <strong>忽略问候</strong><span>-1</span>
+          </button>
+        </div>
+
+        <div class="unlock-grid">
+          <section>
+            <h3>已解锁</h3>
+            <ul id="current-unlocks" class="plain-list"></ul>
+          </section>
+          <section>
+            <h3>下一级解锁</h3>
+            <ul id="next-unlocks" class="plain-list"></ul>
+          </section>
+        </div>
+        <div id="interaction-history" class="timeline empty-state">暂无培养记录</div>
+      </section>
+
+      <section id="view-history" class="view" data-view-panel="history">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">对话历史</p>
+            <h2>与 <span id="dialog-pet-name">小安</span> 的对话</h2>
+          </div>
+          <span id="dialog-voice" class="state-label">--</span>
+        </div>
+        <div id="dialog-list" class="dialog-list empty-state">暂无对话记录</div>
+        <form id="dialog-form" class="dialog-composer">
+          <input id="dialog-input" maxlength="500" required
+                 placeholder="输入一条测试消息">
+          <button class="button primary" type="submit">发送</button>
+        </form>
+      </section>
+
+      <section id="view-settings" class="view" data-view-panel="settings">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">基础设置</p>
+            <h2>宠物与服务</h2>
+          </div>
+        </div>
+        <form id="settings-form" class="form-stack settings-form">
+          <label>
+            <span>宠物名称</span>
+            <input id="settings-name" minlength="1" maxlength="20" required>
+          </label>
+          <label>
+            <span>音量 <output id="settings-volume-value">60%</output></span>
+            <input id="settings-volume" type="range" min="0" max="100" value="60">
+          </label>
+          <label>
+            <span>服务 API Key <small>仅当前页面内存</small></span>
+            <input id="settings-api-key" type="password" autocomplete="off"
+                   placeholder="默认 Mock 模式留空">
+          </label>
+          <button class="button primary" type="submit">保存设置</button>
+        </form>
+
+        <form id="feedback-form" class="form-stack feedback-form">
+          <h3>异常反馈</h3>
+          <label>
+            <span>问题类型</span>
+            <select id="feedback-category">
+              <option value="device">设备</option>
+              <option value="dialog">对话</option>
+              <option value="motion">动作</option>
+              <option value="account">账号</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label>
+            <span>问题描述</span>
+            <textarea id="feedback-content" minlength="2" maxlength="500"
+                      rows="4" required></textarea>
+          </label>
+          <button class="button secondary" type="submit">提交反馈</button>
+        </form>
+
+        <section class="danger-zone">
+          <div>
+            <h3>解绑设备</h3>
+            <p>设备性格和成长数据保留，原用户历史不会交给新用户。</p>
+          </div>
+          <button id="unbind-button" class="button danger-outline" type="button">解除绑定</button>
+        </section>
+      </section>
+    </div>
+
+    <nav class="bottom-nav" aria-label="移动端功能导航">
+      <button class="nav-button active" data-view="connection" type="button"><span>◎</span>连接</button>
+      <button class="nav-button" data-view="home" type="button"><span>⌂</span>主页</button>
+      <button class="nav-button" data-view="motion" type="button"><span>↔</span>运动</button>
+      <button class="nav-button" data-view="growth" type="button"><span>↑</span>培养</button>
+      <button class="nav-button" data-view="history" type="button"><span>◫</span>对话</button>
+      <button class="nav-button" data-view="settings" type="button"><span>⚙</span>设置</button>
+    </nav>
+  </div>
+
+  <dialog id="personality-dialog" class="personality-dialog">
+    <img src="/static/ai-cat-avatar.png" alt="">
+    <p class="eyebrow">性格盲盒结果</p>
+    <h2 id="reveal-name">--</h2>
+    <p id="reveal-description">--</p>
+    <p id="reveal-style" class="muted">--</p>
+    <button id="reveal-confirm" class="button primary" type="button">认识它</button>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/static/control.js" defer></script>
 </body>
 </html>

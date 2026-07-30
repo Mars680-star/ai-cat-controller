@@ -3,13 +3,15 @@
 ## Request path
 
 ```text
-Browser / future WeChat mini program
+Browser product Mock / future WeChat mini program
                   |
              HTTP / HTTPS
                   |
              FastAPI API
                   |
-       Motion and dialog services
+      Product, motion and dialog services
+                  |
+       SQLite product state repository
                   |
         Mock or Local K1 adapter
                   |
@@ -23,7 +25,10 @@ enable wildcard CORS.
 ## Layers
 
 - `api/`: HTTP routing, validation, authentication and response models.
-- `services/`: motion serialization, cancellation, cooldown and dialog state.
+- `services/`: product workflow, motion serialization, cancellation, cooldown
+  and dialog state.
+- `domain/`: five personalities, intimacy rules and safe preset actions.
+- `persistence/`: SQLite repository and transactional idempotency.
 - `adapters/`: in-memory Mock behavior and the read-only Local K1 boundary.
 - `core/`: settings, logging, errors, security and typed application state.
 - `schemas/`: request and response contracts.
@@ -31,6 +36,10 @@ enable wildcard CORS.
 
 Long-lived adapter and service objects are created by the FastAPI lifespan and
 stored in `app.state.services`. Request handlers never create hardware objects.
+
+The product Mock stores durable state in SQLite. Login sessions remain
+in-memory and are recreated from the Mock login code after process restart.
+See `system-interaction-flow.md` for the target cloud/device architecture.
 
 ## Motion lifecycle
 

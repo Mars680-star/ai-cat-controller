@@ -13,8 +13,10 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert "AI 猫控制器" in response.text
-    assert "立即停止动作" in response.text
+    assert "AI 猫伴侣" in response.text
+    assert "停止当前动作" in response.text
+    assert "性格盲盒" in response.text
+    assert "安全预设动作" in response.text
     assert "https://" not in response.text
     assert "cdn" not in response.text.lower()
 
@@ -22,6 +24,7 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
 def test_static_assets_are_available(client: TestClient) -> None:
     assert client.get("/static/control.css").status_code == 200
     assert client.get("/static/control.js").status_code == 200
+    assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 
 def test_control_page_supports_head_check(client: TestClient) -> None:

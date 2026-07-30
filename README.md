@@ -1,18 +1,22 @@
 # AI Cat Controller
 
-SpaceMIT K1 AI 猫的独立控制仓库。第一阶段提供 FastAPI、浏览器控制页面、
-完整 Mock 适配器和只读 Local K1 框架；默认配置不会控制真实硬件。
+SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock、浏览器端
+小程序流程替身、完整 Mock 适配器和只读 Local K1 框架；默认配置不会控制真实硬件。
 
 ## 当前能力
 
-- `/control` 手机和电脑浏览器控制页面。
+- `/control` 手机和电脑浏览器六模块产品体验页面。
 - `/api/v1` 稳定 REST API，可供后续微信小程序复用。
-- Mock 摇头、点头、摇尾、停止、对话唤醒和打断。
+- Mock 登录、设备绑定、性格盲盒、主页、培养、历史和设置。
+- 5 种持久化性格、5 个亲密度等级、每日增长上限和解锁规则。
+- 7 个安全预设动作、异步结果、重复请求幂等和离线拒绝。
+- SQLite 持久化，进程重启后恢复性格、亲密度和历史。
 - API Key、动作串行、停止取消、超时和退出清理。
 - Local K1 固定 systemd 服务只读状态查询。
 - 火山引擎 K1 补丁、唤醒词入口和硬件应用源码。
 
-Local K1 的真实动作和对话控制在第一阶段返回 `501`，不会调用电机或发送信号。
+Local K1 的真实动作和对话控制仍返回 `501`，不会调用电机或发送信号。产品
+Mock 的对话是本地模板，逻辑音色 ID 未映射到火山引擎真实音色。
 
 ## 目录
 
@@ -93,6 +97,13 @@ export AI_CAT_API_KEY='替换为随机密钥'
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
 
+产品 Mock 的默认数据库为 `.data/ai-cat-mock.db`。可修改：
+
+```bash
+export AI_CAT_DATA_PATH=/var/lib/ai-cat-controller/product-mock.db
+export AI_CAT_INTIMACY_DAILY_CAP=20
+```
+
 ## 安全边界
 
 - HTTP 请求不能指定可执行文件、服务名或 Shell 参数。
@@ -110,3 +121,9 @@ export AI_CAT_API_KEY='替换为随机密钥'
 
 许可证和厂商来源见 `LICENSE`、`NOTICE` 和
 `docs/vendor-dependencies.md`。
+
+产品交互边界、性格规则和当前验证范围见：
+
+- `docs/system-interaction-flow.md`
+- `docs/personality-and-growth.md`
+- `docs/product-mock-validation.md`
