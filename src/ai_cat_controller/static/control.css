@@ -1,20 +1,22 @@
 :root {
-  color: #17211f;
-  background: #f3f6f5;
+  color: #24231f;
+  background: #fffaf0;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 16px;
   letter-spacing: 0;
-  --ink: #17211f;
-  --muted: #66736f;
-  --line: #d9e1de;
+  --ink: #24231f;
+  --muted: #716c5f;
+  --line: #e5ddc8;
   --surface: #ffffff;
-  --mint: #177b66;
-  --mint-soft: #dff3eb;
+  --mint: #9a6500;
+  --mint-soft: #fff1b8;
   --coral: #d85d4b;
   --coral-soft: #fae9e6;
-  --yellow: #e2a928;
-  --yellow-soft: #fff4cf;
-  --charcoal: #25312e;
+  --yellow: #e5ae2f;
+  --yellow-soft: #fff6d4;
+  --success: #2f7658;
+  --success-soft: #e1f1e9;
+  --charcoal: #292824;
 }
 
 * {
@@ -24,7 +26,7 @@
 body {
   min-width: 320px;
   margin: 0;
-  background: #f3f6f5;
+  background: #fffaf0;
 }
 
 button,
@@ -103,7 +105,7 @@ h3 {
   place-items: center;
   color: #ffffff;
   background: var(--mint);
-  border: 1px solid #6ab09f;
+  border: 1px solid #d5a53e;
   border-radius: 7px;
   font-weight: 800;
 }
@@ -117,7 +119,7 @@ h3 {
   width: 9px;
   height: 9px;
   flex: 0 0 9px;
-  background: #38b987;
+  background: var(--success);
   border-radius: 50%;
 }
 
@@ -144,7 +146,7 @@ h3 {
 
 .login-visual {
   min-height: 430px;
-  background: #dcefe6;
+  background: #fff0ad;
 }
 
 .login-visual img {
@@ -181,7 +183,7 @@ label {
   min-width: 0;
   display: grid;
   gap: 7px;
-  color: #3d4a46;
+  color: #494537;
   font-size: 0.84rem;
   font-weight: 650;
 }
@@ -199,7 +201,7 @@ textarea {
   padding: 9px 11px;
   color: var(--ink);
   background: #ffffff;
-  border: 1px solid #bfcac6;
+  border: 1px solid #cfc5aa;
   border-radius: 5px;
 }
 
@@ -224,7 +226,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid rgba(23, 123, 102, 0.24);
+  outline: 3px solid rgba(154, 101, 0, 0.24);
   outline-offset: 2px;
 }
 
@@ -248,9 +250,9 @@ textarea:focus-visible {
 }
 
 .button.secondary {
-  color: #263531;
-  background: #edf2f0;
-  border-color: #cbd5d1;
+  color: #39352c;
+  background: #f7f3e8;
+  border-color: #d7cdb3;
 }
 
 .button.danger {
@@ -265,9 +267,9 @@ textarea:focus-visible {
 }
 
 .button.quiet {
-  color: #4d5b57;
+  color: #5c574b;
   background: transparent;
-  border-color: #53635e;
+  border-color: #6d675a;
 }
 
 .app-shell {
@@ -285,7 +287,7 @@ textarea:focus-visible {
   padding: 20px 14px;
   display: flex;
   flex-direction: column;
-  background: #eef3f1;
+  background: #fff7d9;
   border-right: 1px solid var(--line);
 }
 
@@ -293,7 +295,7 @@ textarea:focus-visible {
   min-width: 0;
   padding: 4px 6px 20px;
   gap: 10px;
-  border-bottom: 1px solid #ccd7d3;
+  border-bottom: 1px solid #e2d5a9;
 }
 
 .pet-mini-profile img {
@@ -334,7 +336,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 11px;
-  color: #53605d;
+  color: #625d50;
   background: transparent;
   border: 0;
   border-radius: 5px;
@@ -349,8 +351,8 @@ textarea:focus-visible {
 }
 
 .nav-button.active {
-  color: #0d604f;
-  background: #d5ebe3;
+  color: #6d4900;
+  background: #ffeaa0;
 }
 
 .nav-button:disabled {
@@ -405,13 +407,22 @@ textarea:focus-visible {
   font-size: 0.8rem;
 }
 
-.state-label,
+.state-label {
+  padding: 5px 9px;
+  color: #255d47;
+  background: var(--success-soft);
+  border: 1px solid #b8d9ca;
+  border-radius: 4px;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
 .level-badge,
 .personality-code {
   padding: 5px 9px;
-  color: #17624f;
+  color: #704b00;
   background: var(--mint-soft);
-  border: 1px solid #b7dfd1;
+  border: 1px solid #e6c85e;
   border-radius: 4px;
   font-size: 0.74rem;
   font-weight: 750;
@@ -425,7 +436,7 @@ textarea:focus-visible {
 
 .form-section {
   padding: 22px;
-  background: #f7faf9;
+  background: #fffdf7;
   border: 1px solid var(--line);
   border-radius: 7px;
 }
@@ -475,7 +486,7 @@ textarea:focus-visible {
 }
 
 .metric.accent-green {
-  border-top: 4px solid var(--mint);
+  border-top: 4px solid var(--success);
 }
 
 .metric.accent-yellow {
@@ -505,8 +516,8 @@ textarea:focus-visible {
   grid-template-columns: 260px minmax(0, 1fr);
   align-items: center;
   gap: 28px;
-  background: #e4f2ec;
-  border: 1px solid #c6ded5;
+  background: #fff2b9;
+  border: 1px solid #ead47a;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -651,7 +662,7 @@ textarea:focus-visible {
 }
 
 .result-positive {
-  color: var(--mint);
+  color: var(--success);
   font-weight: 750;
 }
 
@@ -685,7 +696,7 @@ textarea:focus-visible {
   height: 12px;
   margin-top: 18px;
   overflow: hidden;
-  background: #dfe6e3;
+  background: #eee6cf;
   border-radius: 6px;
 }
 
@@ -718,9 +729,9 @@ textarea:focus-visible {
   display: grid;
   gap: 4px;
   text-align: left;
-  color: #1f5648;
+  color: #704b00;
   background: var(--mint-soft);
-  border: 1px solid #bedfd3;
+  border: 1px solid #e4c85f;
   border-radius: 6px;
   cursor: pointer;
 }
@@ -755,7 +766,7 @@ textarea:focus-visible {
 .plain-list {
   margin: 10px 0 0;
   padding-left: 20px;
-  color: #475550;
+  color: #514c40;
   font-size: 0.82rem;
 }
 
@@ -768,7 +779,7 @@ textarea:focus-visible {
   min-height: 280px;
   padding: 16px;
   overflow-y: auto;
-  background: #f5f8f7;
+  background: #fffdf7;
   border: 1px solid var(--line);
   border-radius: 7px;
 }
@@ -778,9 +789,9 @@ textarea:focus-visible {
   max-width: min(78%, 620px);
   margin-bottom: 12px;
   padding: 11px 13px;
-  color: #30403b;
+  color: #413d34;
   background: #ffffff;
-  border: 1px solid #d7e0dd;
+  border: 1px solid #e2dac4;
   border-radius: 7px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -788,9 +799,9 @@ textarea:focus-visible {
 
 .dialog-message.user {
   margin-left: auto;
-  color: #134b3e;
-  background: #dcefe8;
-  border-color: #b9dcd0;
+  color: #634500;
+  background: #fff0b4;
+  border-color: #e6cd70;
 }
 
 .dialog-message small {
@@ -870,7 +881,7 @@ textarea:focus-visible {
   max-width: min(420px, calc(100% - 40px));
   padding: 11px 14px;
   color: #ffffff;
-  background: #25312e;
+  background: #292824;
   border-radius: 5px;
   opacity: 0;
   pointer-events: none;
