@@ -12,17 +12,33 @@ license = { text = "Apache-2.0" }
 authors = [
   { name = "Mars680-star" }
 ]
-dependencies = []
-
-[project.optional-dependencies]
-api = [
+dependencies = [
   "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
   "uvicorn>=0.30,<1"
 ]
+
+[project.optional-dependencies]
 dev = [
+  "httpx>=0.27,<1",
   "pytest>=8,<9",
-  "httpx>=0.27,<1"
+  "pytest-asyncio>=0.24,<1"
 ]
+
+[project.scripts]
+ai-cat-server = "ai_cat_controller.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ai_cat_controller = [
+  "static/*.css",
+  "static/*.js",
+  "templates/*.html"
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+testpaths = ["tests"]

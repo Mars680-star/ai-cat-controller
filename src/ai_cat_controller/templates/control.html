@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI 猫控制器</title>
+  <link rel="stylesheet" href="/static/control.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>AI 猫控制器</h1>
+      <p id="connection-label" class="connection-label">正在连接</p>
+    </div>
+    <span id="adapter-badge" class="mode-badge">UNKNOWN</span>
+  </header>
+
+  <section class="status-strip" aria-label="设备状态">
+    <div>
+      <span>当前动作</span>
+      <strong id="current-action">--</strong>
+    </div>
+    <div>
+      <span>对话状态</span>
+      <strong id="dialog-state">--</strong>
+    </div>
+    <div>
+      <span>运行时间</span>
+      <strong id="uptime">--</strong>
+    </div>
+  </section>
+
+  <main>
+    <section class="control-section" aria-labelledby="motion-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="motion-title">动作控制</h2>
+          <p>头部与尾部</p>
+        </div>
+        <button id="stop-motion" class="button danger" type="button">立即停止动作</button>
+      </div>
+
+      <div class="field-grid">
+        <label>
+          <span>动作强度 <output id="intensity-value">0.5</output></span>
+          <input id="intensity" type="range" min="0.1" max="1" step="0.1" value="0.5">
+        </label>
+        <label>
+          <span>持续时间 <output id="duration-value">600 ms</output></span>
+          <input id="duration" type="range" min="100" max="3000" step="100" value="600">
+        </label>
+      </div>
+
+      <div class="action-grid">
+        <button class="button primary action-button" type="button"
+                data-endpoint="/api/v1/motion/head/shake">摇头</button>
+        <button class="button primary action-button" type="button"
+                data-endpoint="/api/v1/motion/head/nod">点头</button>
+        <button class="button primary action-button" type="button"
+                data-endpoint="/api/v1/motion/tail/wag">摇尾巴</button>
+      </div>
+    </section>
+
+    <section class="control-section" aria-labelledby="dialog-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="dialog-title">对话控制</h2>
+          <p>语音会话</p>
+        </div>
+      </div>
+      <div class="action-grid two-columns">
+        <button id="wake-dialog" class="button secondary" type="button">唤醒对话</button>
+        <button id="interrupt-dialog" class="button secondary" type="button">打断对话</button>
+      </div>
+    </section>
+
+    <section class="control-section" aria-labelledby="services-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="services-title">本地服务</h2>
+          <p id="hostname">--</p>
+        </div>
+      </div>
+      <div id="service-list" class="service-list" aria-live="polite"></div>
+    </section>
+
+    <section class="control-section" aria-labelledby="access-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="access-title">访问控制</h2>
+          <p>仅保存在当前页面内存</p>
+        </div>
+      </div>
+      <label class="api-key-field">
+        <span>API Key</span>
+        <input id="api-key" type="password" autocomplete="off"
+               placeholder="启用鉴权后填写">
+      </label>
+    </section>
+
+    <section class="control-section log-section" aria-labelledby="log-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="log-title">操作记录</h2>
+          <p>最近 30 条</p>
+        </div>
+        <button id="clear-log" class="button quiet" type="button">清空</button>
+      </div>
+      <ol id="operation-log" class="operation-log" aria-live="polite"></ol>
+    </section>
+  </main>
+
+  <script src="/static/control.js" defer></script>
+</body>
+</html>
