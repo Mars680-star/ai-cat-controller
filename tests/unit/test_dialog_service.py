@@ -96,3 +96,35 @@ async def test_failed_interrupt_does_not_leave_service_interrupting() -> None:
         await service.interrupt()
 
     assert service.state == "error"
+
+
+@pytest.mark.asyncio
+async def test_status_syncs_service_after_native_session_ends() -> None:
+    adapter = MockAiCatAdapter(SERVICES)
+    service = DialogService(adapter)
+    await service.wake()
+    await adapter.interrupt_dialog()
+
+    status = await service.get_status()
+
+    assert status["state"] == "interrupted"
+    assert service.state == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_interrupt_an_already_ended_native_session() -> None:
+    class CountingAdapter(MockAiCatAdapter):
+        interrupt_count = 0
+
+        async def interrupt_dialog(self) -> None:
+            self.interrupt_count += 1
+            await super().interrupt_dialog()
+
+    adapter = CountingAdapter(SERVICES)
+    service = DialogService(adapter)
+    await service.wake()
+    await adapter.interrupt_dialog()
+
+    await service.shutdown()
+
+    assert adapter.interrupt_count == 1

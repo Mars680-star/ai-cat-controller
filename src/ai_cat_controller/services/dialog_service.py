@@ -89,6 +89,15 @@ class DialogService:
                         else "正在请求打断回答"
                     ),
                 }
+            elif status.get("session_active"):
+                self._state = "awake"
+            elif status.get("state") in {
+                "ready",
+                "interrupted",
+                "offline",
+                "unavailable",
+            }:
+                self._state = status["state"]
         return status
 
     async def interrupt(self, request_id: str | None = None) -> dict[str, Any]:
@@ -121,11 +130,11 @@ class DialogService:
             }
 
     async def shutdown(self) -> None:
-        if (
-            self._state in {"awake", "waking"}
-            and self._adapter.supports(Capability.INTERRUPT_DIALOG)
-        ):
-            try:
+        if not self._adapter.supports(Capability.INTERRUPT_DIALOG):
+            return
+        try:
+            status = await self._adapter.get_dialog_status()
+            if self._state == "waking" or status.get("session_active"):
                 await self.interrupt()
-            except Exception:
-                LOGGER.exception("dialog shutdown failed")
+        except Exception:
+            LOGGER.exception("dialog shutdown failed")
