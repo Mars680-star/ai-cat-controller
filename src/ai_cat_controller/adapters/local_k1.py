@@ -50,16 +50,25 @@ class LocalK1Adapter(AiCatAdapter):
             return result.stderr
         return f"无法识别 systemctl 输出，returncode={result.returncode}"
 
+    async def _query_service(self, verb: str, service_name: str) -> CommandResult:
+        try:
+            return await self._runner.run(
+                str(self._settings.systemctl_binary),
+                [verb, service_name],
+            )
+        except Exception as exc:
+            return CommandResult(
+                returncode=-1,
+                stdout="",
+                stderr=f"{type(exc).__name__}: {exc}",
+                timed_out=False,
+            )
+
     async def get_services_status(self) -> list[dict[str, Any]]:
         statuses: list[dict[str, Any]] = []
-        executable = str(self._settings.systemctl_binary)
         for service_name in self._settings.service_names:
-            active_result = await self._runner.run(
-                executable, ["is-active", service_name]
-            )
-            enabled_result = await self._runner.run(
-                executable, ["is-enabled", service_name]
-            )
+            active_result = await self._query_service("is-active", service_name)
+            enabled_result = await self._query_service("is-enabled", service_name)
             errors = [
                 error
                 for error in (

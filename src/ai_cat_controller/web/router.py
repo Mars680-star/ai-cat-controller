@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
@@ -24,3 +24,8 @@ async def control_page(request: Request) -> HTMLResponse:
         name="control.html",
         context={},
     )
+
+
+@router.head("/control")
+async def control_page_head() -> Response:
+    return Response(media_type="text/html")

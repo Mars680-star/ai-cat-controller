@@ -17,6 +17,8 @@ class DialogService:
         self._adapter = adapter
         self._lock = asyncio.Lock()
         self._state = "idle"
+        self._wake_task: asyncio.Task[None] | None = None
+        self._generation = 0
 
     @property
     def state(self) -> str:
@@ -32,7 +34,35 @@ class DialogService:
                     "request_id": request_id,
                     "changed": False,
                 }
-            await self._adapter.wake_dialog()
+            if self._wake_task is not None and not self._wake_task.done():
+                return {
+                    "dialog_state": "waking",
+                    "request_id": request_id,
+                    "changed": False,
+                }
+            self._generation += 1
+            generation = self._generation
+            self._state = "waking"
+            task = asyncio.create_task(
+                self._adapter.wake_dialog(),
+                name=f"ai-cat-dialog-wake-{generation}",
+            )
+            self._wake_task = task
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            LOGGER.info("dialog wake cancelled")
+            raise
+
+        async with self._lock:
+            if generation != self._generation:
+                return {
+                    "dialog_state": self._state,
+                    "request_id": request_id,
+                    "changed": False,
+                }
+            self._wake_task = None
             self._state = "awake"
             LOGGER.info("dialog awakened")
             return {
@@ -45,7 +75,17 @@ class DialogService:
         if not self._adapter.supports(Capability.INTERRUPT_DIALOG):
             raise AdapterNotImplementedError("当前适配器不支持对话打断")
         async with self._lock:
-            await self._adapter.interrupt_dialog()
+            self._generation += 1
+            wake_task = self._wake_task
+            self._wake_task = None
+            self._state = "interrupting"
+
+        if wake_task is not None and not wake_task.done():
+            wake_task.cancel()
+            await asyncio.gather(wake_task, return_exceptions=True)
+
+        await self._adapter.interrupt_dialog()
+        async with self._lock:
             self._state = "interrupted"
             LOGGER.info("dialog interrupted")
             return {
@@ -55,7 +95,10 @@ class DialogService:
             }
 
     async def shutdown(self) -> None:
-        if self._state == "awake" and self._adapter.supports(Capability.INTERRUPT_DIALOG):
+        if (
+            self._state in {"awake", "waking"}
+            and self._adapter.supports(Capability.INTERRUPT_DIALOG)
+        ):
             try:
                 await self.interrupt()
             except Exception:

@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Cat FastAPI Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=AI_CAT_USER
+Group=AI_CAT_GROUP
+WorkingDirectory=AI_CAT_PROJECT_DIR
+EnvironmentFile=AI_CAT_ENV_FILE
+Environment=PYTHONUNBUFFERED=1
+ExecStart=AI_CAT_VENV_DIR/bin/uvicorn ai_cat_controller.main:app --host ${AI_CAT_API_HOST} --port ${AI_CAT_API_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

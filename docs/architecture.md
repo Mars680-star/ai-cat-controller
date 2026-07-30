@@ -1,66 +1,55 @@
 # Architecture
 
-## Deployment model
-
-The recommended production path runs FastAPI directly on the K1 board:
+## Request path
 
 ```text
-Phone / desktop browser
-          |
-       HTTP API
-          |
-  ai-cat-controller on K1
-          |
-  fixed command adapters
-     |             |
-ai-toy_app     systemd dialogue services
+Browser / future WeChat mini program
+                  |
+             HTTP / HTTPS
+                  |
+             FastAPI API
+                  |
+       Motion and dialog services
+                  |
+        Mock or Local K1 adapter
+                  |
+   fixed hardware / service interfaces
 ```
 
-Desktop development uses a mock adapter. The HTTP request path must never
-accept an arbitrary executable or shell fragment.
+The browser uses the same `/api/v1` endpoints intended for the future mini
+program. The first stage serves HTML and API from one origin and does not
+enable wildcard CORS.
 
-## Planned modules
+## Layers
 
-```text
-src/ai_cat_controller/
-├── main.py
-├── api/
-│   ├── health.py
-│   ├── device.py
-│   ├── motion.py
-│   └── dialog.py
-├── core/
-│   ├── config.py
-│   ├── security.py
-│   └── errors.py
-├── services/
-│   ├── cat_controller.py
-│   ├── motion_service.py
-│   └── dialog_service.py
-└── adapters/
-    ├── command_runner.py
-    ├── local_k1.py
-    └── mock.py
-```
+- `api/`: HTTP routing, validation, authentication and response models.
+- `services/`: motion serialization, cancellation, cooldown and dialog state.
+- `adapters/`: in-memory Mock behavior and the read-only Local K1 boundary.
+- `core/`: settings, logging, errors, security and typed application state.
+- `schemas/`: request and response contracts.
+- `web/`, `templates/`, `static/`: browser controller.
 
-## Initial API surface
+Long-lived adapter and service objects are created by the FastAPI lifespan and
+stored in `app.state.services`. Request handlers never create hardware objects.
 
-```text
-GET  /api/v1/health
-GET  /api/v1/device/status
-GET  /api/v1/services/status
-POST /api/v1/motion/head/shake
-POST /api/v1/motion/head/nod
-POST /api/v1/motion/tail/wag
-POST /api/v1/dialog/wake
-POST /api/v1/dialog/interrupt
-```
+## Motion lifecycle
 
-## Safety boundaries
+1. Validate intensity, duration and optional request ID.
+2. Reject unsupported adapter capability with `501`.
+3. Reject overlapping or cooldown action with `409`.
+4. Create one background action task and return `202`.
+5. Cancel the task when the stop endpoint is called.
+6. Use a generation counter so an old task cannot clear a newer action.
+7. Stop active Mock motion during application shutdown.
 
-- Fixed command registry; no generic command endpoint.
-- One motor command at a time.
-- Per-command timeout and captured exit status.
-- API-key authentication and explicit CORS allowlist.
-- A dedicated service account with the smallest possible device and systemd
-  permissions should replace root before non-development deployment.
+## Security boundaries
+
+- All `/api/v1` routes share optional `X-API-Key` authentication.
+- `/health`, `/control` and static files are public.
+- `local_k1` refuses to start unless API-key authentication is enabled.
+- CommandRunner uses `asyncio.create_subprocess_exec`, never a shell.
+- Only fixed systemctl paths, verbs and confirmed service names are accepted.
+- The API has no endpoint for arbitrary commands, services, files or topics.
+
+The first-stage Local K1 adapter exposes read-only service status. Real motion,
+wake and interrupt methods intentionally return `501`.
