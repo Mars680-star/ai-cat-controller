@@ -11,7 +11,11 @@ from typing import Any
 from ai_cat_controller.adapters.base import AiCatAdapter, Capability
 from ai_cat_controller.adapters.command_runner import CommandResult, CommandRunner
 from ai_cat_controller.core.config import Settings
-from ai_cat_controller.core.errors import AdapterNotImplementedError, DeviceUnavailableError
+from ai_cat_controller.core.errors import (
+    ActionConflictError,
+    AdapterNotImplementedError,
+    DeviceUnavailableError,
+)
 
 
 class LocalK1Adapter(AiCatAdapter):
@@ -19,6 +23,9 @@ class LocalK1Adapter(AiCatAdapter):
     capabilities = frozenset(
         {
             Capability.BATTERY_STATUS,
+            Capability.SHAKE_HEAD,
+            Capability.NOD_HEAD,
+            Capability.STOP_MOTION,
             Capability.WAKE_DIALOG,
             Capability.INTERRUPT_DIALOG,
         }
@@ -47,8 +54,8 @@ class LocalK1Adapter(AiCatAdapter):
             "current_action": "unavailable",
             "last_action": None,
             "dialog_state": dialog_status["state"],
-            "head_state": "unavailable",
-            "tail_state": "unavailable",
+            "head_state": "idle",
+            "tail_state": "disabled",
             "action_count": 0,
             "last_action_at": None,
             "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
@@ -304,23 +311,63 @@ class LocalK1Adapter(AiCatAdapter):
                 },
             )
 
-    @staticmethod
-    def _not_implemented(interface_name: str) -> AdapterNotImplementedError:
-        return AdapterNotImplementedError(
-            f"Local K1 的 {interface_name} 真实接口尚未在第一阶段开放"
+    def capability_unavailable_reason(self, capability: Capability) -> str:
+        if capability == Capability.WAG_TAIL:
+            return "当前 K1 样机尾部硬件异常，摇尾动作已禁用"
+        return super().capability_unavailable_reason(capability)
+
+    async def _run_head_motor(
+        self, actuator: str, intensity: float, duration_ms: int
+    ) -> None:
+        if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
+            raise ValueError("头部动作参数超出安全预设范围")
+        result = await self._runner.run(
+            str(self._settings.hardware_binary),
+            ["motor", actuator, "2"],
+        )
+        if result.timed_out:
+            raise DeviceUnavailableError("头部动作执行超时，已请求电机停止")
+        if result.returncode == 0:
+            return
+        combined_output = f"{result.stdout}\n{result.stderr}".lower()
+        if "busy" in combined_output or "正在执行" in combined_output:
+            raise ActionConflictError("头部电机正在执行其他动作")
+        raise DeviceUnavailableError(
+            "头部动作执行失败",
+            details={
+                "returncode": result.returncode,
+                "stderr": result.stderr,
+            },
         )
 
     async def shake_head(self, intensity: float, duration_ms: int) -> None:
-        raise self._not_implemented("摇头")
+        await self._run_head_motor("head_lr", intensity, duration_ms)
 
     async def nod_head(self, intensity: float, duration_ms: int) -> None:
-        raise self._not_implemented("点头")
+        await self._run_head_motor("head_ud", intensity, duration_ms)
 
     async def wag_tail(self, intensity: float, duration_ms: int) -> None:
-        raise self._not_implemented("摇尾")
+        del intensity, duration_ms
+        raise AdapterNotImplementedError(
+            self.capability_unavailable_reason(Capability.WAG_TAIL)
+        )
 
-    async def stop_motion(self) -> None:
-        raise self._not_implemented("停止动作")
+    async def stop_motion(self) -> bool:
+        result = await self._runner.run(
+            str(self._settings.hardware_binary),
+            ["motor", "stop"],
+        )
+        if result.timed_out:
+            raise DeviceUnavailableError("停止头部动作超时")
+        if result.returncode != 0:
+            raise DeviceUnavailableError(
+                "停止头部动作失败",
+                details={
+                    "returncode": result.returncode,
+                    "stderr": result.stderr,
+                },
+            )
+        return "stop requested" in result.stdout.lower()
 
     async def wake_dialog(self) -> None:
         await self._signal_dialog("SIGUSR1")

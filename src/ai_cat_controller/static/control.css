@@ -590,6 +590,11 @@ textarea:focus-visible {
   background: #f7f8f8;
 }
 
+.action-card.unavailable {
+  background: #fbf8ef;
+  border-color: #dfd5bd;
+}
+
 .action-card header {
   display: flex;
   justify-content: space-between;

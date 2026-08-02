@@ -8,11 +8,22 @@ from ai_cat_controller.core.errors import CommandNotAllowedError
 
 def make_runner() -> CommandRunner:
     return CommandRunner(
-        allowed_executables=frozenset({"/usr/bin/systemctl"}),
+        allowed_executables=frozenset(
+            {"/usr/bin/systemctl", "/usr/bin/ai-toy_app"}
+        ),
         allowed_services=frozenset({"volc-conv-ai.service"}),
         timeout_seconds=1.0,
         allowed_service_signals={
             "volc-conv-ai.service": frozenset({"SIGUSR1", "SIGUSR2"})
+        },
+        allowed_commands={
+            "/usr/bin/ai-toy_app": frozenset(
+                {
+                    ("motor", "head_lr", "2"),
+                    ("motor", "head_ud", "2"),
+                    ("motor", "stop"),
+                }
+            )
         },
     )
 
@@ -33,6 +44,9 @@ def make_runner() -> CommandRunner:
             "/usr/bin/systemctl",
             ["kill", "--signal=SIGUSR1", "other.service"],
         ),
+        ("/usr/bin/ai-toy_app", ["motor", "tail_lr", "2"]),
+        ("/usr/bin/ai-toy_app", ["motor", "head_lr", "3"]),
+        ("/usr/bin/ai-toy_app", ["motor", "all", "2"]),
     ],
 )
 async def test_runner_rejects_non_allowlisted_commands(
@@ -56,6 +70,9 @@ async def test_runner_uses_exec_without_shell(
 
         def kill(self) -> None:
             captured["killed"] = True
+
+        def terminate(self) -> None:
+            captured["terminated"] = True
 
     async def fake_create_subprocess_exec(
         executable: str, *args: str, **kwargs: object
@@ -92,6 +109,9 @@ async def test_runner_allows_only_confirmed_dialog_signals(
         def kill(self) -> None:
             pass
 
+        def terminate(self) -> None:
+            pass
+
     async def fake_create_subprocess_exec(
         executable: str, *args: str, **kwargs: object
     ) -> FakeProcess:
@@ -109,3 +129,41 @@ async def test_runner_allows_only_confirmed_dialog_signals(
         "--signal=SIGUSR2",
         "volc-conv-ai.service",
     )
+
+
+@pytest.mark.asyncio
+async def test_runner_allows_only_fixed_head_motor_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"motion completed\n", b""
+
+        def kill(self) -> None:
+            pass
+
+        def terminate(self) -> None:
+            pass
+
+    async def fake_create_subprocess_exec(
+        executable: str, *args: str, **kwargs: object
+    ) -> FakeProcess:
+        captured["executable"] = executable
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = await make_runner().run(
+        "/usr/bin/ai-toy_app", ["motor", "head_ud", "2"]
+    )
+
+    assert result.returncode == 0
+    assert captured == {
+        "executable": "/usr/bin/ai-toy_app",
+        "args": ("motor", "head_ud", "2"),
+    }

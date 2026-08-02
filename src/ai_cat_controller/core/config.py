@@ -31,7 +31,7 @@ class Settings(BaseModel):
     api_key_enabled: bool = False
     api_key: SecretStr = SecretStr("")
 
-    command_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
+    command_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
     service_status_cache_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
     data_path: Path = Path(".data/ai-cat-mock.db")
@@ -70,6 +70,13 @@ class Settings(BaseModel):
             raise ValueError("AI_CAT_SYSTEMCTL_BINARY is not allowlisted")
         return value
 
+    @field_validator("hardware_binary")
+    @classmethod
+    def validate_hardware_binary(cls, value: Path) -> Path:
+        if str(value) != "/usr/bin/ai-toy_app":
+            raise ValueError("AI_CAT_HARDWARE_BINARY is not allowlisted")
+        return value
+
     @model_validator(mode="after")
     def validate_security(self) -> "Settings":
         key = self.api_key.get_secret_value()
@@ -93,7 +100,7 @@ class Settings(BaseModel):
             "log_level": source.get("AI_CAT_LOG_LEVEL", "INFO").upper(),
             "api_key_enabled": source.get("AI_CAT_API_KEY_ENABLED", "false"),
             "api_key": source.get("AI_CAT_API_KEY", ""),
-            "command_timeout_seconds": source.get("AI_CAT_COMMAND_TIMEOUT_SECONDS", "5.0"),
+            "command_timeout_seconds": source.get("AI_CAT_COMMAND_TIMEOUT_SECONDS", "12.0"),
             "motion_cooldown_seconds": source.get("AI_CAT_MOTION_COOLDOWN_SECONDS", "0.2"),
             "service_status_cache_seconds": source.get(
                 "AI_CAT_SERVICE_STATUS_CACHE_SECONDS", "2.0"

@@ -7,7 +7,7 @@
  *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
  *   3. 麦克风在连续会话内持续上行，由服务端 VAD 自动判定每句话结束。
  *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
- *   5. 云端 Function Calling 可异步执行 K1 摇头、天气和电量查询。
+ *   5. 云端 Function Calling 可异步执行 K1 头部动作、天气和电量查询。
  *
  * 并发模型：
  *   - 主线程：录音上传、键盘/信号状态机和 SDK 控制命令。
@@ -180,7 +180,7 @@ typedef struct {
 static pending_function_call_t pending_function_call;
 static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t head_motor_mutex = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t head_shake_last_started_ms = 0;
+static uint64_t head_motion_last_started_ms = 0;
 static pthread_once_t curl_init_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t weather_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char cached_weather_location[WEATHER_LOCATION_MAX_LEN];
@@ -1589,7 +1589,7 @@ cleanup:
     return ret;
 }
 
-static int __run_head_shake(void) {
+static int __run_head_motion(const char* actuator) {
     /*
      * 使用固定可执行文件和固定参数，不经 shell 拼接用户输入，
      * 避免命令注入，并通过退出码判断电机动作是否成功。
@@ -1598,7 +1598,7 @@ static int __run_head_shake(void) {
     char* const argv[] = {
         (char*)executable,
         "motor",
-        "head_lr",
+        (char*)actuator,
         "2",
         NULL,
     };
@@ -1606,6 +1606,12 @@ static int __run_head_shake(void) {
     int status;
     int ret;
 
+    if (
+        actuator == NULL ||
+        (strcmp(actuator, "head_lr") != 0 && strcmp(actuator, "head_ud") != 0)
+    ) {
+        return -1;
+    }
     ret = posix_spawn(&pid, executable, NULL, NULL, argv, environ);
     if (ret != 0) {
         fprintf(stderr, "failed to start head motor command: %s\n", strerror(ret));
@@ -1634,44 +1640,53 @@ static void* __run_function_call(void* arg) {
     if (task == NULL) {
         return NULL;
     }
-    if (strcmp(task->name, "shake_head") == 0) {
+    if (
+        strcmp(task->name, "shake_head") == 0 ||
+        strcmp(task->name, "nod_head") == 0
+    ) {
+        bool is_nod = strcmp(task->name, "nod_head") == 0;
+        const char* action_name = is_nod ? "点头" : "摇头";
+        const char* actuator = is_nod ? "head_ud" : "head_lr";
         uint64_t now_ms;
         if (pthread_mutex_trylock(&head_motor_mutex) != 0) {
             ret = 0;
             snprintf(
                 output,
                 sizeof(output),
-                "摇头动作正在执行，本次重复请求已忽略"
+                "头部动作正在执行，本次重复请求已忽略"
             );
             printf(
-                "duplicate shake_head ignored while motor is busy, call_id=%s\n",
+                "duplicate %s ignored while motor is busy, call_id=%s\n",
+                task->name,
                 task->call_id
             );
         } else {
             now_ms = __get_time_ms();
             if (
-                head_shake_last_started_ms != 0 &&
-                now_ms - head_shake_last_started_ms < HEAD_SHAKE_COOLDOWN_MS
+                head_motion_last_started_ms != 0 &&
+                now_ms - head_motion_last_started_ms < HEAD_SHAKE_COOLDOWN_MS
             ) {
                 ret = 0;
                 snprintf(
                     output,
                     sizeof(output),
-                    "刚刚已经完成摇头，本次重复请求已忽略"
+                    "刚刚已经完成头部动作，本次重复请求已忽略"
                 );
                 printf(
-                    "duplicate shake_head ignored during cooldown, call_id=%s\n",
+                    "duplicate %s ignored during cooldown, call_id=%s\n",
+                    task->name,
                     task->call_id
                 );
             } else {
-                head_shake_last_started_ms = now_ms;
-                printf("executing shake_head, call_id=%s\n", task->call_id);
-                ret = __run_head_shake();
+                head_motion_last_started_ms = now_ms;
+                printf("executing %s, call_id=%s\n", task->name, task->call_id);
+                ret = __run_head_motion(actuator);
                 snprintf(
                     output,
                     sizeof(output),
-                    "%s",
-                    ret == 0 ? "摇头动作已完成" : "摇头动作执行失败"
+                    "%s动作%s",
+                    action_name,
+                    ret == 0 ? "已完成" : "执行失败"
                 );
             }
             pthread_mutex_unlock(&head_motor_mutex);

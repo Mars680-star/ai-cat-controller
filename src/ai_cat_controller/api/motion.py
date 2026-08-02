@@ -26,7 +26,7 @@ def _accepted(data: dict[str, object]) -> ApiResponse[MotionAcceptedData]:
     response_model=ApiResponse[MotionAcceptedData],
     status_code=status.HTTP_202_ACCEPTED,
     summary="摇头",
-    description="提交固定的摇头动作。第一阶段仅 Mock 适配器实现真实执行。",
+    description="提交固定的安全摇头预设；Local K1 使用已验证的 head_lr 命令。",
 )
 async def shake_head(
     request: MotionRequest,
@@ -44,7 +44,7 @@ async def shake_head(
     response_model=ApiResponse[MotionAcceptedData],
     status_code=status.HTTP_202_ACCEPTED,
     summary="点头",
-    description="提交固定的点头动作。第一阶段仅 Mock 适配器实现真实执行。",
+    description="提交固定的安全点头预设；Local K1 使用 head_ud 命令。",
 )
 async def nod_head(
     request: MotionRequest,
@@ -62,7 +62,7 @@ async def nod_head(
     response_model=ApiResponse[MotionAcceptedData],
     status_code=status.HTTP_202_ACCEPTED,
     summary="摇尾",
-    description="提交固定的摇尾动作。第一阶段仅 Mock 适配器实现真实执行。",
+    description="提交固定摇尾预设；当前 Local K1 样机尾部硬件异常时返回 501。",
 )
 async def wag_tail(
     request: MotionRequest,

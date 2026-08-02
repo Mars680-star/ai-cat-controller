@@ -48,6 +48,14 @@ def test_unconfirmed_service_is_rejected() -> None:
         Settings(dialog_service="user-input.service")
 
 
+def test_unconfirmed_hardware_binary_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="AI_CAT_HARDWARE_BINARY is not allowlisted",
+    ):
+        Settings(hardware_binary="/tmp/user-controlled-program")
+
+
 def test_secret_is_masked_in_settings_representation() -> None:
     settings = Settings(api_key_enabled=True, api_key="do-not-print")
 

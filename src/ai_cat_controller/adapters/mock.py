@@ -129,12 +129,14 @@ class MockAiCatAdapter(AiCatAdapter):
     async def wag_tail(self, intensity: float, duration_ms: int) -> None:
         await self._run_motion("tail_wag", "tail", intensity, duration_ms)
 
-    async def stop_motion(self) -> None:
+    async def stop_motion(self) -> bool:
         async with self._state_lock:
+            stopped = self.current_action != "idle"
             self._generation += 1
             self.current_action = "idle"
             self.head_state = "idle"
             self.tail_state = "idle"
+            return stopped
 
     async def wake_dialog(self) -> None:
         async with self._state_lock:

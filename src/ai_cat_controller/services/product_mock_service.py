@@ -13,6 +13,7 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import (
     AiCatError,
     ActionConflictError,
+    AdapterNotImplementedError,
     AuthenticationError,
     DeviceUnavailableError,
     ResourceNotFoundError,
@@ -194,17 +195,25 @@ class ProductMockService:
     ) -> list[dict[str, Any]]:
         pet = await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id)
         level = level_for_points(int(pet["intimacy_points"])).level
-        return [
-            {
-                **action.model_dump(mode="json"),
-                "unlocked": action_is_unlocked(
-                    action, pet["personality_id"], level
-                ),
-                "parameters_editable": False,
-                "safety_profile": "validated_preset_v1",
-            }
-            for action in ACTIONS
-        ]
+        catalog: list[dict[str, Any]] = []
+        for action in ACTIONS:
+            capabilities = tuple(
+                component.capability for component in action.components
+            )
+            unavailable_reason = self._motion.unavailable_reason(capabilities)
+            catalog.append(
+                {
+                    **action.model_dump(mode="json"),
+                    "unlocked": action_is_unlocked(
+                        action, pet["personality_id"], level
+                    ),
+                    "available": unavailable_reason is None,
+                    "unavailable_reason": unavailable_reason,
+                    "parameters_editable": False,
+                    "safety_profile": "validated_preset_v1",
+                }
+            )
+        return catalog
 
     async def execute_action(
         self,
@@ -223,6 +232,21 @@ class ProductMockService:
         level = level_for_points(int(pet["intimacy_points"])).level
         if not action_is_unlocked(action, pet["personality_id"], level):
             raise ActionConflictError("当前性格或亲密度尚未解锁该动作")
+        capabilities = tuple(
+            component.capability for component in action.components
+        )
+        unavailable_reason = self._motion.unavailable_reason(capabilities)
+        if unavailable_reason is not None:
+            raise AdapterNotImplementedError(
+                unavailable_reason,
+                details={
+                    "capabilities": [
+                        capability.value
+                        for capability in capabilities
+                        if not self._motion.supports(capability)
+                    ]
+                },
+            )
 
         execution, created = await asyncio.to_thread(
             self._repository.create_action_execution,

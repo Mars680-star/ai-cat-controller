@@ -479,7 +479,11 @@
     ui.actionGrid.replaceChildren();
     actions.forEach((action) => {
       const card = document.createElement("article");
-      card.className = `action-card${action.unlocked ? "" : " locked"}`;
+      card.className = [
+        "action-card",
+        action.unlocked ? "" : "locked",
+        action.available ? "" : "unavailable",
+      ].filter(Boolean).join(" ");
       const header = document.createElement("header");
       const title = document.createElement("h3");
       title.textContent = action.name;
@@ -487,14 +491,24 @@
       number.className = "action-number";
       number.textContent = `#${String(action.action_no).padStart(3, "0")}`;
       const description = document.createElement("p");
-      description.textContent = action.description;
+      description.textContent = action.available
+        ? action.description
+        : action.unavailable_reason || "当前硬件暂不支持该动作";
       const button = document.createElement("button");
       button.type = "button";
-      button.className = action.unlocked ? "button primary" : "button secondary";
-      button.disabled = !action.unlocked || !state.dashboard?.pet.online;
-      button.textContent = action.unlocked
-        ? (state.dashboard?.pet.online ? "执行动作" : "设备离线")
-        : `Lv.${action.min_intimacy_level} 解锁`;
+      button.className = action.unlocked && action.available
+        ? "button primary"
+        : "button secondary";
+      button.disabled = (
+        !action.unlocked ||
+        !action.available ||
+        !state.dashboard?.pet.online
+      );
+      button.textContent = !action.available
+        ? "硬件暂不可用"
+        : action.unlocked
+          ? (state.dashboard?.pet.online ? "执行动作" : "设备离线")
+          : `Lv.${action.min_intimacy_level} 解锁`;
       button.addEventListener("click", () => executeAction(action.action_id));
       header.append(title, number);
       card.append(header, description, button);
@@ -562,6 +576,7 @@
       await refreshActions();
       window.setTimeout(() => refreshActions().catch(reportError), 900);
       window.setTimeout(() => refreshActions().catch(reportError), 2200);
+      window.setTimeout(() => refreshActions().catch(reportError), 4200);
     } catch (error) {
       reportError(error);
       await refreshActions().catch(() => {});

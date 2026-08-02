@@ -47,6 +47,24 @@ class MotionService:
     def last_error(self) -> str | None:
         return self._last_error
 
+    def supports(self, capability: Capability) -> bool:
+        return self._adapter.supports(capability)
+
+    def unavailable_reason(self, capabilities: tuple[Capability, ...]) -> str | None:
+        unsupported = [
+            capability
+            for capability in capabilities
+            if not self._adapter.supports(capability)
+        ]
+        if not unsupported:
+            return None
+        return "; ".join(
+            dict.fromkeys(
+                self._adapter.capability_unavailable_reason(capability)
+                for capability in unsupported
+            )
+        )
+
     async def _execute(
         self,
         generation: int,
@@ -112,7 +130,8 @@ class MotionService:
         ]
         if unsupported:
             raise AdapterNotImplementedError(
-                f"当前适配器不支持动作: {action_name}",
+                self.unavailable_reason(capabilities)
+                or f"当前适配器不支持动作: {action_name}",
                 details={"capabilities": [item.value for item in unsupported]},
             )
 
@@ -242,17 +261,19 @@ class MotionService:
             if self._stopping:
                 raise ActionConflictError("停止动作正在执行")
             task = self._task
-            if task is None or task.done():
-                return {"stopped": False, "state": "idle"}
             self._stopping = True
-            self._generation += 1
-            self._task = None
+            task_was_active = task is not None and not task.done()
+            if task_was_active:
+                self._generation += 1
+                self._task = None
             self._current_action = "stopping"
 
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if task_was_active and task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        adapter_stopped = False
         try:
-            await asyncio.wait_for(
+            adapter_stopped = await asyncio.wait_for(
                 self._adapter.stop_motion(),
                 timeout=self._command_timeout_seconds,
             )
@@ -264,7 +285,10 @@ class MotionService:
                 self._current_action = "idle"
                 self._current_request_id = None
                 self._cooldown_until = time.monotonic() + self._cooldown_seconds
-        return {"stopped": True, "state": "idle"}
+        return {
+            "stopped": task_was_active or adapter_stopped,
+            "state": "idle",
+        }
 
     async def shutdown(self) -> None:
         async with self._lock:

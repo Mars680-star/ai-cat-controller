@@ -137,6 +137,7 @@ def test_action_catalog_rejects_locked_and_tracks_idempotency(
     ).json()["data"]
     assert len(catalog) >= 7
     assert all(item["parameters_editable"] is False for item in catalog)
+    assert all(item["available"] is True for item in catalog)
 
     locked = client.post(
         f"/api/v1/pets/{pet_id}/actions/celebration_combo/execute",

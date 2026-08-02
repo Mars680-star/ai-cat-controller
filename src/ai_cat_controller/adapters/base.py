@@ -24,6 +24,9 @@ class AiCatAdapter(ABC):
     def supports(self, capability: Capability) -> bool:
         return capability in self.capabilities
 
+    def capability_unavailable_reason(self, capability: Capability) -> str:
+        return f"{self.mode} 适配器不支持 {capability.value}"
+
     @abstractmethod
     async def connect(self) -> None: ...
 
@@ -49,7 +52,7 @@ class AiCatAdapter(ABC):
     async def wag_tail(self, intensity: float, duration_ms: int) -> None: ...
 
     @abstractmethod
-    async def stop_motion(self) -> None: ...
+    async def stop_motion(self) -> bool: ...
 
     @abstractmethod
     async def wake_dialog(self) -> None: ...

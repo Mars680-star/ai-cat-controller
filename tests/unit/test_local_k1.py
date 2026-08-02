@@ -1,6 +1,5 @@
 import os
 import time
-from typing import Any
 
 import pytest
 
@@ -16,7 +15,10 @@ class FakeRunner:
 
     async def run(self, executable: str, args: list[str]) -> CommandResult:
         self.calls.append((executable, tuple(args)))
-        output = "active" if args[0] == "is-active" else "enabled"
+        if args == ["motor", "stop"]:
+            output = "[motor] no active motor process"
+        else:
+            output = "active" if args[0] == "is-active" else "enabled"
         return CommandResult(0, output, "", False)
 
 
@@ -70,22 +72,28 @@ async def test_one_service_failure_does_not_fail_status_response() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "args"),
-    [
-        ("shake_head", (0.5, 600)),
-        ("nod_head", (0.5, 600)),
-        ("wag_tail", (0.5, 600)),
-        ("stop_motion", ()),
-    ],
-)
-async def test_local_actions_are_not_implemented(
-    method: str, args: tuple[Any, ...]
-) -> None:
+async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
+    runner = FakeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    await adapter.shake_head(0.1, 100)
+    await adapter.nod_head(1.0, 3000)
+    stopped = await adapter.stop_motion()
+
+    assert stopped is False
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "head_lr", "2")),
+        ("/usr/bin/ai-toy_app", ("motor", "head_ud", "2")),
+        ("/usr/bin/ai-toy_app", ("motor", "stop")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_tail_action_is_disabled() -> None:
     adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
 
-    with pytest.raises(AdapterNotImplementedError):
-        await getattr(adapter, method)(*args)
+    with pytest.raises(AdapterNotImplementedError, match="尾部硬件异常"):
+        await adapter.wag_tail(0.5, 600)
 
 
 @pytest.mark.asyncio
