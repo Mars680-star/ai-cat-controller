@@ -13,8 +13,10 @@ contain the complete vendor SDK.
   routing for the K1 microphone and speaker.
 - `scripts/prepare_sdk.sh`: reconstructs the tested SDK tree from upstream.
 
-The directly readable dialog implementation is also kept at
-`native/dialog/volc_conv_ai_demo.c`.
+The canonical, directly readable dialog implementation is kept at
+`native/dialog/volc_conv_ai_demo.c`. `prepare_sdk.sh` copies it over the vendor
+demo after applying the patch set, so the reconstructed SDK matches the tested
+K1 source without maintaining a second full copy.
 
 ## Reconstruct the SDK
 

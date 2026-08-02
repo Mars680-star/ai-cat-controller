@@ -4,9 +4,9 @@
 
 1. Say “小安小安” once, or click **开始或继续聆听** in `/control`.
 2. Ask the first question within 30 seconds.
-3. While the AI is thinking, speak directly to replace the current question.
-   During audible playback, use the browser interrupt control while validating
-   echo cancellation.
+3. To replace a question while the AI is thinking or answering, say the wake
+   phrase again, or use the browser interrupt control while validating echo
+   cancellation.
 4. Wait for the short follow-up tone after an answer, then ask another
    question within 30 seconds without repeating the wake phrase.
 5. Say the wake phrase again after that window expires.
@@ -21,7 +21,7 @@ dialogue failures.
 |---|---|
 | `ready` | Cloud session is ready and waiting for the wake phrase. |
 | `wake_detected` / `listening` | Wake succeeded and microphone audio is being uploaded. |
-| `processing_audio` | Local speech ended; the device is waiting for server VAD/ASR. |
+| `processing_audio` | Local speech ended; the client is waiting for commit acknowledgement. |
 | `thinking` | The server accepted the question and is generating a response. |
 | `answering` | TTS audio is being returned. |
 | `followup_preparing` | The cloud answer ended; buffered speaker audio is still draining. |
@@ -40,6 +40,7 @@ Keep these values in the Volcengine bot configuration:
 ```json
 {
   "ASRConfig": {
+    "TurnDetectionMode": 1,
     "VADConfig": {
       "SilenceTime": 800,
       "AIVAD": false
@@ -61,7 +62,8 @@ These settings are stored by the Volcengine bot, not in the K1
 `AIVAD: false` prevents semantic endpoint detection from holding complete
 questions for an excessive period, and
 `InterruptSpeechDuration: 600` rejects very short noise before interrupting.
-`InterruptMode: 0` keeps voice interruption enabled. Do not configure
+`TurnDetectionMode: 1` lets the K1 client decide when a complete utterance is
+submitted. `InterruptMode: 0` keeps voice interruption enabled. Do not configure
 interruption keywords during the basic test, because that would restrict
 interruption to those words. Restart `volc-conv-ai.service` after saving the
 bot so the device creates a new cloud session.
@@ -119,12 +121,16 @@ within ten seconds instead of allowing repeated cloud requests.
 The K1 PulseAudio profile sets the AEC source to 100% input volume. If the cloud
 remains in `thinking` for 30 seconds, the native process exits and systemd
 rebuilds the WebSocket session while the local wake-word model stays loaded.
-Cloud VAD is the only component that commits a user utterance in the current
-`server_vad` session. The local energy detector marks the visible transition
-to `processing_audio` after 1.5 seconds of silence or an eight-second maximum
-utterance window, but it deliberately does not send
-`input_audio_buffer.commit`; mixing client commit with `server_vad` can submit
-one utterance twice.
+The local energy detector commits exactly once after the user stops speaking.
+The SDK transport no longer sends `response.create` in the same call: the app
+waits for `input_audio_buffer.committed`, then requests the response. This API
+only emits final input transcription after `response.create`; if that event is
+still missing or empty after eight seconds, the app sends `response.cancel`
+and ends the turn. Missing commit acknowledgement rebuilds the cloud session.
+A fresh wake also clears the cloud audio buffer before post-tone capture begins.
+
+`volc-conv-ai.service` uses `RuntimeDirectoryPreserve=restart`, so the last
+`recovering` state remains readable while systemd starts a replacement process.
 
 The device implements `shake_head`, `get_weather` aliases and
 `get_battery_status`. The battery tool reads capacity, fuel-gauge state,
@@ -156,5 +162,7 @@ start of every window. This blocks motor noise and speaker-loop
 self-interruption without losing the start of the next question.
 
 The dialog process synchronously plays a 350 ms confirmation tone after a wake
-signal, then opens microphone upload. Users should begin the question after
+signal, recreates the PulseAudio capture stream to discard audio accumulated
+while the wake-word model was decoding, then opens microphone upload. Users
+should begin the question after
 this tone.

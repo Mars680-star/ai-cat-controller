@@ -5,6 +5,12 @@ modified dialogue entry point. It is not a standalone program: build it inside
 the locked Volcengine SDK after applying the patches and overlay under
 `integrations/volcengine-k1`.
 
+The matching transport changes are consolidated in
+`integrations/volcengine-k1/patches/0005-ws-response-create.patch` and are
+applied by `integrations/volcengine-k1/scripts/prepare_sdk.sh`. They make PCM
+sessions wait for initial configuration, enable client-controlled turn
+detection, and separate `commit` from `response.create`.
+
 The file contains the K1 audio path, continuous conversation state machine,
 service-mode wake/interrupt signals, atomic status output, disconnect handling
 and Function Calling implementations for `shake_head`, weather lookup and

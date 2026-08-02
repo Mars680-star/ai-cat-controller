@@ -24,6 +24,7 @@
 #include <termios.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <string.h>
 #include <strings.h>
 #include <pthread.h>
@@ -55,10 +56,12 @@
 #define MIN_FOLLOW_UP_SECONDS 5
 #define MAX_FOLLOW_UP_SECONDS 120
 #define THINKING_TIMEOUT_MS 30000
+#define CLIENT_COMMIT_ACK_TIMEOUT_MS 6000
+#define CLIENT_TRANSCRIPT_TIMEOUT_MS 8000
 #define LOCAL_VAD_SPEECH_RMS 250
 #define LOCAL_VAD_START_FRAMES 2
 #define LOCAL_VAD_SILENCE_FRAMES 15
-#define LOCAL_VAD_MAX_UTTERANCE_MS 8000
+#define LOCAL_VAD_MAX_UTTERANCE_MS 15000
 #define HEAD_SHAKE_COOLDOWN_MS 8000
 #define PLAYBACK_CAPTURE_GUARD_MS 350
 #define WAKE_TONE_DURATION_MS 350
@@ -83,7 +86,9 @@
 #define CHARGER_ONLINE_PATH "/sys/class/power_supply/ip2317-charger/online"
 
 #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
-#define WS_SESSION_UPDATE "{\"event_id\":\"event_ai_cat_session_config\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"config\":{\"ASRConfig\":{\"VADConfig\":{\"SilenceTime\":800,\"AIVAD\":false},\"InterruptConfig\":{\"InterruptSpeechDuration\":600}},\"SubtitleConfig\":{\"DisableRTSSubtitle\":false,\"SubtitleMode\":1}}}}"
+#define WS_RESPONSE_CREATE "{\"type\":\"response.create\"}"
+#define WS_RESPONSE_CANCEL "{\"type\":\"response.cancel\"}"
+#define WS_SESSION_UPDATE "{\"event_id\":\"event_ai_cat_session_config\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":1,\"VADConfig\":{\"SilenceTime\":800,\"AIVAD\":false,\"ExpireTime\":1200},\"InterruptConfig\":{\"InterruptSpeechDuration\":600}},\"SubtitleConfig\":{\"DisableRTSSubtitle\":false,\"SubtitleMode\":1}}}}"
 
 typedef struct {
     /* 上行音频、可选视频和云端下行播放所需的运行时资源。 */
@@ -131,9 +136,15 @@ static volatile sig_atomic_t waiting_for_speech = false;      /* 等待用户开
 static volatile sig_atomic_t playback_capture_guard = false;  /* TTS 播放时暂停上行，阻断自回声 */
 static volatile sig_atomic_t playback_write_active = false;   /* 播放线程已取出但尚未写完的音频块 */
 static volatile sig_atomic_t tool_capture_guard = false;      /* 工具执行至回复结束期间暂停上行 */
+static volatile sig_atomic_t client_turn_pending = false;     /* 等待云端确认端侧 commit */
+static volatile sig_atomic_t input_transcript_pending = false;/* 回答请求后等待用户最终转写 */
+static volatile sig_atomic_t response_create_request = false;
+static volatile sig_atomic_t response_cancel_request = false;
 static uint64_t speech_start_deadline_ms = 0;                 /* 等待首句/追问的截止时间 */
 static uint64_t follow_up_deadline_ms = 0;                    /* 无需唤醒的追问窗口 */
 static uint64_t thinking_deadline_ms = 0;                     /* 云端思考超时后重建连接 */
+static uint64_t client_commit_ack_deadline_ms = 0;            /* 端侧提交后等待云端确认的截止时间 */
+static uint64_t client_transcript_deadline_ms = 0;            /* 端侧提交后等待最终转写的截止时间 */
 static uint64_t playback_capture_guard_until_ms = 0;
 static bool local_speech_detected = false;                    /* 本地保底 VAD 已确认人声 */
 static unsigned int local_speech_frames = 0;
@@ -489,6 +500,28 @@ static void __write_dialog_status(const char* state, const char* message) {
     pthread_mutex_unlock(&dialog_status_mutex);
 }
 
+static void __reset_client_turn_state(void) {
+    client_turn_pending = false;
+    input_transcript_pending = false;
+    response_create_request = false;
+    response_cancel_request = false;
+    client_commit_ack_deadline_ms = 0;
+    client_transcript_deadline_ms = 0;
+}
+
+static bool __has_non_whitespace_text(const char* text) {
+    if (text == NULL) {
+        return false;
+    }
+    while (*text != '\0') {
+        if (!isspace((unsigned char)*text)) {
+            return true;
+        }
+        text++;
+    }
+    return false;
+}
+
 static void __end_continuous_session(const char* message) {
     running = false;
     ai_playing = false;
@@ -498,6 +531,7 @@ static void __end_continuous_session(const char* message) {
     speech_start_deadline_ms = 0;
     follow_up_deadline_ms = 0;
     thinking_deadline_ms = 0;
+    __reset_client_turn_state();
     __reset_local_vad();
     __reset_barge_in_guard();
     __write_dialog_status("ready", message);
@@ -748,21 +782,43 @@ static int __play_ready_tone(
     return ret;
 }
 
-static int __flush_capture_buffer(realtime_ws_demo_t* demo) {
+static int __reopen_capture_stream(realtime_ws_demo_t* demo) {
+    pa_simple* capture = NULL;
     int error = 0;
 
     if (demo == NULL || demo->p_capture == NULL) {
         return -1;
     }
-    if (pa_simple_flush(demo->p_capture, &error) < 0) {
+
+    /*
+     * A PA_STREAM_RECORD opened during idle can retain audio that predates the
+     * wake signal. pa_simple_flush() did not reliably discard that server-side
+     * queue on K1, so recreate the stream after the ready tone. The first frame
+     * read by the dialog then belongs to the user's actual question.
+     */
+    pa_simple_free(demo->p_capture);
+    demo->p_capture = NULL;
+    capture = pa_simple_new(
+        NULL,
+        "Capture",
+        PA_STREAM_RECORD,
+        NULL,
+        "Capture",
+        &demo->format,
+        NULL,
+        NULL,
+        &error
+    );
+    if (capture == NULL) {
         fprintf(
             stderr,
-            "capture buffer flush failed: %s\n",
+            "capture stream reopen failed: %s\n",
             pa_strerror(error)
         );
         return -1;
     }
-    printf("capture buffer flushed; live listening starts now\n");
+    demo->p_capture = capture;
+    printf("capture stream reopened; live listening starts now\n");
     return 0;
 }
 
@@ -876,6 +932,15 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
             __write_dialog_status("ready", "等待唤醒词“小安小安”");
             return;
         }
+        if (
+            client_turn_pending ||
+            input_transcript_pending ||
+            response_create_request
+        ) {
+            running = false;
+            __write_dialog_status("processing_audio", "问题已发送，等待云端确认");
+            return;
+        }
         if (ai_playing && demo != NULL) {
             pthread_mutex_lock(&demo->ring_buf_mutex);
             volc_ringbuf_clear(demo->ring_buf);
@@ -892,7 +957,7 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         );
     } else if (status == VOLC_CONV_STATUS_THINKING) {
         __reset_local_vad();
-        running = session_active;
+        running = false;
         waiting_for_speech = false;
         speech_start_deadline_ms = 0;
         follow_up_deadline_ms = 0;
@@ -901,7 +966,10 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         __write_dialog_status("thinking", "问题已收到，正在思考");
     } else if (status == VOLC_CONV_STATUS_ANSWERING) {
         __reset_local_vad();
-        running = session_active;
+        client_turn_pending = false;
+        response_create_request = false;
+        client_commit_ack_deadline_ms = 0;
+        running = false;
         waiting_for_speech = false;
         speech_start_deadline_ms = 0;
         follow_up_deadline_ms = 0;
@@ -913,6 +981,7 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         status == VOLC_CONV_STATUS_ANSWER_FINISH
     ) {
         __reset_local_vad();
+        __reset_client_turn_state();
         tool_capture_guard = false;
         ai_playing = false;
         thinking_deadline_ms = 0;
@@ -1826,11 +1895,34 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
         transcript_obj = cJSON_GetObjectItem(root, "transcript");
         event_id_obj = cJSON_GetObjectItem(root, "event_id");
         if (cJSON_IsString(transcript_obj)) {
-            __write_dialog_event(
-                "user",
-                transcript_obj->valuestring,
-                cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
-            );
+            if (__has_non_whitespace_text(transcript_obj->valuestring)) {
+                __write_dialog_event(
+                    "user",
+                    transcript_obj->valuestring,
+                    cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
+                );
+                if (input_transcript_pending) {
+                    input_transcript_pending = false;
+                    client_transcript_deadline_ms = 0;
+                }
+            } else if (input_transcript_pending) {
+                input_transcript_pending = false;
+                response_cancel_request = true;
+                client_transcript_deadline_ms = 0;
+                printf("empty final transcript; queueing response.cancel\n");
+            }
+        }
+    } else if (
+        type != NULL &&
+        strcmp(type, "input_audio_buffer.committed") == 0
+    ) {
+        if (client_turn_pending && session_active) {
+            client_turn_pending = false;
+            client_commit_ack_deadline_ms = 0;
+            response_create_request = true;
+            printf("client audio commit acknowledged\n");
+        } else {
+            printf("audio commit acknowledged without pending client turn\n");
         }
     } else if (
         type != NULL &&
@@ -1965,6 +2057,41 @@ static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
     if (clear) {
         free(clear);
     }
+    return ret;
+}
+
+static int _ws_response_create(realtime_ws_demo_t* demo) {
+    /* 客户端判停模式下，收到 commit 确认后显式请求回答。 */
+    uint8_t* message = NULL;
+    size_t message_len = 0;
+    int ret = _build_ws_message(
+        WS_RESPONSE_CREATE,
+        &message,
+        &message_len
+    );
+    if (ret != 0) {
+        printf("build response.create message failed\n");
+        return ret;
+    }
+    ret = volc_send_message(demo->engine, message, message_len, NULL);
+    free(message);
+    return ret;
+}
+
+static int _ws_response_cancel(realtime_ws_demo_t* demo) {
+    uint8_t* message = NULL;
+    size_t message_len = 0;
+    int ret = _build_ws_message(
+        WS_RESPONSE_CANCEL,
+        &message,
+        &message_len
+    );
+    if (ret != 0) {
+        printf("build response.cancel message failed\n");
+        return ret;
+    }
+    ret = volc_send_message(demo->engine, message, message_len, NULL);
+    free(message);
     return ret;
 }
 
@@ -2117,15 +2244,15 @@ int main(int argc, const char* argv[]){
 
     /*
      * 阶段 4：主状态机。
-     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。云端 VAD
-     * 负责判定和提交句尾；本地能量 VAD 只更新可见状态，不提交缓冲区。
+     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。本地能量 VAD
+     * 判定句尾并提交缓冲区；收到云端 commit 确认后才请求模型回答。
      */
     while (!exit_request) {
         __poll_keyboard();
 
         /*
-         * SIGUSR1 只负责启动连续会话。会话激活后麦克风持续上传，
-         * 云端 VAD 负责判停，InterruptMode=0 负责在用户插话时打断 AI。
+         * SIGUSR1 启动连续会话。本地 VAD 负责判停；长回答仍可再次说
+         * 唤醒词，由独立唤醒进程发送 SIGUSR1 来打断并开始下一轮。
          */
         if (wake_request) {
             wake_request = false;
@@ -2138,6 +2265,7 @@ int main(int argc, const char* argv[]){
             speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
             follow_up_deadline_ms = 0;
             thinking_deadline_ms = 0;
+            __reset_client_turn_state();
             tool_capture_guard = false;
             __reset_local_vad();
             __write_dialog_status("wake_detected", "已唤醒，请在提示音后说话");
@@ -2149,12 +2277,13 @@ int main(int argc, const char* argv[]){
                 printf("wakeup signal: interrupting current response\n");
             } else {
                 running = false;
+                _ws_clear_buffer(&demo);
                 __play_ready_tone(
                     &demo,
                     WAKE_TONE_DURATION_MS,
                     "wake confirmation tone"
                 );
-                __flush_capture_buffer(&demo);
+                __reopen_capture_stream(&demo);
                 speech_start_deadline_ms =
                     __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
                 running = true;
@@ -2172,6 +2301,7 @@ int main(int argc, const char* argv[]){
             speech_start_deadline_ms = 0;
             follow_up_deadline_ms = 0;
             thinking_deadline_ms = 0;
+            __reset_client_turn_state();
             tool_capture_guard = false;
             __reset_local_vad();
             running = false;
@@ -2189,6 +2319,7 @@ int main(int argc, const char* argv[]){
             speech_start_deadline_ms = 0;
             follow_up_deadline_ms = 0;
             thinking_deadline_ms = 0;
+            __reset_client_turn_state();
             tool_capture_guard = false;
             __reset_local_vad();
             running = false;
@@ -2222,7 +2353,7 @@ int main(int argc, const char* argv[]){
                     "follow-up ready tone"
                 );
                 _ws_clear_buffer(&demo);
-                __flush_capture_buffer(&demo);
+                __reopen_capture_stream(&demo);
                 __reset_local_vad();
                 follow_up_prepare_request = false;
                 playback_capture_guard = false;
@@ -2280,12 +2411,20 @@ int main(int argc, const char* argv[]){
                 }
             }
             if (!suppress_capture) {
+                bool should_commit =
+                    local_endpoint_detected && waiting_for_speech;
+
                 /*
-                 * 当前云端会话固定为 server_vad。官方协议要求该模式只发送
-                 * append，由服务端判停并自动创建 response；本地 VAD 只用于
-                 * 状态提示，不能额外 commit，否则同一轮可能被提交两次。
+                 * TurnDetectionMode=1 由端侧决定句尾。SDK 补丁只发送
+                 * append+commit；response.create 在 commit 确认后发送。
                  */
-                info.commit = false;
+                info.commit = should_commit;
+                if (should_commit) {
+                    client_turn_pending = true;
+                    client_commit_ack_deadline_ms =
+                        __get_time_ms() + CLIENT_COMMIT_ACK_TIMEOUT_MS;
+                    running = false;
+                }
                 send_result = volc_send_audio_data(
                     demo.engine,
                     demo.audio_rec_buf,
@@ -2293,21 +2432,19 @@ int main(int argc, const char* argv[]){
                     &info
                 );
                 if (send_result < 0) {
+                    __reset_client_turn_state();
+                    running = true;
                     fprintf(stderr, "audio upload failed, ret=%d\n", send_result);
-                } else if (local_endpoint_detected && waiting_for_speech) {
+                } else if (should_commit) {
                     __reset_local_vad();
                     waiting_for_speech = false;
                     speech_start_deadline_ms = 0;
                     follow_up_deadline_ms = 0;
-                    thinking_deadline_ms =
-                        __get_time_ms() + THINKING_TIMEOUT_MS;
                     __write_dialog_status(
                         "processing_audio",
-                        "已检测到句尾，等待云端识别"
+                        "问题已发送，等待云端确认"
                     );
-                    printf(
-                        "local VAD: utterance ended; waiting for server VAD\n"
-                    );
+                    printf("local VAD: utterance committed; waiting for acknowledgement\n");
                 }
             }
             if (
@@ -2332,6 +2469,69 @@ int main(int argc, const char* argv[]){
             }
         } else {
             usleep(100000);
+        }
+        if (response_cancel_request) {
+            response_cancel_request = false;
+            _ws_response_cancel(&demo);
+            _ws_clear_buffer(&demo);
+            __end_continuous_session(
+                "没有识别到有效问题，请重新说“小安小安”"
+            );
+        }
+        if (response_create_request) {
+            int response_result = 0;
+
+            response_create_request = false;
+            input_transcript_pending = true;
+            client_transcript_deadline_ms =
+                __get_time_ms() + CLIENT_TRANSCRIPT_TIMEOUT_MS;
+            response_result = _ws_response_create(&demo);
+            if (response_result < 0) {
+                __reset_client_turn_state();
+                __write_dialog_status(
+                    "recovering",
+                    "请求回答失败，正在重新连接"
+                );
+                printf("response.create failed: restarting cloud session\n");
+                exit_request = true;
+            } else {
+                ai_playing = true;
+                running = false;
+                thinking_deadline_ms = __get_time_ms() + THINKING_TIMEOUT_MS;
+                __write_dialog_status("thinking", "问题已收到，正在思考");
+                printf("response.create sent after commit acknowledgement\n");
+            }
+        }
+        if (
+            client_commit_ack_deadline_ms != 0 &&
+            __get_time_ms() >= client_commit_ack_deadline_ms
+        ) {
+            client_commit_ack_deadline_ms = 0;
+            __reset_client_turn_state();
+            session_active = false;
+            waiting_for_speech = false;
+            running = false;
+            ai_playing = false;
+            __write_dialog_status(
+                "recovering",
+                "本轮语音未确认，正在清理并重连"
+            );
+            printf("client audio commit timeout: restarting cloud session\n");
+            exit_request = true;
+        }
+        if (
+            input_transcript_pending &&
+            client_transcript_deadline_ms != 0 &&
+            __get_time_ms() >= client_transcript_deadline_ms
+        ) {
+            input_transcript_pending = false;
+            client_transcript_deadline_ms = 0;
+            printf("final transcript timeout: cancelling response\n");
+            _ws_response_cancel(&demo);
+            _ws_clear_buffer(&demo);
+            __end_continuous_session(
+                "没有识别到有效问题，请重新说“小安小安”"
+            );
         }
         if (
             thinking_deadline_ms != 0 &&
@@ -2370,6 +2570,7 @@ int main(int argc, const char* argv[]){
                 start_after_interrupt = false;
                 session_active = true;
                 waiting_for_speech = true;
+                _ws_clear_buffer(&demo);
                 if (wake_tone_after_interrupt) {
                     wake_tone_after_interrupt = false;
                     __play_ready_tone(
@@ -2378,7 +2579,7 @@ int main(int argc, const char* argv[]){
                         "wake confirmation tone"
                     );
                 }
-                __flush_capture_buffer(&demo);
+                __reopen_capture_stream(&demo);
                 speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
                 running = true;
                 __write_dialog_status("listening", "回答已打断，请继续说话");
