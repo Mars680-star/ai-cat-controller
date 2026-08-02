@@ -94,5 +94,9 @@ X-Mock-Session: temporary-session-token
 - `charger_online`：充电器输入是否在线，不等同于一定正在充电。
 - `battery_error`：读取失败的属性，不可用时用于诊断。
 
+为了避免电量计状态滞后，`charger_online=false` 时接口会把有效电池状态统一为
+`discharging`；充电器在线但电量计未报告充电时返回 `not_charging`。浏览器端
+状态请求使用 `no-store`，每 5 秒重新读取真机。
+
 Validation errors use `422`, conflicts `409`, unavailable devices `503`,
 timeouts `504`, and invalid authentication `401`.

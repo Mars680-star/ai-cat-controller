@@ -142,6 +142,58 @@ async def test_local_device_status_reads_k1_power_supply(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_device_status_prefers_disconnected_charger_state(tmp_path) -> None:
+    battery_path = tmp_path / "cw-bat"
+    charger_path = tmp_path / "ip2317-charger"
+    battery_path.mkdir()
+    charger_path.mkdir()
+    (battery_path / "capacity").write_text("61\n", encoding="ascii")
+    (battery_path / "status").write_text("Charging\n", encoding="ascii")
+    (battery_path / "present").write_text("1\n", encoding="ascii")
+    (battery_path / "voltage_now").write_text("3820000\n", encoding="ascii")
+    (charger_path / "online").write_text("0\n", encoding="ascii")
+    settings = local_settings().model_copy(
+        update={
+            "battery_supply_path": battery_path,
+            "charger_supply_path": charger_path,
+        }
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_device_status()
+
+    assert result["battery_status"] == "discharging"
+    assert result["charging"] is False
+    assert result["charger_online"] is False
+
+
+@pytest.mark.asyncio
+async def test_local_device_status_reports_connected_but_not_charging(tmp_path) -> None:
+    battery_path = tmp_path / "cw-bat"
+    charger_path = tmp_path / "ip2317-charger"
+    battery_path.mkdir()
+    charger_path.mkdir()
+    (battery_path / "capacity").write_text("84\n", encoding="ascii")
+    (battery_path / "status").write_text("Discharging\n", encoding="ascii")
+    (battery_path / "present").write_text("1\n", encoding="ascii")
+    (battery_path / "voltage_now").write_text("4010000\n", encoding="ascii")
+    (charger_path / "online").write_text("1\n", encoding="ascii")
+    settings = local_settings().model_copy(
+        update={
+            "battery_supply_path": battery_path,
+            "charger_supply_path": charger_path,
+        }
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_device_status()
+
+    assert result["battery_status"] == "not_charging"
+    assert result["charging"] is False
+    assert result["charger_online"] is True
+
+
+@pytest.mark.asyncio
 async def test_local_device_status_handles_missing_power_supply(tmp_path) -> None:
     settings = local_settings().model_copy(
         update={

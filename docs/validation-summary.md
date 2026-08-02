@@ -51,6 +51,7 @@
 - FastAPI `/api/v1/dialog/*` 和浏览器页面可查看状态、开始聆听和打断。
 - 云端断开后退出，由 systemd 自动重建会话。
 - `shake_head` 工具调用 `/usr/bin/ai-toy_app motor head_lr 2` 并回传执行结果。
+- `get_battery_status` 工具实时读取电量、充电状态、电压和充电器在线状态。
 - 开机等待网络、DNS、PulseAudio 就绪后再连接云端。
 
 ## 已测试
@@ -73,6 +74,7 @@
 | 两次冷启动后的服务、网络和模型自动恢复 | 通过 |
 | 电机本地命令 | 通过 |
 | `shake_head` 云端 Function Calling | 部分验证：处理代码和本地电机已验证，仍需保留一次云端调用日志作为完整证据 |
+| `get_battery_status` Function Calling | 部分验证：K1 编译、sysfs 读取及处理代码已验证，待控制台配置工具后完成真人语音验证 |
 
 当前服务状态：四个服务
 `volc-pulseaudio`、`volc-conv-ai`、`volc-k1-wake-word`、
@@ -107,7 +109,7 @@
 - 24 小时以上长稳、内存泄漏、压力和高并发测试。
 - 不同麦克风、远场、强噪声和大量人员环境下的唤醒率与误唤醒率。
 - 真人在回答期间插话、30 秒追问窗口和网页状态提示的最终体验验收。
-- 除 `shake_head` 外的其他硬件 Function Calling。
+- 天气、电量等 Function Calling 的完整云端调用日志留档。
 
 ## 2026-07-30 回退点
 

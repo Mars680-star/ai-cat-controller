@@ -7,7 +7,7 @@
  *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
  *   3. 麦克风在连续会话内持续上行，由服务端 VAD 自动判定每句话结束。
  *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
- *   5. 云端 Function Calling 可异步执行 K1 摇头和实时天气查询。
+ *   5. 云端 Function Calling 可异步执行 K1 摇头、天气和电量查询。
  *
  * 并发模型：
  *   - 主线程：录音上传、键盘/信号状态机和 SDK 控制命令。
@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
+#include <strings.h>
 #include <pthread.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -71,6 +72,11 @@
 #define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
 #define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
 #define DEVICE_SERIAL_MAX_LEN 64
+#define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
+#define BATTERY_STATUS_PATH "/sys/class/power_supply/cw-bat/status"
+#define BATTERY_PRESENT_PATH "/sys/class/power_supply/cw-bat/present"
+#define BATTERY_VOLTAGE_PATH "/sys/class/power_supply/cw-bat/voltage_now"
+#define CHARGER_ONLINE_PATH "/sys/class/power_supply/ip2317-charger/online"
 
 #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
 #define WS_SESSION_UPDATE "{\"event_id\":\"event_ai_cat_session_config\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"config\":{\"ASRConfig\":{\"VADConfig\":{\"SilenceTime\":800,\"AIVAD\":false},\"InterruptConfig\":{\"InterruptSpeechDuration\":600}},\"SubtitleConfig\":{\"DisableRTSSubtitle\":false,\"SubtitleMode\":1}}}}"
@@ -1066,6 +1072,141 @@ static bool __is_weather_function(const char* name) {
     );
 }
 
+static bool __is_battery_function(const char* name) {
+    return name != NULL && (
+        strcmp(name, "get_battery_status") == 0 ||
+        strcmp(name, "query_battery_status") == 0 ||
+        strcmp(name, "check_battery") == 0
+    );
+}
+
+static int __read_sysfs_text(const char* path, char* output, size_t output_size) {
+    FILE* file;
+    size_t length;
+
+    if (path == NULL || output == NULL || output_size < 2) {
+        return -1;
+    }
+    file = fopen(path, "r");
+    if (file == NULL) {
+        return -1;
+    }
+    if (fgets(output, (int)output_size, file) == NULL) {
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+    length = strcspn(output, "\r\n");
+    output[length] = '\0';
+    return length == 0 ? -1 : 0;
+}
+
+static int __read_sysfs_int(
+    const char* path,
+    int minimum,
+    int maximum,
+    int* output
+) {
+    char text[64];
+    char* end;
+    long value;
+
+    if (output == NULL || __read_sysfs_text(path, text, sizeof(text)) != 0) {
+        return -1;
+    }
+    errno = 0;
+    value = strtol(text, &end, 10);
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    if (errno != 0 || end == text || *end != '\0' || value < minimum || value > maximum) {
+        return -1;
+    }
+    *output = (int)value;
+    return 0;
+}
+
+static int __query_battery_status(char* output, size_t output_size) {
+    char reported_status[64] = {0};
+    const char* state_text;
+    int capacity;
+    int present;
+    int voltage_uv;
+    int charger_online;
+    bool has_voltage;
+    bool has_charger;
+
+    if (output == NULL || output_size == 0) {
+        return -1;
+    }
+    if (
+        __read_sysfs_int(BATTERY_CAPACITY_PATH, 0, 100, &capacity) != 0 ||
+        __read_sysfs_int(BATTERY_PRESENT_PATH, 0, 1, &present) != 0
+    ) {
+        snprintf(output, output_size, "暂时无法读取设备电量，请稍后再试。");
+        return -1;
+    }
+    if (present == 0) {
+        snprintf(output, output_size, "当前未检测到设备电池。");
+        return -1;
+    }
+
+    has_voltage = __read_sysfs_int(
+        BATTERY_VOLTAGE_PATH,
+        0,
+        20000000,
+        &voltage_uv
+    ) == 0;
+    has_charger = __read_sysfs_int(
+        CHARGER_ONLINE_PATH,
+        0,
+        1,
+        &charger_online
+    ) == 0;
+    if (__read_sysfs_text(BATTERY_STATUS_PATH, reported_status, sizeof(reported_status)) != 0) {
+        reported_status[0] = '\0';
+    }
+
+    if (has_charger && charger_online == 0) {
+        state_text = "正在使用电池，充电器未连接";
+    } else if (has_charger && charger_online == 1) {
+        if (capacity == 100 || strcasecmp(reported_status, "Full") == 0) {
+            state_text = "电池已充满，充电器已连接";
+        } else if (strcasecmp(reported_status, "Charging") == 0) {
+            state_text = "正在充电，充电器已连接";
+        } else {
+            state_text = "充电器已连接，但当前未充电";
+        }
+    } else if (strcasecmp(reported_status, "Charging") == 0) {
+        state_text = "正在充电，充电器状态未知";
+    } else if (strcasecmp(reported_status, "Full") == 0) {
+        state_text = "电池已充满，充电器状态未知";
+    } else {
+        state_text = "正在使用电池，充电器状态未知";
+    }
+
+    if (has_voltage) {
+        snprintf(
+            output,
+            output_size,
+            "当前电量%d%%，%s，电池电压%.2f伏。",
+            capacity,
+            state_text,
+            voltage_uv / 1000000.0
+        );
+    } else {
+        snprintf(output, output_size, "当前电量%d%%，%s。", capacity, state_text);
+    }
+    printf(
+        "battery query capacity=%d, status=%s, charger_online=%d, voltage_uv=%d\n",
+        capacity,
+        reported_status[0] == '\0' ? "unknown" : reported_status,
+        has_charger ? charger_online : -1,
+        has_voltage ? voltage_uv : -1
+    );
+    return 0;
+}
+
 static const char* __weather_description(int code) {
     if (code == 0) {
         return "晴";
@@ -1360,7 +1501,7 @@ static int __run_head_shake(void) {
 }
 
 static void* __run_function_call(void* arg) {
-    /* 电机动作和天气网络请求都可能阻塞，不能占用 SDK 消息回调线程。 */
+    /* 电机、网络和 sysfs 查询均放在工具线程，避免阻塞 SDK 消息回调。 */
     function_call_task_t* task = (function_call_task_t*)arg;
     char output[768];
     cJSON* arguments;
@@ -1413,6 +1554,10 @@ static void* __run_function_call(void* arg) {
             }
             pthread_mutex_unlock(&head_motor_mutex);
         }
+    } else if (__is_battery_function(task->name)) {
+        printf("executing %s, call_id=%s\n", task->name, task->call_id);
+        __write_dialog_status("thinking", "正在读取设备电量");
+        ret = __query_battery_status(output, sizeof(output));
     } else if (__is_weather_function(task->name)) {
         arguments = cJSON_Parse(task->arguments);
         location_obj = arguments == NULL
@@ -1492,7 +1637,11 @@ static void __handle_ws_conversation_item_created_call(realtime_ws_demo_t* demo,
     }
     name = name_obj->valuestring;
     call_id = call_id_obj->valuestring;
-    if (strcmp(name, "shake_head") != 0 && !__is_weather_function(name)) {
+    if (
+        strcmp(name, "shake_head") != 0 &&
+        !__is_weather_function(name) &&
+        !__is_battery_function(name)
+    ) {
         printf("unknown function call name: %s\n", name);
         return;
     }
@@ -1531,7 +1680,8 @@ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSO
     if (
         name != NULL &&
         strcmp(name, "shake_head") != 0 &&
-        !__is_weather_function(name)
+        !__is_weather_function(name) &&
+        !__is_battery_function(name)
     ) {
         tool_capture_guard = true;
         ret = __send_function_call_output(
@@ -1594,7 +1744,7 @@ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSO
     if (ret != 0) {
         tool_capture_guard = false;
         fprintf(stderr, "failed to create function call thread: %s\n", strerror(ret));
-        __send_function_call_output(demo, task->call_id, "摇头动作执行失败");
+        __send_function_call_output(demo, task->call_id, "设备工具执行失败");
         free(task);
         return;
     }

@@ -7,11 +7,13 @@ the locked Volcengine SDK after applying the patches and overlay under
 
 The file contains the K1 audio path, continuous conversation state machine,
 service-mode wake/interrupt signals, atomic status output, disconnect handling
-and Function Calling implementations for `shake_head` and weather lookup. A
-follow-up starts only after buffered TTS has drained; the short ready tone then
-opens a fresh 30-second capture window. It also contains a repeated barge-in
-guard that ends a session when acoustic echo causes three rapid
-answer-to-listening transitions. Final cloud transcripts are appended to
+and Function Calling implementations for `shake_head`, weather lookup and
+`get_battery_status`. The battery tool reads the K1 `power_supply` sysfs values
+at call time, so the model only speaks current device data. A follow-up starts
+only after buffered TTS has drained; the short ready tone then opens a fresh
+30-second capture window. It also contains a repeated barge-in guard that ends
+a session when acoustic echo causes three rapid answer-to-listening
+transitions. Final cloud transcripts are appended to
 `/var/lib/ai-cat-controller/dialog-events.jsonl` for FastAPI to import into the
 bound pet's persistent history.
 

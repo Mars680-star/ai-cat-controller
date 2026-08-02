@@ -188,6 +188,7 @@
     try {
       const response = await fetch(path, {
         ...options,
+        cache: options.cache || "no-store",
         headers: {...requestHeaders(hasBody), ...(options.headers || {})},
         signal: controller.signal,
       });

@@ -126,11 +126,24 @@ utterance window, but it deliberately does not send
 `input_audio_buffer.commit`; mixing client commit with `server_vad` can submit
 one utterance twice.
 
-The device implements `shake_head` plus `get_weather` aliases. Weather accepts
-`location` or `city`, caches resolved coordinates, and returns a concise
-current/day forecast. Any other Function Calling name receives an immediate
-unsupported-tool result so the cloud agent can explain the missing capability
-instead of waiting until the 30-second watchdog expires.
+The device implements `shake_head`, `get_weather` aliases and
+`get_battery_status`. The battery tool reads capacity, fuel-gauge state,
+voltage and charger-online state directly from K1 sysfs for every call. Weather
+accepts `location` or `city`, caches resolved coordinates, and returns a
+concise current/day forecast. Any other Function Calling name receives an
+immediate unsupported-tool result so the cloud agent can explain the missing
+capability instead of waiting until the 30-second watchdog expires.
+
+Configure one Function Calling tool on the Volcengine agent:
+
+- Name: `get_battery_status`
+- Type: `object`
+- Parameters: none
+- Description: `当用户询问这只AI猫当前电量、剩余电量、是否正在充电、是否连接充电器或电池电压时必须调用。工具返回K1设备实时电源信息，禁止自行猜测数值。`
+
+Add the same constraint to the agent prompt: questions about the device's
+current power state must call `get_battery_status`, and the spoken answer must
+use the tool output without changing numeric values.
 
 Microphone frames are not uploaded while a Function Calling tool is active or
 while TTS audio is physically playing. After the cloud turn finishes, the

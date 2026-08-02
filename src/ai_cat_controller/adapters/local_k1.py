@@ -116,12 +116,12 @@ class LocalK1Adapter(AiCatAdapter):
         voltage_uv = read_int(battery, "voltage_now", 0, 20_000_000)
         charger_online_raw = read_int(charger, "online", 0, 1)
         try:
-            battery_status = self._normalized_battery_status(
+            reported_battery_status = self._normalized_battery_status(
                 self._read_sysfs_value(battery, "status")
             )
         except (OSError, UnicodeError, ValueError):
             errors.append("status")
-            battery_status = "unavailable"
+            reported_battery_status = "unavailable"
 
         battery_present = (
             None if battery_present_raw is None else bool(battery_present_raw)
@@ -129,6 +129,21 @@ class LocalK1Adapter(AiCatAdapter):
         charger_online = (
             None if charger_online_raw is None else bool(charger_online_raw)
         )
+
+        # The charger GPIO reacts to cable changes faster than the fuel gauge
+        # status. Reconcile both readings so one API sample cannot report
+        # "charging" while also reporting that the charger is disconnected.
+        battery_status = reported_battery_status
+        if battery_present is True and charger_online is False:
+            battery_status = "discharging"
+        elif battery_present is True and charger_online is True:
+            if battery_percent == 100 or reported_battery_status == "full":
+                battery_status = "full"
+            elif reported_battery_status == "charging":
+                battery_status = "charging"
+            else:
+                battery_status = "not_charging"
+
         if battery_present is False or battery_status in {"unknown", "unavailable"}:
             charging = None
         else:

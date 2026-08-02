@@ -33,6 +33,7 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert "batteryStateLabels" in script.text
     assert 'realDeviceStatus.classList.toggle("hidden", !isLocalK1)' in script.text
     assert 'deviceStatusForm.classList.toggle("hidden", isLocalK1)' in script.text
+    assert 'cache: options.cache || "no-store"' in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 
