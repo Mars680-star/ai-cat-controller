@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class DeviceStatusData(BaseModel):
@@ -21,6 +23,21 @@ class DeviceStatusData(BaseModel):
     last_error: str | None
     adapter_uptime_seconds: float
     uptime_seconds: float
+    battery_available: bool
+    battery_percent: int | None = Field(default=None, ge=0, le=100)
+    battery_status: Literal[
+        "charging",
+        "discharging",
+        "full",
+        "not_charging",
+        "unknown",
+        "unavailable",
+    ]
+    battery_present: bool | None
+    battery_voltage_mv: int | None = Field(default=None, ge=0, le=20_000)
+    charging: bool | None
+    charger_online: bool | None
+    battery_error: str | None
 
 
 class ServiceStatusData(BaseModel):

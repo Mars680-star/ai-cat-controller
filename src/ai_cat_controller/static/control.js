@@ -106,6 +106,7 @@
     refreshing: false,
     dialogsRefreshing: false,
     voiceStatus: null,
+    hardwareStatus: null,
   };
 
   const statusLabels = {
@@ -136,6 +137,15 @@
     unavailable: "状态不可用",
     waking: "正在请求聆听",
     interrupting: "正在请求打断",
+  };
+
+  const batteryStateLabels = {
+    charging: "正在充电",
+    discharging: "使用电池",
+    full: "已充满",
+    not_charging: "已接电，未充电",
+    unknown: "状态未知",
+    unavailable: "电池状态不可用",
   };
 
   function showToast(message, level = "info") {
@@ -330,6 +340,24 @@
     setTopStatus(pet.online ? "设备在线" : "设备离线", pet.online);
   }
 
+  function renderHardwareStatus(status) {
+    state.hardwareStatus = status;
+    if (status.adapter_mode !== "local_k1") {
+      return;
+    }
+    if (!status.battery_available || status.battery_percent === null) {
+      ui.homeBattery.textContent = "--";
+      ui.homeCharging.textContent = status.battery_error || "电池不可用";
+      return;
+    }
+    ui.homeBattery.textContent = `${status.battery_percent}%`;
+    const stateText = batteryStateLabels[status.battery_status] || "状态未知";
+    const voltageText = status.battery_voltage_mv === null
+      ? ""
+      : ` · ${(status.battery_voltage_mv / 1000).toFixed(2)} V`;
+    ui.homeCharging.textContent = `${stateText}${voltageText}`;
+  }
+
   async function refreshDashboard() {
     if (!state.petId || state.refreshing) {
       return;
@@ -340,6 +368,12 @@
         `/api/v1/pets/${encodeURIComponent(state.petId)}/dashboard`,
       );
       renderDashboard(payload.data);
+      try {
+        const devicePayload = await apiRequest("/api/v1/device/status");
+        renderHardwareStatus(devicePayload.data);
+      } catch (error) {
+        state.hardwareStatus = null;
+      }
     } finally {
       state.refreshing = false;
     }

@@ -53,6 +53,14 @@ class MockAiCatAdapter(AiCatAdapter):
                 "action_count": self.action_count,
                 "last_action_at": self.last_action_at,
                 "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
+                "battery_available": True,
+                "battery_percent": 86,
+                "battery_status": "discharging",
+                "battery_present": True,
+                "battery_voltage_mv": 3900,
+                "charging": False,
+                "charger_online": False,
+                "battery_error": None,
             }
 
     async def get_services_status(self) -> list[dict[str, Any]]:

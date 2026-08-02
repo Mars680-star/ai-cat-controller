@@ -9,6 +9,10 @@ def test_device_status_is_connected(client: TestClient) -> None:
     assert data["connected"] is True
     assert data["adapter_mode"] == "mock"
     assert data["current_action"] == "idle"
+    assert data["battery_available"] is True
+    assert data["battery_percent"] == 86
+    assert data["battery_status"] == "discharging"
+    assert data["battery_voltage_mv"] == 3900
 
 
 def test_device_status_does_not_expose_secrets(client: TestClient) -> None:

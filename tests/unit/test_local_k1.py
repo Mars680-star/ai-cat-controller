@@ -109,6 +109,90 @@ async def test_local_dialog_control_uses_fixed_signals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_device_status_reads_k1_power_supply(tmp_path) -> None:
+    battery_path = tmp_path / "cw-bat"
+    charger_path = tmp_path / "ip2317-charger"
+    battery_path.mkdir()
+    charger_path.mkdir()
+    (battery_path / "capacity").write_text("27\n", encoding="ascii")
+    (battery_path / "status").write_text("Charging\n", encoding="ascii")
+    (battery_path / "present").write_text("1\n", encoding="ascii")
+    (battery_path / "voltage_now").write_text("3543000\n", encoding="ascii")
+    (charger_path / "online").write_text("1\n", encoding="ascii")
+    settings = local_settings().model_copy(
+        update={
+            "battery_supply_path": battery_path,
+            "charger_supply_path": charger_path,
+            "dialog_status_path": tmp_path / "missing-dialog-status.json",
+        }
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+    await adapter.connect()
+
+    result = await adapter.get_device_status()
+
+    assert result["battery_available"] is True
+    assert result["battery_percent"] == 27
+    assert result["battery_status"] == "charging"
+    assert result["battery_present"] is True
+    assert result["battery_voltage_mv"] == 3543
+    assert result["charging"] is True
+    assert result["charger_online"] is True
+    assert result["battery_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_local_device_status_handles_missing_power_supply(tmp_path) -> None:
+    settings = local_settings().model_copy(
+        update={
+            "battery_supply_path": tmp_path / "missing-battery",
+            "charger_supply_path": tmp_path / "missing-charger",
+            "dialog_status_path": tmp_path / "missing-dialog-status.json",
+        }
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_device_status()
+
+    assert result["battery_available"] is False
+    assert result["battery_percent"] is None
+    assert result["battery_status"] == "unavailable"
+    assert result["battery_present"] is None
+    assert result["battery_voltage_mv"] is None
+    assert result["charging"] is None
+    assert result["charger_online"] is None
+    assert "capacity" in result["battery_error"]
+
+
+@pytest.mark.asyncio
+async def test_local_device_status_rejects_invalid_capacity(tmp_path) -> None:
+    battery_path = tmp_path / "cw-bat"
+    charger_path = tmp_path / "ip2317-charger"
+    battery_path.mkdir()
+    charger_path.mkdir()
+    (battery_path / "capacity").write_text("127\n", encoding="ascii")
+    (battery_path / "status").write_text("Discharging\n", encoding="ascii")
+    (battery_path / "present").write_text("1\n", encoding="ascii")
+    (battery_path / "voltage_now").write_text("3800000\n", encoding="ascii")
+    (charger_path / "online").write_text("0\n", encoding="ascii")
+    settings = local_settings().model_copy(
+        update={
+            "battery_supply_path": battery_path,
+            "charger_supply_path": charger_path,
+        }
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    result = await adapter.get_device_status()
+
+    assert result["battery_available"] is False
+    assert result["battery_percent"] is None
+    assert result["battery_status"] == "discharging"
+    assert result["charging"] is False
+    assert "capacity" in result["battery_error"]
+
+
+@pytest.mark.asyncio
 async def test_local_dialog_status_reads_fixed_json_file(tmp_path) -> None:
     status_path = tmp_path / "dialog-status.json"
     status_path.write_text(

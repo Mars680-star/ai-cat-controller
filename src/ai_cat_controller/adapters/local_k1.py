@@ -18,6 +18,7 @@ class LocalK1Adapter(AiCatAdapter):
     mode = "local_k1"
     capabilities = frozenset(
         {
+            Capability.BATTERY_STATUS,
             Capability.WAKE_DIALOG,
             Capability.INTERRUPT_DIALOG,
         }
@@ -37,7 +38,10 @@ class LocalK1Adapter(AiCatAdapter):
         self._connected = False
 
     async def get_device_status(self) -> dict[str, Any]:
-        dialog_status = await self.get_dialog_status()
+        dialog_status, power_status = await asyncio.gather(
+            self.get_dialog_status(),
+            asyncio.to_thread(self._read_power_status),
+        )
         return {
             "connected": self._connected,
             "current_action": "unavailable",
@@ -48,6 +52,103 @@ class LocalK1Adapter(AiCatAdapter):
             "action_count": 0,
             "last_action_at": None,
             "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
+            **power_status,
+        }
+
+    @staticmethod
+    def _read_sysfs_value(directory: Path, name: str) -> str:
+        value = (directory / name).read_text(encoding="ascii").strip()
+        if not value or len(value) > 128:
+            raise ValueError(f"invalid {name} value")
+        return value
+
+    @classmethod
+    def _read_bounded_int(
+        cls,
+        directory: Path,
+        name: str,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        value = int(cls._read_sysfs_value(directory, name))
+        if not minimum <= value <= maximum:
+            raise ValueError(f"{name} is outside the supported range")
+        return value
+
+    @staticmethod
+    def _normalized_battery_status(value: str) -> str:
+        normalized = value.strip().lower().replace(" ", "_")
+        if normalized in {
+            "charging",
+            "discharging",
+            "full",
+            "not_charging",
+            "unknown",
+        }:
+            return normalized
+        return "unknown"
+
+    def _read_power_status(self) -> dict[str, Any]:
+        battery = self._settings.battery_supply_path
+        charger = self._settings.charger_supply_path
+        errors: list[str] = []
+
+        def read_int(
+            directory: Path,
+            name: str,
+            minimum: int,
+            maximum: int,
+        ) -> int | None:
+            try:
+                return self._read_bounded_int(
+                    directory,
+                    name,
+                    minimum=minimum,
+                    maximum=maximum,
+                )
+            except (OSError, UnicodeError, ValueError):
+                errors.append(name)
+                return None
+
+        battery_percent = read_int(battery, "capacity", 0, 100)
+        battery_present_raw = read_int(battery, "present", 0, 1)
+        voltage_uv = read_int(battery, "voltage_now", 0, 20_000_000)
+        charger_online_raw = read_int(charger, "online", 0, 1)
+        try:
+            battery_status = self._normalized_battery_status(
+                self._read_sysfs_value(battery, "status")
+            )
+        except (OSError, UnicodeError, ValueError):
+            errors.append("status")
+            battery_status = "unavailable"
+
+        battery_present = (
+            None if battery_present_raw is None else bool(battery_present_raw)
+        )
+        charger_online = (
+            None if charger_online_raw is None else bool(charger_online_raw)
+        )
+        if battery_present is False or battery_status in {"unknown", "unavailable"}:
+            charging = None
+        else:
+            charging = battery_status == "charging"
+        battery_available = battery_percent is not None and battery_present is True
+        return {
+            "battery_available": battery_available,
+            "battery_percent": battery_percent,
+            "battery_status": battery_status,
+            "battery_present": battery_present,
+            "battery_voltage_mv": (
+                None if voltage_uv is None else round(voltage_uv / 1000)
+            ),
+            "charging": charging,
+            "charger_online": charger_online,
+            "battery_error": (
+                None
+                if not errors
+                else "无法读取电源属性: " + ", ".join(sorted(set(errors)))
+            ),
         }
 
     @staticmethod

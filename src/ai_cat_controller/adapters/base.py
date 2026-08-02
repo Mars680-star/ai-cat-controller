@@ -8,6 +8,7 @@ from typing import Any
 
 
 class Capability(str, Enum):
+    BATTERY_STATUS = "battery_status"
     SHAKE_HEAD = "shake_head"
     NOD_HEAD = "nod_head"
     WAG_TAIL = "wag_tail"

@@ -25,7 +25,10 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
 
 def test_static_assets_are_available(client: TestClient) -> None:
     assert client.get("/static/control.css").status_code == 200
-    assert client.get("/static/control.js").status_code == 200
+    script = client.get("/static/control.js")
+    assert script.status_code == 200
+    assert 'apiRequest("/api/v1/device/status")' in script.text
+    assert "batteryStateLabels" in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 

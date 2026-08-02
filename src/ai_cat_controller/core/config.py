@@ -41,6 +41,8 @@ class Settings(BaseModel):
     systemctl_binary: Path = Path("/usr/bin/systemctl")
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
+    battery_supply_path: Path = Path("/sys/class/power_supply/cw-bat")
+    charger_supply_path: Path = Path("/sys/class/power_supply/ip2317-charger")
     dialog_service: str = "volc-conv-ai.service"
     wake_service: str = "volc-k1-wake-word.service"
     pulseaudio_service: str = "volc-pulseaudio.service"
@@ -105,6 +107,14 @@ class Settings(BaseModel):
             "dialog_event_path": source.get(
                 "AI_CAT_DIALOG_EVENT_PATH",
                 "/var/lib/ai-cat-controller/dialog-events.jsonl",
+            ),
+            "battery_supply_path": source.get(
+                "AI_CAT_BATTERY_SUPPLY_PATH",
+                "/sys/class/power_supply/cw-bat",
+            ),
+            "charger_supply_path": source.get(
+                "AI_CAT_CHARGER_SUPPLY_PATH",
+                "/sys/class/power_supply/ip2317-charger",
             ),
             "dialog_service": source.get(
                 "AI_CAT_DIALOG_SERVICE", "volc-conv-ai.service"

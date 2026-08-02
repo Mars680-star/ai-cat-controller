@@ -8,6 +8,7 @@
 | Dialog wake/new turn | `SIGUSR1` to `volc-conv-ai.service` is used by the wake-word process and was tested. | Enabled through a fixed allowlisted signal. |
 | Dialog status | Native dialog writes atomic state to `/run/ai-cat/dialog-status.json`. | Read-only `/api/v1/dialog/status`. |
 | Service status | Three unit files are tracked in the K1 overlay. | Read-only `is-active/is-enabled`. |
+| Battery status | `cw-bat` exposes capacity, status, present and voltage through Linux `power_supply`; `ip2317-charger` exposes input online state. | Read-only `/api/v1/device/status`, also shown on the browser home page in `local_k1` mode. |
 
 The fixed `head_lr` program runs its own position sequence and finishes in
 `MOTOR_MODE_IDLE`. Its speed argument is not equivalent to the HTTP intensity

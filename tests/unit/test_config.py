@@ -19,12 +19,16 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_API_PORT": "9000",
             "AI_CAT_LOG_LEVEL": "debug",
             "AI_CAT_MOTION_COOLDOWN_SECONDS": "0.5",
+            "AI_CAT_BATTERY_SUPPLY_PATH": "/tmp/test-cw-bat",
+            "AI_CAT_CHARGER_SUPPLY_PATH": "/tmp/test-charger",
         }
     )
 
     assert settings.api_port == 9000
     assert settings.log_level == "DEBUG"
     assert settings.motion_cooldown_seconds == 0.5
+    assert str(settings.battery_supply_path) == "/tmp/test-cw-bat"
+    assert str(settings.charger_supply_path) == "/tmp/test-charger"
 
 
 def test_local_k1_requires_api_key() -> None:

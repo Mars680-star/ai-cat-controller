@@ -30,7 +30,7 @@ Error:
 | Method | Path | Result |
 |---|---|---|
 | GET | `/health` | Process health; no API Key required. |
-| GET | `/api/v1/device/status` | Adapter, motion, dialog and process state. |
+| GET | `/api/v1/device/status` | Adapter, motion, dialog, process and battery state. |
 | GET | `/api/v1/services/status` | Fixed local service states. |
 | POST | `/api/v1/motion/head/shake` | Accept a head-shake task. |
 | POST | `/api/v1/motion/head/nod` | Accept a head-nod task. |
@@ -81,6 +81,18 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+在 `local_k1` 模式下，设备状态从 Linux `power_supply` 接口返回：
+
+- `battery_available`：是否获得有效电量并检测到电池。
+- `battery_percent`：`0..100`，不可用时为 `null`。
+- `battery_status`：`charging`、`discharging`、`full`、
+  `not_charging`、`unknown` 或 `unavailable`。
+- `battery_present`：电池计量芯片报告的电池存在状态。
+- `battery_voltage_mv`：电池电压，单位毫伏。
+- `charging`：是否正在充电；无法判断时为 `null`。
+- `charger_online`：充电器输入是否在线，不等同于一定正在充电。
+- `battery_error`：读取失败的属性，不可用时用于诊断。
 
 Validation errors use `422`, conflicts `409`, unavailable devices `503`,
 timeouts `504`, and invalid authentication `401`.
