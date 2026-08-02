@@ -70,7 +70,7 @@ the bot's `LLMConfig.Tools` in the Volcengine console:
 ]
 ```
 
-The K1 implementation executes `/usr/bin/ai-toy_app motor head_lr 2` and sends
+The K1 implementation executes `/usr/bin/ai-toy_app motor head_lr 1` and sends
 a `function_call_output` event back to the bot. Verify that command manually
 before testing the voice-triggered action.
 

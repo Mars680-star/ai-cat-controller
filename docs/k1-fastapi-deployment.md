@@ -36,6 +36,19 @@ polkit rule restricted to the two dialog signals.
 
 ## Validate
 
+Before enabling Local K1 motion, disable the vendor DDS motor executor. Its
+autonomous actions do not use this project's cross-process lock:
+
+```bash
+systemctl disable --now toy_motor.service
+systemctl is-active toy_motor.service   # expected: inactive
+systemctl is-enabled toy_motor.service  # expected: disabled
+```
+
+Keep `toy_main.service` only if its display, touch and emotion behavior is still
+needed; with the DDS motor executor disabled, its motor publications have no
+hardware consumer.
+
 ```bash
 curl -sS http://127.0.0.1:8000/health
 curl -sS \

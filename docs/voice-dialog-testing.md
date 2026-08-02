@@ -143,7 +143,7 @@ capability instead of waiting until the 30-second watchdog expires.
 The three motion tools must be parameterless. The device ignores model-provided
 motor details and maps accepted tools to fixed native commands:
 
-- `shake_head` -> `motor head_lr 2`
+- `shake_head` -> `motor head_lr 1`
 - `nod_head` -> `motor head_ud 2`
 - `wag_tail` -> `motor tail_lr 1`, only when
   `AI_CAT_ENABLE_TAIL_MOTION=true`

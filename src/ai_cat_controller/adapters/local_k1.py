@@ -326,9 +326,10 @@ class LocalK1Adapter(AiCatAdapter):
     ) -> None:
         if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
             raise ValueError("头部动作参数超出安全预设范围")
+        speed = "1" if actuator == "head_lr" else "2"
         result = await self._runner.run(
             str(self._settings.hardware_binary),
-            ["motor", actuator, "2"],
+            ["motor", actuator, speed],
         )
         if result.timed_out:
             raise DeviceUnavailableError("头部动作执行超时，已请求电机停止")

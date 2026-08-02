@@ -50,6 +50,8 @@ def test_native_dialog_uses_fixed_motion_commands() -> None:
     assert 'strcmp(task->name, "wag_tail") == 0' in source
     assert 'strcmp(actuator, "head_lr") != 0' in source
     assert 'strcmp(actuator, "head_ud") != 0' in source
+    assert 'strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0' in source
+    assert 'strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0' in source
     assert 'const char* executable = "/usr/bin/ai-toy_app";' in source
     assert 'getenv("AI_CAT_ENABLE_TAIL_MOTION")' in source
-    assert 'const char* speed = is_tail ? "1" : "2";' in source
+    assert 'const char* speed = (is_tail || !is_nod) ? "1" : "2";' in source

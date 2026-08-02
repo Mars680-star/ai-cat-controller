@@ -1617,7 +1617,7 @@ static int __run_motor_motion(const char* actuator, const char* speed) {
     if (
         actuator == NULL || speed == NULL ||
         (
-            (strcmp(actuator, "head_lr") != 0 || strcmp(speed, "2") != 0) &&
+            (strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0) &&
             (strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0) &&
             (strcmp(actuator, "tail_lr") != 0 || strcmp(speed, "1") != 0)
         )
@@ -1661,7 +1661,7 @@ static void* __run_function_call(void* arg) {
         bool is_tail = strcmp(task->name, "wag_tail") == 0;
         const char* action_name = is_tail ? "摇尾" : (is_nod ? "点头" : "摇头");
         const char* actuator = is_tail ? "tail_lr" : (is_nod ? "head_ud" : "head_lr");
-        const char* speed = is_tail ? "1" : "2";
+        const char* speed = (is_tail || !is_nod) ? "1" : "2";
         uint64_t now_ms;
         if (is_tail && !__tail_motion_enabled()) {
             ret = 0;

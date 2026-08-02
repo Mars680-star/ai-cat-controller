@@ -94,7 +94,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
             .enable_gpio = 42,
             .stop_gpio = 83,
             .current_position = -1,
-            .constant_range = 60,
+            .constant_range = 30,
             .gpio_max_steps = -1,
             .enable_gpio_level = false,
             .dir_gpio_left_level = false,
@@ -111,7 +111,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
             .enable_gpio = 36,
             .stop_gpio = 82,
             .current_position = -1,
-            .constant_range = 60,
+            .constant_range = 20,
             .gpio_max_steps = -1,
             .enable_gpio_level = false,
             .dir_gpio_left_level = false,
@@ -129,7 +129,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
             .enable_gpio = 39,
             .stop_gpio = 61,
             .current_position = -1,
-            .constant_range = 60,
+            .constant_range = 50,
             .gpio_max_steps = -1,
             .enable_gpio_level = false,
             .dir_gpio_left_level = false,
@@ -512,7 +512,8 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         .vel_des = speed,
     };
     struct motor_state state;
-    const float positions[] = {0.0f, 180.0f, 90.0f, 75.0f, 105.0f, 90.0f};
+    /* Match the board service's accepted right-left-center gesture. */
+    const float positions[] = {180.0f, 0.0f, 90.0f};
 
     if (!fixed)
         return 1;

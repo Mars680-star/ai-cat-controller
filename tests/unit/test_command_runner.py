@@ -19,7 +19,7 @@ def make_runner() -> CommandRunner:
         allowed_commands={
             "/usr/bin/ai-toy_app": frozenset(
                 {
-                    ("motor", "head_lr", "2"),
+                    ("motor", "head_lr", "1"),
                     ("motor", "head_ud", "2"),
                     ("motor", "stop"),
                 }
@@ -45,6 +45,7 @@ def make_runner() -> CommandRunner:
             ["kill", "--signal=SIGUSR1", "other.service"],
         ),
         ("/usr/bin/ai-toy_app", ["motor", "tail_lr", "2"]),
+        ("/usr/bin/ai-toy_app", ["motor", "head_lr", "2"]),
         ("/usr/bin/ai-toy_app", ["motor", "head_lr", "3"]),
         ("/usr/bin/ai-toy_app", ["motor", "all", "2"]),
     ],
@@ -159,11 +160,11 @@ async def test_runner_allows_only_fixed_head_motor_profiles(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     result = await make_runner().run(
-        "/usr/bin/ai-toy_app", ["motor", "head_lr", "2"]
+        "/usr/bin/ai-toy_app", ["motor", "head_lr", "1"]
     )
 
     assert result.returncode == 0
     assert captured == {
         "executable": "/usr/bin/ai-toy_app",
-        "args": ("motor", "head_lr", "2"),
+        "args": ("motor", "head_lr", "1"),
     }

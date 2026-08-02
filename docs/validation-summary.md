@@ -53,7 +53,8 @@
 - FastAPI `/api/v1/dialog/*` 和浏览器页面可查看状态、开始聆听和打断。
 - 网页/API 可将免唤醒追问窗口设置为 5 到 120 秒，重启后保持并逐轮生效。
 - 云端断开后退出，由 systemd 自动重建会话。
-- `shake_head` 工具调用 `/usr/bin/ai-toy_app motor head_lr 2` 并回传执行结果。
+- `shake_head` 工具固定调用低速 `/usr/bin/ai-toy_app motor head_lr 1`；左右范围
+  为 `30°`，轨迹为 `右 -> 左 -> 中`，不再执行六段大幅往返。
 - `nod_head` 工具调用 `/usr/bin/ai-toy_app motor head_ud 2`；头部动作与
   FastAPI 共用原生跨进程锁和停止机制。
 - `wag_tail` 软件路径固定调用低速 `/usr/bin/ai-toy_app motor tail_lr 1`，但
@@ -80,6 +81,7 @@
 | 真人连续追问和真人插话体验 | 待最终现场主观确认 |
 | 两次冷启动后的服务、网络和模型自动恢复 | 通过 |
 | FastAPI 摇头与点头 | 通过；用户现场确认真实动作成功 |
+| 低速 30 度三段摇头 | 通过；约 3.8 秒完成，用户确认无抽搐且幅度合适 |
 | FastAPI 中途停止 | 通过；运行中动作停止并回到空闲状态 |
 | 并发动作拒绝 | 通过；第二个并发动作返回 `409` |
 | 尾部软件接口与默认禁用 | 通过；关闭时 API 返回 `501`，状态为 `disabled`，未驱动硬件 |
@@ -123,12 +125,18 @@
 - 天气、电量等 Function Calling 的完整云端调用日志留档。
 - 修复后尾部的 GPIO、方向、限位、堵转、温升、停止和重复动作验收。
 
+旧 `toy_motor.service` 已设为 `disabled/inactive`。日志确认其上游
+`toy_main.service` 会周期性发布 DDS 自主动作，若与本项目原生程序同时运行会
+绕过电机锁并造成双控制；需要恢复厂商电机服务时，应先停用本项目的真机动作入口。
+
 ## 2026-08-02 电机回退点
 
 - Git 提交 `b8f7a56`：固定头部动作和停止接口检查点。
 - K1 `/usr/bin/ai-toy_app.pre-head-motion`
 - K1 `/usr/bin/ai-toy_app.pre-head-map-fix`
 - K1 `/usr/bin/ai-toy_app.pre-tail-interface`
+- K1 `/usr/bin/ai-toy_app.pre-shake-smoothing-20260802-202510`
+- K1 `examples/low_load_solution/linux_k1/build/volc_conv_ai_k1_demo.pre-shake-smoothing-20260802-202510`
 
 ## 2026-07-30 回退点
 

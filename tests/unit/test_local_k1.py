@@ -83,7 +83,7 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
 
     assert stopped is False
     assert runner.calls == [
-        ("/usr/bin/ai-toy_app", ("motor", "head_lr", "2")),
+        ("/usr/bin/ai-toy_app", ("motor", "head_lr", "1")),
         ("/usr/bin/ai-toy_app", ("motor", "head_ud", "2")),
         ("/usr/bin/ai-toy_app", ("motor", "stop")),
     ]

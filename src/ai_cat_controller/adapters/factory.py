@@ -13,7 +13,7 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
 
     hardware_binary = str(settings.hardware_binary)
     hardware_commands = {
-        ("motor", "head_lr", "2"),
+        ("motor", "head_lr", "1"),
         ("motor", "head_ud", "2"),
         ("motor", "stop"),
     }

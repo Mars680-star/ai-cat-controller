@@ -72,7 +72,7 @@ cannot override native motor parameters. The fixed mappings are:
 
 | API | Local K1 command | Availability |
 |---|---|---|
-| `/motion/head/shake` | `/usr/bin/ai-toy_app motor head_lr 2` | Enabled after board validation. |
+| `/motion/head/shake` | `/usr/bin/ai-toy_app motor head_lr 1` | Enabled after board validation. |
 | `/motion/head/nod` | `/usr/bin/ai-toy_app motor head_ud 2` | Enabled after board validation. |
 | `/motion/tail/wag` | `/usr/bin/ai-toy_app motor tail_lr 1` | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
 | `/motion/stop` | `/usr/bin/ai-toy_app motor stop` | Idempotent; also stops a voice-started motor process. |

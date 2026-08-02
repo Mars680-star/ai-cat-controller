@@ -38,7 +38,7 @@ def test_local_k1_head_motion_uses_allowlisted_command(
         )
 
     assert response.status_code == 202
-    assert ("/usr/bin/ai-toy_app", ("motor", "head_lr", "2")) in calls
+    assert ("/usr/bin/ai-toy_app", ("motor", "head_lr", "1")) in calls
 
 
 def test_local_k1_tail_motion_remains_disabled() -> None:

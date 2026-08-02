@@ -33,8 +33,16 @@ def test_motor_source_uses_validated_head_and_provisional_tail_mappings() -> Non
     assert ".dir_gpio = 35" in head_ud
     assert ".enable_gpio = 36" in head_ud
     assert ".stop_gpio = 82" in head_ud
+    assert ".constant_range = 20" in head_ud
     tail_lr = source.split('"tail_lr"', maxsplit=1)[1].split("},\n    },", maxsplit=1)[0]
     assert ".step_gpio = 37" in tail_lr
     assert ".dir_gpio = 38" in tail_lr
     assert ".enable_gpio = 39" in tail_lr
     assert ".stop_gpio = 61" in tail_lr
+    assert ".constant_range = 50" in tail_lr
+
+    head_lr = source.split('"head_lr"', maxsplit=1)[1].split("},\n    },", maxsplit=1)[0]
+    assert ".constant_range = 30" in head_lr
+    assert "{180.0f, 0.0f, 90.0f}" in source
+    assert "75.0f" not in source
+    assert "105.0f" not in source
