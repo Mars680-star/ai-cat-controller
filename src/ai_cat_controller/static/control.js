@@ -31,6 +31,16 @@
     connectionNetwork: $("#connection-network"),
     connectionNetworkName: $("#connection-network-name"),
     connectionLastSeen: $("#connection-last-seen"),
+    connectionLastSeenSource: $("#connection-last-seen-source"),
+    deviceStatusTitle: $("#device-status-title"),
+    deviceStatusDescription: $("#device-status-description"),
+    realDeviceStatus: $("#real-device-status"),
+    realBatteryPercent: $("#real-battery-percent"),
+    realBatteryAvailability: $("#real-battery-availability"),
+    realBatteryStatus: $("#real-battery-status"),
+    realBatteryVoltage: $("#real-battery-voltage"),
+    realChargerOnline: $("#real-charger-online"),
+    realBatteryPresent: $("#real-battery-present"),
     deviceStatusForm: $("#device-status-form"),
     mockOnline: $("#mock-online"),
     mockNetworkStatus: $("#mock-network-status"),
@@ -342,20 +352,54 @@
 
   function renderHardwareStatus(status) {
     state.hardwareStatus = status;
-    if (status.adapter_mode !== "local_k1") {
+    const isLocalK1 = status.adapter_mode === "local_k1";
+    ui.realDeviceStatus.classList.toggle("hidden", !isLocalK1);
+    ui.deviceStatusForm.classList.toggle("hidden", isLocalK1);
+    ui.reconnect.classList.toggle("hidden", isLocalK1);
+    ui.deviceStatusTitle.textContent = isLocalK1
+      ? "真机电源状态"
+      : "设备状态模拟";
+    ui.deviceStatusDescription.textContent = isLocalK1
+      ? "直接读取 K1 电池与充电芯片，每 5 秒更新"
+      : "用于验证断网、重连和电量显示";
+    ui.connectionLastSeenSource.textContent = isLocalK1
+      ? "真机实时状态"
+      : "Mock 状态";
+
+    if (!isLocalK1) {
       return;
     }
+
+    ui.connectionLastSeen.textContent = formatDate(new Date().toISOString());
+    ui.realChargerOnline.textContent = status.charger_online === null
+      ? "未知"
+      : status.charger_online ? "已连接" : "未连接";
+    ui.realBatteryPresent.textContent = status.battery_present === null
+      ? "电池检测状态未知"
+      : status.battery_present ? "电池已安装" : "未检测到电池";
+
     if (!status.battery_available || status.battery_percent === null) {
       ui.homeBattery.textContent = "--";
       ui.homeCharging.textContent = status.battery_error || "电池不可用";
+      ui.realBatteryPercent.textContent = "--";
+      ui.realBatteryAvailability.textContent = status.battery_error || "电池不可用";
+      ui.realBatteryStatus.textContent = "不可用";
+      ui.realBatteryVoltage.textContent = "--";
       return;
     }
-    ui.homeBattery.textContent = `${status.battery_percent}%`;
+
     const stateText = batteryStateLabels[status.battery_status] || "状态未知";
     const voltageText = status.battery_voltage_mv === null
       ? ""
       : ` · ${(status.battery_voltage_mv / 1000).toFixed(2)} V`;
+    ui.homeBattery.textContent = `${status.battery_percent}%`;
     ui.homeCharging.textContent = `${stateText}${voltageText}`;
+    ui.realBatteryPercent.textContent = `${status.battery_percent}%`;
+    ui.realBatteryAvailability.textContent = "电池数据来自 K1";
+    ui.realBatteryStatus.textContent = stateText;
+    ui.realBatteryVoltage.textContent = status.battery_voltage_mv === null
+      ? "电压数据不可用"
+      : `${(status.battery_voltage_mv / 1000).toFixed(2)} V`;
   }
 
   async function refreshDashboard() {

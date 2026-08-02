@@ -19,6 +19,8 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert "安全预设动作" in response.text
     assert "真机语音状态" in response.text
     assert "开始或继续聆听" in response.text
+    assert 'id="real-device-status"' in response.text
+    assert 'id="real-battery-percent"' in response.text
     assert "https://" not in response.text
     assert "cdn" not in response.text.lower()
 
@@ -29,6 +31,8 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert script.status_code == 200
     assert 'apiRequest("/api/v1/device/status")' in script.text
     assert "batteryStateLabels" in script.text
+    assert 'realDeviceStatus.classList.toggle("hidden", !isLocalK1)' in script.text
+    assert 'deviceStatusForm.classList.toggle("hidden", isLocalK1)' in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 

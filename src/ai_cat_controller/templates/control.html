@@ -132,16 +132,33 @@
             <article class="metric">
               <span>最后在线</span>
               <strong id="connection-last-seen">--</strong>
-              <small>Mock 状态</small>
+              <small id="connection-last-seen-source">Mock 状态</small>
             </article>
           </div>
 
           <div class="section-heading">
             <div>
-              <h3>设备状态模拟</h3>
-              <p>用于验证断网、重连和电量显示</p>
+              <h3 id="device-status-title">设备状态模拟</h3>
+              <p id="device-status-description">用于验证断网、重连和电量显示</p>
             </div>
             <button id="reconnect-button" class="button secondary" type="button">模拟重连</button>
+          </div>
+          <div id="real-device-status" class="metric-grid hidden">
+            <article class="metric accent-yellow">
+              <span>实时电量</span>
+              <strong id="real-battery-percent">--</strong>
+              <small id="real-battery-availability">等待真机数据</small>
+            </article>
+            <article class="metric">
+              <span>电池状态</span>
+              <strong id="real-battery-status">--</strong>
+              <small id="real-battery-voltage">--</small>
+            </article>
+            <article class="metric">
+              <span>充电器</span>
+              <strong id="real-charger-online">--</strong>
+              <small id="real-battery-present">--</small>
+            </article>
           </div>
           <form id="device-status-form" class="device-state-form">
             <label class="toggle-row">
@@ -401,6 +418,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js" defer></script>
+  <script src="/static/control.js?v=20260802-2" defer></script>
 </body>
 </html>
