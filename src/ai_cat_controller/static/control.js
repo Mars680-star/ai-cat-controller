@@ -91,6 +91,8 @@
     settingsName: $("#settings-name"),
     settingsVolume: $("#settings-volume"),
     settingsVolumeValue: $("#settings-volume-value"),
+    settingsFollowUp: $("#settings-follow-up"),
+    settingsFollowUpValue: $("#settings-follow-up-value"),
     settingsApiKey: $("#settings-api-key"),
     feedbackForm: $("#feedback-form"),
     feedbackCategory: $("#feedback-category"),
@@ -117,6 +119,7 @@
     dialogsRefreshing: false,
     voiceStatus: null,
     hardwareStatus: null,
+    dialogConfig: null,
   };
 
   const statusLabels = {
@@ -430,11 +433,21 @@
       refreshActions(),
       refreshIntimacy(),
       refreshDialogs(),
+      refreshDialogConfig(),
     ]);
     const failed = results.find((result) => result.status === "rejected");
     if (failed) {
       throw failed.reason;
     }
+  }
+
+  async function refreshDialogConfig() {
+    const payload = await apiRequest("/api/v1/dialog/config");
+    state.dialogConfig = payload.data;
+    ui.settingsFollowUp.min = payload.data.minimum_seconds;
+    ui.settingsFollowUp.max = payload.data.maximum_seconds;
+    ui.settingsFollowUp.value = payload.data.follow_up_seconds;
+    ui.settingsFollowUpValue.textContent = `${payload.data.follow_up_seconds} 秒`;
   }
 
   async function bindPet() {
@@ -770,17 +783,25 @@
   async function saveSettings() {
     state.apiKey = ui.settingsApiKey.value.trim();
     ui.loginApiKey.value = state.apiKey;
-    await apiRequest(
-      `/api/v1/pets/${encodeURIComponent(state.petId)}/settings`,
-      {
+    await Promise.all([
+      apiRequest(
+        `/api/v1/pets/${encodeURIComponent(state.petId)}/settings`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: ui.settingsName.value.trim(),
+            volume: Number(ui.settingsVolume.value),
+          }),
+        },
+      ),
+      apiRequest("/api/v1/dialog/config", {
         method: "PATCH",
         body: JSON.stringify({
-          name: ui.settingsName.value.trim(),
-          volume: Number(ui.settingsVolume.value),
+          follow_up_seconds: Number(ui.settingsFollowUp.value),
         }),
-      },
-    );
-    await refreshDashboard();
+      }),
+    ]);
+    await Promise.all([refreshDashboard(), refreshDialogConfig()]);
     showToast("设置已保存");
   }
 
@@ -894,6 +915,9 @@
   });
   ui.settingsVolume.addEventListener("input", () => {
     ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%`;
+  });
+  ui.settingsFollowUp.addEventListener("input", () => {
+    ui.settingsFollowUpValue.textContent = `${ui.settingsFollowUp.value} 秒`;
   });
   ui.settingsApiKey.addEventListener("input", () => {
     state.apiKey = ui.settingsApiKey.value.trim();

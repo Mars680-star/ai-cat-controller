@@ -11,9 +11,11 @@ and Function Calling implementations for `shake_head`, weather lookup and
 `get_battery_status`. The battery tool reads the K1 `power_supply` sysfs values
 at call time, so the model only speaks current device data. A follow-up starts
 only after buffered TTS has drained; the short ready tone then opens a fresh
-30-second capture window. It also contains a repeated barge-in guard that ends
-a session when acoustic echo causes three rapid answer-to-listening
-transitions. Final cloud transcripts are appended to
+capture window. Its duration is read from
+`/var/lib/ai-cat-controller/dialog-runtime-config.json` for every turn, with a
+validated 5-120 second range and a 30-second fallback. It also contains a
+repeated barge-in guard that ends a session when acoustic echo causes three
+rapid answer-to-listening transitions. Final cloud transcripts are appended to
 `/var/lib/ai-cat-controller/dialog-events.jsonl` for FastAPI to import into the
 bound pet's persistent history.
 

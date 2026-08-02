@@ -15,6 +15,7 @@ def settings(tmp_path) -> Settings:
         motion_cooldown_seconds=0.0,
         service_status_cache_seconds=0.0,
         data_path=tmp_path / "ai-cat-test.db",
+        dialog_config_path=tmp_path / "dialog-runtime-config.json",
     )
 
 

@@ -361,6 +361,11 @@
             <input id="settings-volume" type="range" min="0" max="100" value="60">
           </label>
           <label>
+            <span>免唤醒追问时间 <output id="settings-follow-up-value">30 秒</output></span>
+            <input id="settings-follow-up" type="range"
+                   min="5" max="120" step="5" value="30">
+          </label>
+          <label>
             <span>服务 API Key <small>仅当前页面内存</small></span>
             <input id="settings-api-key" type="password" autocomplete="off"
                    placeholder="默认 Mock 模式留空">
@@ -418,6 +423,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260802-3" defer></script>
+  <script src="/static/control.js?v=20260802-4" defer></script>
 </body>
 </html>

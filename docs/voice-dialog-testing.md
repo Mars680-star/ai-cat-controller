@@ -149,8 +149,11 @@ Microphone frames are not uploaded while a Function Calling tool is active or
 while TTS audio is physically playing. After the cloud turn finishes, the
 dialogue service waits for the local ring buffer and PulseAudio playback queue
 to drain, plays a 140 ms follow-up tone, clears stale cloud/local capture data,
-and opens a fresh 30-second follow-up window. This blocks motor noise and
-speaker-loop self-interruption without losing the start of the next question.
+and opens a fresh follow-up window. The duration is configured through
+`PATCH /api/v1/dialog/config` or the browser settings page, persisted in
+`/var/lib/ai-cat-controller/dialog-runtime-config.json`, and re-read at the
+start of every window. This blocks motor noise and speaker-loop
+self-interruption without losing the start of the next question.
 
 The dialog process synchronously plays a 350 ms confirmation tone after a wake
 signal, then opens microphone upload. Users should begin the question after

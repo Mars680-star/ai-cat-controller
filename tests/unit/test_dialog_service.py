@@ -128,3 +128,19 @@ async def test_shutdown_does_not_interrupt_an_already_ended_native_session() -> 
     await service.shutdown()
 
     assert adapter.interrupt_count == 1
+
+
+@pytest.mark.asyncio
+async def test_follow_up_config_survives_service_recreation(tmp_path) -> None:
+    config_path = tmp_path / "dialog-runtime-config.json"
+    adapter = MockAiCatAdapter(SERVICES)
+    first_service = DialogService(adapter, config_path)
+
+    saved = await first_service.update_config(65)
+    second_service = DialogService(adapter, config_path)
+    restored = await second_service.get_config()
+
+    assert saved["follow_up_seconds"] == 65
+    assert restored["follow_up_seconds"] == 65
+    assert restored["source"] == "persisted"
+    assert config_path.stat().st_mode & 0o777 == 0o600

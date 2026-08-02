@@ -49,6 +49,7 @@
 - `/run/ai-cat/dialog-status.json` 输出
   `ready/listening/thinking/answering/followup` 等实时阶段。
 - FastAPI `/api/v1/dialog/*` 和浏览器页面可查看状态、开始聆听和打断。
+- 网页/API 可将免唤醒追问窗口设置为 5 到 120 秒，重启后保持并逐轮生效。
 - 云端断开后退出，由 systemd 自动重建会话。
 - `shake_head` 工具调用 `/usr/bin/ai-toy_app motor head_lr 2` 并回传执行结果。
 - `get_battery_status` 工具实时读取电量、充电状态、电压和充电器在线状态。

@@ -7,11 +7,44 @@ from ai_cat_controller.core.state import AppServices
 from ai_cat_controller.schemas.common import ApiResponse
 from ai_cat_controller.schemas.dialog import (
     DialogActionData,
+    DialogConfigData,
+    DialogConfigUpdate,
     DialogRequest,
     DialogStatusData,
 )
 
 router = APIRouter(prefix="/dialog", tags=["对话"])
+
+
+@router.get(
+    "/config",
+    response_model=ApiResponse[DialogConfigData],
+    summary="获取对话运行配置",
+)
+async def dialog_config(
+    services: AppServices = Depends(get_services),
+) -> ApiResponse[DialogConfigData]:
+    result = await services.dialog.get_config()
+    return ApiResponse(
+        message="对话配置获取成功",
+        data=DialogConfigData.model_validate(result),
+    )
+
+
+@router.patch(
+    "/config",
+    response_model=ApiResponse[DialogConfigData],
+    summary="更新对话运行配置",
+)
+async def update_dialog_config(
+    request: DialogConfigUpdate,
+    services: AppServices = Depends(get_services),
+) -> ApiResponse[DialogConfigData]:
+    result = await services.dialog.update_config(request.follow_up_seconds)
+    return ApiResponse(
+        message="追问时间已保存，将在下一次追问窗口生效",
+        data=DialogConfigData.model_validate(result),
+    )
 
 
 @router.get(

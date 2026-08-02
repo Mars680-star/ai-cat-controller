@@ -37,3 +37,14 @@ class DialogStatusData(BaseModel):
     sequence: int
     source: str
     stale: bool
+
+
+class DialogConfigUpdate(BaseModel):
+    follow_up_seconds: int = Field(ge=5, le=120)
+
+
+class DialogConfigData(BaseModel):
+    follow_up_seconds: int = Field(ge=5, le=120)
+    minimum_seconds: int = 5
+    maximum_seconds: int = 120
+    source: str

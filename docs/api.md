@@ -36,6 +36,8 @@ Error:
 | POST | `/api/v1/motion/head/nod` | Accept a head-nod task. |
 | POST | `/api/v1/motion/tail/wag` | Accept a tail-wag task. |
 | POST | `/api/v1/motion/stop` | Cancel current motion. |
+| GET | `/api/v1/dialog/config` | Read the persisted follow-up window. |
+| PATCH | `/api/v1/dialog/config` | Set the follow-up window to `5..120` seconds. |
 | POST | `/api/v1/dialog/wake` | Enter dialog state. |
 | POST | `/api/v1/dialog/interrupt` | Interrupt dialog state. |
 | POST | `/api/v1/auth/mock-login` | 创建 Mock 用户会话。 |

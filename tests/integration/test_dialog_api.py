@@ -27,3 +27,34 @@ def test_dialog_status_is_visible(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["data"]["state"] == "ready"
     assert response.json()["data"]["source"] == "mock"
+
+
+def test_dialog_follow_up_config_is_persisted(client: TestClient) -> None:
+    initial = client.get("/api/v1/dialog/config")
+    updated = client.patch(
+        "/api/v1/dialog/config",
+        json={"follow_up_seconds": 45},
+    )
+    current = client.get("/api/v1/dialog/config")
+
+    assert initial.status_code == 200
+    assert initial.json()["data"]["follow_up_seconds"] == 30
+    assert initial.json()["data"]["source"] == "default"
+    assert updated.status_code == 200
+    assert updated.json()["data"]["follow_up_seconds"] == 45
+    assert updated.json()["data"]["source"] == "persisted"
+    assert current.json()["data"]["follow_up_seconds"] == 45
+
+
+def test_dialog_follow_up_config_rejects_unsafe_range(client: TestClient) -> None:
+    too_short = client.patch(
+        "/api/v1/dialog/config",
+        json={"follow_up_seconds": 4},
+    )
+    too_long = client.patch(
+        "/api/v1/dialog/config",
+        json={"follow_up_seconds": 121},
+    )
+
+    assert too_short.status_code == 422
+    assert too_long.status_code == 422

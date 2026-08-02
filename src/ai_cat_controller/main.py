@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             command_timeout_seconds=resolved_settings.command_timeout_seconds,
             cooldown_seconds=resolved_settings.motion_cooldown_seconds,
         )
-        dialog = DialogService(adapter)
+        dialog = DialogService(adapter, resolved_settings.dialog_config_path)
         device = DeviceService(adapter, resolved_settings, motion, dialog)
         product = ProductMockService(
             SQLiteRepository(resolved_settings.data_path),

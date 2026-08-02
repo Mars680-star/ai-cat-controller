@@ -20,6 +20,7 @@ AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
+AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
 
 Copy `deploy/systemd/ai-cat-controller.service.example`, replace every
