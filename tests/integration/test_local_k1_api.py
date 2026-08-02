@@ -58,4 +58,65 @@ def test_local_k1_tail_motion_remains_disabled() -> None:
         )
 
     assert response.status_code == 501
-    assert "尾部硬件异常" in response.json()["message"]
+    assert "尾部动作默认禁用" in response.json()["message"]
+
+
+def test_local_k1_nod_motion_uses_fixed_command(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def fake_run(
+        self: CommandRunner, executable: str, args: list[str]
+    ) -> CommandResult:
+        del self
+        calls.append((executable, tuple(args)))
+        return CommandResult(0, "motion completed", "", False)
+
+    monkeypatch.setattr(CommandRunner, "run", fake_run)
+    app = create_app(
+        Settings(
+            hardware_driver="local_k1",
+            api_key_enabled=True,
+            api_key="test-only-key",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/motion/head/nod",
+            headers={"X-API-Key": "test-only-key"},
+            json={"intensity": 0.5, "duration_ms": 600},
+        )
+
+    assert response.status_code == 202
+    assert ("/usr/bin/ai-toy_app", ("motor", "head_ud", "2")) in calls
+
+
+def test_local_k1_tail_motion_uses_low_speed_only_when_enabled(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def fake_run(
+        self: CommandRunner, executable: str, args: list[str]
+    ) -> CommandResult:
+        del self
+        calls.append((executable, tuple(args)))
+        return CommandResult(0, "motion completed", "", False)
+
+    monkeypatch.setattr(CommandRunner, "run", fake_run)
+    app = create_app(
+        Settings(
+            hardware_driver="local_k1",
+            api_key_enabled=True,
+            api_key="test-only-key",
+            enable_tail_motion=True,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/motion/tail/wag",
+            headers={"X-API-Key": "test-only-key"},
+            json={"intensity": 1.0, "duration_ms": 3000},
+        )
+
+    assert response.status_code == 202
+    assert ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "1")) in calls

@@ -15,3 +15,4 @@ def test_dialog_service_preserves_runtime_status_across_restart() -> None:
     assert "RuntimeDirectory=ai-cat" in unit
     assert "RuntimeDirectoryPreserve=restart" in unit
     assert "Restart=always" in unit
+    assert "EnvironmentFile=-/etc/ai-cat-controller.env" in unit

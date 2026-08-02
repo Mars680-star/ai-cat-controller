@@ -33,6 +33,7 @@ class Settings(BaseModel):
 
     command_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
+    enable_tail_motion: bool = False
     service_status_cache_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
     data_path: Path = Path(".data/ai-cat-mock.db")
     intimacy_daily_cap: int = Field(default=20, ge=1, le=100)
@@ -102,6 +103,7 @@ class Settings(BaseModel):
             "api_key": source.get("AI_CAT_API_KEY", ""),
             "command_timeout_seconds": source.get("AI_CAT_COMMAND_TIMEOUT_SECONDS", "12.0"),
             "motion_cooldown_seconds": source.get("AI_CAT_MOTION_COOLDOWN_SECONDS", "0.2"),
+            "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
             "service_status_cache_seconds": source.get(
                 "AI_CAT_SERVICE_STATUS_CACHE_SECONDS", "2.0"
             ),

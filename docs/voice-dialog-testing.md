@@ -132,13 +132,26 @@ A fresh wake also clears the cloud audio buffer before post-tone capture begins.
 `volc-conv-ai.service` uses `RuntimeDirectoryPreserve=restart`, so the last
 `recovering` state remains readable while systemd starts a replacement process.
 
-The device implements `shake_head`, `get_weather` aliases and
-`get_battery_status`. The battery tool reads capacity, fuel-gauge state,
+The device implements `shake_head`, `nod_head`, gated `wag_tail`, weather
+aliases and `get_battery_status`. The battery tool reads capacity, fuel-gauge state,
 voltage and charger-online state directly from K1 sysfs for every call. Weather
 accepts `location` or `city`, caches resolved coordinates, and returns a
 concise current/day forecast. Any other Function Calling name receives an
 immediate unsupported-tool result so the cloud agent can explain the missing
 capability instead of waiting until the 30-second watchdog expires.
+
+The three motion tools must be parameterless. The device ignores model-provided
+motor details and maps accepted tools to fixed native commands:
+
+- `shake_head` -> `motor head_lr 2`
+- `nod_head` -> `motor head_ud 2`
+- `wag_tail` -> `motor tail_lr 1`, only when
+  `AI_CAT_ENABLE_TAIL_MOTION=true`
+
+Configure `shake_head` for requests such as 摇头、左右摆头 or 否定，and
+`nod_head` for 点头、上下点头 or 同意. Do not expose `wag_tail` in the cloud
+agent until the repaired tail passes `tail-motion-validation.md`; when disabled,
+the native dialogue process returns a clear rejection without starting a motor.
 
 Configure one Function Calling tool on the Volcengine agent:
 

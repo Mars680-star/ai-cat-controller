@@ -1,8 +1,8 @@
 # AI Cat Controller
 
 SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock、浏览器端
-小程序流程替身、完整 Mock 适配器和保守的 Local K1 对话控制；默认配置不会
-控制真实硬件。
+小程序流程替身、完整 Mock 适配器和受限的 Local K1 真机控制；未完成硬件验收
+的尾部动作默认关闭。
 
 ## 更新记录
 
@@ -28,7 +28,12 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   音频缓存。
 - 保存低负载 WebSocket 传输层最小补丁，并为语音 systemd 服务启用运行时
   状态目录跨自动重启保留，网页重连期间不再短暂显示“状态不可用”。
-- K1 实测 API 与 sysfs 同步，自动测试更新为 `84 passed`。
+- 增加 Local K1 固定摇头、点头和停止接口；所有动作共用跨进程锁，停止或超时
+  会先请求进程正常退出，使原生程序将电机切回 `MOTOR_MODE_IDLE`。
+- 增加维修后使用的低速摇尾接口；网页、REST API 和语音 Function Calling
+  共用 `AI_CAT_ENABLE_TAIL_MOTION` 开关，默认关闭且不接受任意电机参数。
+- K1 实测 API 与 sysfs 同步，摇头、点头和中途停止通过真机验收；自动测试更新为
+  `95 passed`。尾部机械动作尚未测试。
 
 ### 2026-07-30
 
@@ -67,11 +72,14 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - Local K1 固定 systemd 服务状态查询、对话唤醒/打断和实时阶段显示。
 - Local K1 网页配置免唤醒追问时间，设备重启后保持设置。
 - Local K1 真实电量、充电状态、电池电压和充电器在线检测，以及语音查询。
+- Local K1 固定摇头、点头和停止动作，以及默认关闭的维修后摇尾接口。
 - 火山引擎 K1 补丁、唤醒词入口和硬件应用源码。
 
-Local K1 的真实电机动作仍返回 `501`。对话 API 只允许向
-`volc-conv-ai.service` 发送固定的 `SIGUSR1`/`SIGUSR2`；产品 Mock 的对话
-仍是本地模板，逻辑音色 ID 未映射到火山引擎真实音色。
+Local K1 只执行固定的 `head_lr 2`、`head_ud 2`、`motor stop` 命令。摇尾只在
+维修并完成低速验收后设置 `AI_CAT_ENABLE_TAIL_MOTION=true` 才开放固定的
+`tail_lr 1`；默认返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
+固定的 `SIGUSR1`/`SIGUSR2`；产品 Mock 的对话仍是本地模板，逻辑音色 ID
+未映射到火山引擎真实音色。
 
 ## 目录
 
@@ -148,6 +156,7 @@ pytest -q
 export AI_CAT_HARDWARE_DRIVER=local_k1
 export AI_CAT_API_KEY_ENABLED=true
 export AI_CAT_API_KEY='替换为随机密钥'
+export AI_CAT_ENABLE_TAIL_MOTION=false
 ```
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
@@ -166,8 +175,10 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - Local K1 只允许固定服务的 `is-active`、`is-enabled`，以及对话服务的
   `SIGUSR1`/`SIGUSR2`。
 - 不执行 `systemctl start/stop/restart`，也不接受请求传入任意信号或服务名。
-- 不执行真实电机、DDS 或 ROS2 操作。
-- 首次开放真机动作前，必须确认独立停止接口并把设备放在安全空旷区域。
+- 真机电机只接受审核过的固定动作，不接受 HTTP 或 Function Calling 传入 GPIO、
+  方向、角度、速度、持续时间或 Shell 参数。
+- 尾部动作必须在硬件修复、低速直连和停止验收全部通过后才允许开启配置。
+- 不执行 DDS 或 ROS2 操作。
 - 正式远程控制需要 HTTPS、鉴权和受控中转，不能直接暴露公网端口。
 
 ## 火山引擎 SDK

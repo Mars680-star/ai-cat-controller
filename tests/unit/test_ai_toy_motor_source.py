@@ -23,3 +23,18 @@ def test_motor_source_restricts_speed_and_validates_stop_pid() -> None:
     assert "value < 1 || value > 2" in source
     assert 'strcmp(cursor, "motor") != 0' in source
     assert "pid_is_motor_process(pid)" in source
+
+
+def test_motor_source_uses_validated_head_and_provisional_tail_mappings() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    head_ud = source.split('"head_ud"', maxsplit=1)[1].split("},\n    },", maxsplit=1)[0]
+    assert ".step_gpio = 34" in head_ud
+    assert ".dir_gpio = 35" in head_ud
+    assert ".enable_gpio = 36" in head_ud
+    assert ".stop_gpio = 82" in head_ud
+    tail_lr = source.split('"tail_lr"', maxsplit=1)[1].split("},\n    },", maxsplit=1)[0]
+    assert ".step_gpio = 37" in tail_lr
+    assert ".dir_gpio = 38" in tail_lr
+    assert ".enable_gpio = 39" in tail_lr
+    assert ".stop_gpio = 61" in tail_lr

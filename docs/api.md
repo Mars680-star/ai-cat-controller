@@ -67,7 +67,19 @@ Motion body:
 ```
 
 `intensity` is `0.1..1.0`; `duration_ms` is `100..3000`. Motion acceptance
-returns `202`. Unsupported Local K1 operations return `501`.
+returns `202`. Local K1 uses these fields only for request validation; callers
+cannot override native motor parameters. The fixed mappings are:
+
+| API | Local K1 command | Availability |
+|---|---|---|
+| `/motion/head/shake` | `/usr/bin/ai-toy_app motor head_lr 2` | Enabled after board validation. |
+| `/motion/head/nod` | `/usr/bin/ai-toy_app motor head_ud 2` | Enabled after board validation. |
+| `/motion/tail/wag` | `/usr/bin/ai-toy_app motor tail_lr 1` | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
+| `/motion/stop` | `/usr/bin/ai-toy_app motor stop` | Idempotent; also stops a voice-started motor process. |
+
+Overlapping motion returns `409`. An unavailable tail action returns `501`.
+Timeout and cancellation first send `SIGTERM`; the native routine idles the
+motor before exit, with `SIGKILL` used only after the grace period expires.
 
 When authentication is enabled, send:
 

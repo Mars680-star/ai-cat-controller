@@ -12,6 +12,14 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
         return MockAiCatAdapter(settings.service_names)
 
     hardware_binary = str(settings.hardware_binary)
+    hardware_commands = {
+        ("motor", "head_lr", "2"),
+        ("motor", "head_ud", "2"),
+        ("motor", "stop"),
+    }
+    if settings.enable_tail_motion:
+        hardware_commands.add(("motor", "tail_lr", "1"))
+
     runner = CommandRunner(
         allowed_executables=frozenset(
             {"/usr/bin/systemctl", "/bin/systemctl", hardware_binary}
@@ -21,13 +29,7 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
             settings.dialog_service: frozenset({"SIGUSR1", "SIGUSR2"})
         },
         allowed_commands={
-            hardware_binary: frozenset(
-                {
-                    ("motor", "head_lr", "2"),
-                    ("motor", "head_ud", "2"),
-                    ("motor", "stop"),
-                }
-            )
+            hardware_binary: frozenset(hardware_commands)
         },
         timeout_seconds=settings.command_timeout_seconds,
     )

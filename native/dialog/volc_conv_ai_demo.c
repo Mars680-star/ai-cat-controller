@@ -62,7 +62,7 @@
 #define LOCAL_VAD_START_FRAMES 2
 #define LOCAL_VAD_SILENCE_FRAMES 15
 #define LOCAL_VAD_MAX_UTTERANCE_MS 15000
-#define HEAD_SHAKE_COOLDOWN_MS 8000
+#define MOTOR_MOTION_COOLDOWN_MS 8000
 #define PLAYBACK_CAPTURE_GUARD_MS 350
 #define WAKE_TONE_DURATION_MS 350
 #define FOLLOW_UP_TONE_DURATION_MS 140
@@ -179,8 +179,8 @@ typedef struct {
 
 static pending_function_call_t pending_function_call;
 static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t head_motor_mutex = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t head_motion_last_started_ms = 0;
+static pthread_mutex_t motion_motor_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t motion_last_started_ms = 0;
 static pthread_once_t curl_init_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t weather_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char cached_weather_location[WEATHER_LOCATION_MAX_LEN];
@@ -1589,7 +1589,15 @@ cleanup:
     return ret;
 }
 
-static int __run_head_motion(const char* actuator) {
+static bool __tail_motion_enabled(void) {
+    const char* value = getenv("AI_CAT_ENABLE_TAIL_MOTION");
+
+    return value != NULL && (
+        strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0
+    );
+}
+
+static int __run_motor_motion(const char* actuator, const char* speed) {
     /*
      * 使用固定可执行文件和固定参数，不经 shell 拼接用户输入，
      * 避免命令注入，并通过退出码判断电机动作是否成功。
@@ -1599,7 +1607,7 @@ static int __run_head_motion(const char* actuator) {
         (char*)executable,
         "motor",
         (char*)actuator,
-        "2",
+        (char*)speed,
         NULL,
     };
     pid_t pid;
@@ -1607,8 +1615,12 @@ static int __run_head_motion(const char* actuator) {
     int ret;
 
     if (
-        actuator == NULL ||
-        (strcmp(actuator, "head_lr") != 0 && strcmp(actuator, "head_ud") != 0)
+        actuator == NULL || speed == NULL ||
+        (
+            (strcmp(actuator, "head_lr") != 0 || strcmp(speed, "2") != 0) &&
+            (strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0) &&
+            (strcmp(actuator, "tail_lr") != 0 || strcmp(speed, "1") != 0)
+        )
     ) {
         return -1;
     }
@@ -1642,18 +1654,29 @@ static void* __run_function_call(void* arg) {
     }
     if (
         strcmp(task->name, "shake_head") == 0 ||
-        strcmp(task->name, "nod_head") == 0
+        strcmp(task->name, "nod_head") == 0 ||
+        strcmp(task->name, "wag_tail") == 0
     ) {
         bool is_nod = strcmp(task->name, "nod_head") == 0;
-        const char* action_name = is_nod ? "点头" : "摇头";
-        const char* actuator = is_nod ? "head_ud" : "head_lr";
+        bool is_tail = strcmp(task->name, "wag_tail") == 0;
+        const char* action_name = is_tail ? "摇尾" : (is_nod ? "点头" : "摇头");
+        const char* actuator = is_tail ? "tail_lr" : (is_nod ? "head_ud" : "head_lr");
+        const char* speed = is_tail ? "1" : "2";
         uint64_t now_ms;
-        if (pthread_mutex_trylock(&head_motor_mutex) != 0) {
+        if (is_tail && !__tail_motion_enabled()) {
             ret = 0;
             snprintf(
                 output,
                 sizeof(output),
-                "头部动作正在执行，本次重复请求已忽略"
+                "尾部动作尚未通过维修后验收，当前保持禁用"
+            );
+            printf("wag_tail rejected: AI_CAT_ENABLE_TAIL_MOTION is false\n");
+        } else if (pthread_mutex_trylock(&motion_motor_mutex) != 0) {
+            ret = 0;
+            snprintf(
+                output,
+                sizeof(output),
+                "电机动作正在执行，本次重复请求已忽略"
             );
             printf(
                 "duplicate %s ignored while motor is busy, call_id=%s\n",
@@ -1663,14 +1686,14 @@ static void* __run_function_call(void* arg) {
         } else {
             now_ms = __get_time_ms();
             if (
-                head_motion_last_started_ms != 0 &&
-                now_ms - head_motion_last_started_ms < HEAD_SHAKE_COOLDOWN_MS
+                motion_last_started_ms != 0 &&
+                now_ms - motion_last_started_ms < MOTOR_MOTION_COOLDOWN_MS
             ) {
                 ret = 0;
                 snprintf(
                     output,
                     sizeof(output),
-                    "刚刚已经完成头部动作，本次重复请求已忽略"
+                    "刚刚已经完成电机动作，本次重复请求已忽略"
                 );
                 printf(
                     "duplicate %s ignored during cooldown, call_id=%s\n",
@@ -1678,9 +1701,9 @@ static void* __run_function_call(void* arg) {
                     task->call_id
                 );
             } else {
-                head_motion_last_started_ms = now_ms;
+                motion_last_started_ms = now_ms;
                 printf("executing %s, call_id=%s\n", task->name, task->call_id);
-                ret = __run_head_motion(actuator);
+                ret = __run_motor_motion(actuator, speed);
                 snprintf(
                     output,
                     sizeof(output),
@@ -1689,7 +1712,7 @@ static void* __run_function_call(void* arg) {
                     ret == 0 ? "已完成" : "执行失败"
                 );
             }
-            pthread_mutex_unlock(&head_motor_mutex);
+            pthread_mutex_unlock(&motion_motor_mutex);
         }
     } else if (__is_battery_function(task->name)) {
         printf("executing %s, call_id=%s\n", task->name, task->call_id);

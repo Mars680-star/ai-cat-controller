@@ -1,8 +1,9 @@
 # K1 FastAPI deployment
 
-The service can run on K1 in either safe Mock mode or Local K1 mode. Local K1
-does not execute motion, but it can read dialog status and send two fixed
-signals to the existing dialog service.
+The service can run on K1 in either Mock mode or Local K1 mode. Local K1 reads
+dialog and battery status, sends two fixed signals to the dialogue service, and
+executes only the audited head-motion and stop commands. Tail motion remains
+disabled until repaired hardware passes manual validation.
 
 ## Install
 
@@ -19,6 +20,7 @@ AI_CAT_API_HOST=0.0.0.0
 AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
+AI_CAT_ENABLE_TAIL_MOTION=false
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
 AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
@@ -51,3 +53,11 @@ HTTPS and a controlled gateway.
 The browser test panel is available at `/control`. Its dialog-history view
 shows wake, listening, thinking, answering and follow-up states and provides
 fixed start/interrupt controls. See `voice-dialog-testing.md`.
+
+## Tail motion after repair
+
+Keep `AI_CAT_ENABLE_TAIL_MOTION=false` until every step in
+`tail-motion-validation.md` passes. The flag must be injected into both
+`ai-cat-controller.service` and `volc-conv-ai.service`; the tracked voice unit
+reads `/etc/ai-cat-controller.env`. After changing it, restart both services so
+the REST and Function Calling paths expose the same capability.

@@ -103,9 +103,9 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
         },
     },
     {
-        "tail_lr",
+        "head_ud",
         {
-            .motor_index = 2,
+            .motor_index = 3,
             .step_gpio = 34,
             .dir_gpio = 35,
             .enable_gpio = 36,
@@ -119,10 +119,11 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
             .range_steps = 0,
         },
     },
+    /* Provisional tail profile: keep remote access disabled until board validation. */
     {
-        "head_ud",
+        "tail_lr",
         {
-            .motor_index = 3,
+            .motor_index = 2,
             .step_gpio = 37,
             .dir_gpio = 38,
             .enable_gpio = 39,
@@ -145,7 +146,7 @@ static void print_usage(const char *prog)
     printf("  %s pm [count]\n", prog);
     printf("  %s wifi <scan|state|info|list|on|off|connect|disconnect|remove|mac> [args...]\n", prog);
     printf("  %s nfc [count]\n", prog);
-    printf("  %s motor [all|head_lr|tail_lr|head_ud] [speed]\n", prog);
+    printf("  %s motor [all|head_lr|head_ud|tail_lr] [speed]\n", prog);
     printf("  %s motor stop\n", prog);
     printf("  %s fan [speed_percent] [seconds]\n", prog);
     printf("  %s light_sensor [count]\n", prog);

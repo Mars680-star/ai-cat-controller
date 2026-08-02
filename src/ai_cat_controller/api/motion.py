@@ -62,7 +62,10 @@ async def nod_head(
     response_model=ApiResponse[MotionAcceptedData],
     status_code=status.HTTP_202_ACCEPTED,
     summary="摇尾",
-    description="提交固定摇尾预设；当前 Local K1 样机尾部硬件异常时返回 501。",
+    description=(
+        "提交固定低速摇尾预设；Local K1 默认返回 501，"
+        "仅在维修验收后通过 AI_CAT_ENABLE_TAIL_MOTION 显式开放。"
+    ),
 )
 async def wag_tail(
     request: MotionRequest,

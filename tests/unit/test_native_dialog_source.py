@@ -42,11 +42,14 @@ def test_prepare_sdk_installs_canonical_dialog_source() -> None:
     assert '"$REPO_DIR/native/dialog/volc_conv_ai_demo.c"' in script
 
 
-def test_native_dialog_uses_fixed_head_motion_commands() -> None:
+def test_native_dialog_uses_fixed_motion_commands() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'strcmp(task->name, "shake_head") == 0' in source
     assert 'strcmp(task->name, "nod_head") == 0' in source
+    assert 'strcmp(task->name, "wag_tail") == 0' in source
     assert 'strcmp(actuator, "head_lr") != 0' in source
     assert 'strcmp(actuator, "head_ud") != 0' in source
     assert 'const char* executable = "/usr/bin/ai-toy_app";' in source
+    assert 'getenv("AI_CAT_ENABLE_TAIL_MOTION")' in source
+    assert 'const char* speed = is_tail ? "1" : "2";' in source

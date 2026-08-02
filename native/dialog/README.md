@@ -13,8 +13,8 @@ detection, and separate `commit` from `response.create`.
 
 The file contains the K1 audio path, continuous conversation state machine,
 service-mode wake/interrupt signals, atomic status output, disconnect handling
-and Function Calling implementations for `shake_head`, weather lookup and
-`get_battery_status`. The battery tool reads the K1 `power_supply` sysfs values
+and Function Calling implementations for `shake_head`, `nod_head`, gated
+`wag_tail`, weather lookup and `get_battery_status`. The battery tool reads the K1 `power_supply` sysfs values
 at call time, so the model only speaks current device data. A follow-up starts
 only after buffered TTS has drained; the short ready tone then opens a fresh
 capture window. Its duration is read from
@@ -24,6 +24,12 @@ repeated barge-in guard that ends a session when acoustic echo causes three
 rapid answer-to-listening transitions. Final cloud transcripts are appended to
 `/var/lib/ai-cat-controller/dialog-events.jsonl` for FastAPI to import into the
 bound pet's persistent history.
+
+Head and tail Function Calling never accepts motor parameters from the model.
+They map to fixed native commands and share one motor mutex and cooldown. Tail
+requests are rejected unless `AI_CAT_ENABLE_TAIL_MOTION=true`; the systemd unit
+loads this value from `/etc/ai-cat-controller.env` so voice and FastAPI use the
+same gate.
 
 - `SIGUSR1`: start listening, or interrupt the current response and listen again.
 - `SIGUSR2`: interrupt the current response and end the continuous session.

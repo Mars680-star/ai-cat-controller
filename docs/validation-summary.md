@@ -4,6 +4,8 @@
 
 连续对话与 FastAPI 联调更新：2026-07-30
 
+真机头部动作与尾部接口更新：2026-08-02
+
 环境：SpaceMIT K1（riscv64）、Bianbu 2.2.1、ES8326/ES7243 音频设备
 
 ## 结论
@@ -16,7 +18,7 @@
 
 | 文件或目录 | 主要内容 |
 |---|---|
-| `examples/low_load_solution/macos/volc_conv_ai_demo.c` | 修复录放音和多线程缓冲；增加连续上行、播放排空后的 30 秒追问窗口、`SIGUSR1` 唤醒/继续、`SIGUSR2` 打断/结束、原子状态文件、断线退出重启和 `shake_head` Function Calling。 |
+| `examples/low_load_solution/macos/volc_conv_ai_demo.c` | 修复录放音和多线程缓冲；增加连续上行、播放排空后的追问窗口、`SIGUSR1`/`SIGUSR2`、原子状态、断线恢复，以及固定参数的摇头、点头和受开关保护的摇尾 Function Calling。 |
 | `examples/low_load_solution/linux_k1/CMakeLists.txt` | 新增 K1/riscv64 WebSocket 构建入口，禁用 x86 RTC，链接 PulseAudio 和系统 TLS 库。 |
 | `examples/low_load_solution/linux_k1/configs/conv_ai_config.example.json` | 增加脱敏的 K1 配置模板；实际密钥只保存在板端构建目录。 |
 | `examples/low_load_solution/linux_k1/README.md` | 增加构建、运行、Function Calling 和 systemd 使用说明。 |
@@ -52,6 +54,10 @@
 - 网页/API 可将免唤醒追问窗口设置为 5 到 120 秒，重启后保持并逐轮生效。
 - 云端断开后退出，由 systemd 自动重建会话。
 - `shake_head` 工具调用 `/usr/bin/ai-toy_app motor head_lr 2` 并回传执行结果。
+- `nod_head` 工具调用 `/usr/bin/ai-toy_app motor head_ud 2`；头部动作与
+  FastAPI 共用原生跨进程锁和停止机制。
+- `wag_tail` 软件路径固定调用低速 `/usr/bin/ai-toy_app motor tail_lr 1`，但
+  默认由 `AI_CAT_ENABLE_TAIL_MOTION=false` 拒绝，等待硬件维修后验收。
 - `get_battery_status` 工具实时读取电量、充电状态、电压和充电器在线状态。
 - 开机等待网络、DNS、PulseAudio 就绪后再连接云端。
 
@@ -73,7 +79,11 @@
 | FastAPI 状态、唤醒和打断 | 通过；K1 本机和局域网 HTTP 均验证 |
 | 真人连续追问和真人插话体验 | 待最终现场主观确认 |
 | 两次冷启动后的服务、网络和模型自动恢复 | 通过 |
-| 电机本地命令 | 通过 |
+| FastAPI 摇头与点头 | 通过；用户现场确认真实动作成功 |
+| FastAPI 中途停止 | 通过；运行中动作停止并回到空闲状态 |
+| 并发动作拒绝 | 通过；第二个并发动作返回 `409` |
+| 尾部软件接口与默认禁用 | 通过；关闭时 API 返回 `501`，状态为 `disabled`，未驱动硬件 |
+| 尾部真实机械动作 | 未测试；当前硬件故障，修复后按专项文档验收 |
 | `shake_head` 云端 Function Calling | 部分验证：处理代码和本地电机已验证，仍需保留一次云端调用日志作为完整证据 |
 | `get_battery_status` Function Calling | 部分验证：K1 编译、sysfs 读取及处理代码已验证，待控制台配置工具后完成真人语音验证 |
 
@@ -111,6 +121,14 @@
 - 不同麦克风、远场、强噪声和大量人员环境下的唤醒率与误唤醒率。
 - 真人在回答期间插话、30 秒追问窗口和网页状态提示的最终体验验收。
 - 天气、电量等 Function Calling 的完整云端调用日志留档。
+- 修复后尾部的 GPIO、方向、限位、堵转、温升、停止和重复动作验收。
+
+## 2026-08-02 电机回退点
+
+- Git 提交 `b8f7a56`：固定头部动作和停止接口检查点。
+- K1 `/usr/bin/ai-toy_app.pre-head-motion`
+- K1 `/usr/bin/ai-toy_app.pre-head-map-fix`
+- K1 `/usr/bin/ai-toy_app.pre-tail-interface`
 
 ## 2026-07-30 回退点
 

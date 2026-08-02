@@ -34,6 +34,8 @@ class LocalK1Adapter(AiCatAdapter):
     def __init__(self, settings: Settings, runner: CommandRunner) -> None:
         self._settings = settings
         self._runner = runner
+        if settings.enable_tail_motion:
+            self.capabilities = self.capabilities | {Capability.WAG_TAIL}
         self._connected = False
         self._connected_at = time.monotonic()
 
@@ -55,7 +57,7 @@ class LocalK1Adapter(AiCatAdapter):
             "last_action": None,
             "dialog_state": dialog_status["state"],
             "head_state": "idle",
-            "tail_state": "disabled",
+            "tail_state": "idle" if self._settings.enable_tail_motion else "disabled",
             "action_count": 0,
             "last_action_at": None,
             "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
@@ -313,7 +315,10 @@ class LocalK1Adapter(AiCatAdapter):
 
     def capability_unavailable_reason(self, capability: Capability) -> str:
         if capability == Capability.WAG_TAIL:
-            return "当前 K1 样机尾部硬件异常，摇尾动作已禁用"
+            return (
+                "当前 K1 样机尾部动作默认禁用；硬件修复并完成低速验收后，"
+                "设置 AI_CAT_ENABLE_TAIL_MOTION=true 才可开放"
+            )
         return super().capability_unavailable_reason(capability)
 
     async def _run_head_motor(
@@ -340,6 +345,32 @@ class LocalK1Adapter(AiCatAdapter):
             },
         )
 
+    async def _run_tail_motor(self, intensity: float, duration_ms: int) -> None:
+        if not self._settings.enable_tail_motion:
+            raise AdapterNotImplementedError(
+                self.capability_unavailable_reason(Capability.WAG_TAIL)
+            )
+        if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
+            raise ValueError("尾部动作参数超出安全预设范围")
+        result = await self._runner.run(
+            str(self._settings.hardware_binary),
+            ["motor", "tail_lr", "1"],
+        )
+        if result.timed_out:
+            raise DeviceUnavailableError("尾部动作执行超时，已请求电机停止")
+        if result.returncode == 0:
+            return
+        combined_output = f"{result.stdout}\n{result.stderr}".lower()
+        if "busy" in combined_output or "正在执行" in combined_output:
+            raise ActionConflictError("电机正在执行其他动作")
+        raise DeviceUnavailableError(
+            "尾部动作执行失败",
+            details={
+                "returncode": result.returncode,
+                "stderr": result.stderr,
+            },
+        )
+
     async def shake_head(self, intensity: float, duration_ms: int) -> None:
         await self._run_head_motor("head_lr", intensity, duration_ms)
 
@@ -347,10 +378,7 @@ class LocalK1Adapter(AiCatAdapter):
         await self._run_head_motor("head_ud", intensity, duration_ms)
 
     async def wag_tail(self, intensity: float, duration_ms: int) -> None:
-        del intensity, duration_ms
-        raise AdapterNotImplementedError(
-            self.capability_unavailable_reason(Capability.WAG_TAIL)
-        )
+        await self._run_tail_motor(intensity, duration_ms)
 
     async def stop_motion(self) -> bool:
         result = await self._runner.run(

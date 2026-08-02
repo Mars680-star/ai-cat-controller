@@ -4,6 +4,7 @@ import time
 import pytest
 
 from ai_cat_controller.adapters.command_runner import CommandResult
+from ai_cat_controller.adapters.base import Capability
 from ai_cat_controller.adapters.local_k1 import LocalK1Adapter
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import AdapterNotImplementedError
@@ -92,8 +93,22 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
 async def test_local_tail_action_is_disabled() -> None:
     adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
 
-    with pytest.raises(AdapterNotImplementedError, match="尾部硬件异常"):
+    with pytest.raises(AdapterNotImplementedError, match="尾部动作默认禁用"):
         await adapter.wag_tail(0.5, 600)
+
+
+@pytest.mark.asyncio
+async def test_local_tail_action_uses_fixed_low_speed_when_enabled() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(update={"enable_tail_motion": True})
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.wag_tail(1.0, 3000)
+
+    assert adapter.supports(Capability.WAG_TAIL) is True
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "1")),
+    ]
 
 
 @pytest.mark.asyncio

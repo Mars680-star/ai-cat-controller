@@ -159,11 +159,11 @@ async def test_runner_allows_only_fixed_head_motor_profiles(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     result = await make_runner().run(
-        "/usr/bin/ai-toy_app", ["motor", "head_ud", "2"]
+        "/usr/bin/ai-toy_app", ["motor", "head_lr", "2"]
     )
 
     assert result.returncode == 0
     assert captured == {
         "executable": "/usr/bin/ai-toy_app",
-        "args": ("motor", "head_ud", "2"),
+        "args": ("motor", "head_lr", "2"),
     }
