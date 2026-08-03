@@ -49,6 +49,21 @@ Keep `toy_main.service` only if its display, touch and emotion behavior is still
 needed; with the DDS motor executor disabled, its motor publications have no
 hardware consumer.
 
+For a board that must remain reachable by browser and SSH while idle, disable
+Wi-Fi power saving for the active NetworkManager connection:
+
+```bash
+connection=$(nmcli -g GENERAL.CONNECTION device show wlan0)
+nmcli connection modify "$connection" 802-11-wireless.powersave 2
+iw dev wlan0 set power_save off
+nmcli -g 802-11-wireless.powersave connection show "$connection"
+iw dev wlan0 get power_save
+```
+
+The expected values are `disable` and `Power save: off`. This persists through
+reboot but slightly increases idle power consumption. Repeat it if the board is
+moved to a different saved Wi-Fi connection.
+
 ```bash
 curl -sS http://127.0.0.1:8000/health
 curl -sS \

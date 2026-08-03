@@ -6,6 +6,16 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 
 ## 更新记录
 
+### 2026-08-03
+
+修改人：Mars
+
+- 修复 K1 长时间空闲后网页和 SSH 暂时不可达的问题：确认 FastAPI 服务与
+  `0.0.0.0:8000` 监听正常，将当前 NetworkManager 连接的 Wi-Fi 省电设置为
+  `disable`，并立即关闭 `wlan0` power save。
+- 电脑直连验证 `/health`、`/control` 及页面静态资源均返回 `200`；K1 地址仍为
+  `192.168.1.112`。关闭 Wi-Fi 省电会略微增加待机功耗。
+
 ### 2026-08-02
 
 修改人：Mars
