@@ -17,10 +17,11 @@ The fixed head programs run their own position sequences and finish in
 intensity and duration fields. FastAPI validates those fields but never maps
 them to arbitrary native parameters.
 
-The vendor `toy_main` publishes autonomous DDS motor actions even when the
-original voice service is disabled. `toy_motor.service` must remain disabled
-while this controller owns the motor; otherwise the vendor process can bypass
-the `/run/ai-cat/motor.lock` lock and drive the same GPIO concurrently.
+The vendor `toy_main` still publishes autonomous DDS motor actions, but the
+vendor `/usr/bin/toy_control` consumer must remain unused because it bypasses
+`/run/ai-cat/motor.lock`. The installed `toy_motor.service` name now points to
+this repository's safe HTTP autonomy worker, which selects only the verified
+head presets and leaves the faulty tail disabled.
 
 ## Present in source but not sufficiently verified
 

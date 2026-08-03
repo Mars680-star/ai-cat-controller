@@ -11,6 +11,7 @@ from ai_cat_controller.schemas.dialog import (
     DialogConfigUpdate,
     DialogRequest,
     DialogStatusData,
+    DialogSpeakRequest,
     DialogTextRequest,
 )
 
@@ -110,5 +111,25 @@ async def send_text_dialog(
     result = await services.dialog.send_text(request.content, request.request_id)
     return ApiResponse(
         message="文字问题已发送，等待 AI 回答",
+        data=DialogActionData.model_validate(result),
+    )
+
+
+@router.post(
+    "/speak",
+    response_model=ApiResponse[DialogActionData],
+    summary="让真机主动播报固定文本",
+    description=(
+        "将短文本直接送入火山 TTS，不经过大模型。仅允许在无连续会话时调用，"
+        "云端侧使用低优先级，发生竞争时不会打断用户。"
+    ),
+)
+async def speak_text(
+    request: DialogSpeakRequest,
+    services: AppServices = Depends(get_services),
+) -> ApiResponse[DialogActionData]:
+    result = await services.dialog.speak(request.content, request.request_id)
+    return ApiResponse(
+        message="主动播报已发送",
         data=DialogActionData.model_validate(result),
     )

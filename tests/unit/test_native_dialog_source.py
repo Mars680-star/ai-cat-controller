@@ -48,9 +48,18 @@ def test_native_dialog_accepts_fixed_file_text_requests() -> None:
 
     assert '#define DIALOG_TEXT_REQUEST_PATH DIALOG_EVENT_DIR' in source
     assert "sigaction(SIGHUP, &sa, NULL);" in source
-    assert 'cJSON_AddStringToObject(content_item, "type", "input_text");' in source
+    assert 'return __send_dialog_text_item(demo, event_id, text, "input_text", 1);' in source
     assert "__write_dialog_event(\"user\", text_content, text_event_id);" in source
     assert "text dialog response.create sent" in source
+
+
+def test_native_dialog_supports_low_priority_proactive_tts() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'strcmp(text_request_kind, "speak") == 0' in source
+    assert 'return __send_dialog_text_item(demo, event_id, text, "input_tts", 3);' in source
+    assert "proactive input_tts item sent" in source
+    assert "wake_request || session_active || running || ai_playing" in source
 
 
 def test_prepare_sdk_installs_canonical_dialog_source() -> None:

@@ -82,6 +82,8 @@
 #define DIALOG_TEXT_REQUEST_MAX_BYTES 8192
 #define DIALOG_TEXT_MAX_BYTES 4096
 #define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
+#define DIALOG_REQUEST_KIND_MAX_LEN 16
+#define PROACTIVE_SPEECH_ACK_TIMEOUT_MS 3000
 #define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
 #define DEVICE_SERIAL_MAX_LEN 64
 #define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
@@ -152,6 +154,10 @@ static uint64_t thinking_deadline_ms = 0;                     /* 云端思考超
 static uint64_t client_commit_ack_deadline_ms = 0;            /* 端侧提交后等待云端确认的截止时间 */
 static uint64_t client_transcript_deadline_ms = 0;            /* 端侧提交后等待最终转写的截止时间 */
 static uint64_t playback_capture_guard_until_ms = 0;
+static uint64_t proactive_speech_deadline_ms = 0;             /* 低优先级播报未被云端接收时恢复 ready */
+static volatile sig_atomic_t proactive_speech_pending = false;
+static volatile sig_atomic_t proactive_speech_active = false;
+static volatile sig_atomic_t proactive_speech_finish_request = false;
 static bool local_speech_detected = false;                    /* 本地保底 VAD 已确认人声 */
 static unsigned int local_speech_frames = 0;
 static unsigned int local_silence_frames = 0;
@@ -261,7 +267,9 @@ static int __read_text_dialog_request(
     char* request_id,
     size_t request_id_size,
     char* content,
-    size_t content_size
+    size_t content_size,
+    char* request_kind,
+    size_t request_kind_size
 ) {
     struct stat file_stat;
     FILE* file = NULL;
@@ -271,20 +279,24 @@ static int __read_text_dialog_request(
     cJSON* version_obj;
     cJSON* request_id_obj;
     cJSON* content_obj;
+    cJSON* kind_obj;
     const char* request_id_value;
     const char* content_value;
+    const char* kind_value;
     size_t index;
     bool has_visible_text = false;
     int result = -1;
 
     if (
         request_id == NULL || request_id_size == 0 ||
-        content == NULL || content_size == 0
+        content == NULL || content_size == 0 ||
+        request_kind == NULL || request_kind_size == 0
     ) {
         return -1;
     }
     request_id[0] = '\0';
     content[0] = '\0';
+    request_kind[0] = '\0';
     if (
         lstat(DIALOG_TEXT_REQUEST_PATH, &file_stat) != 0 ||
         !S_ISREG(file_stat.st_mode) ||
@@ -318,6 +330,9 @@ static int __read_text_dialog_request(
     content_obj = root == NULL
         ? NULL
         : cJSON_GetObjectItemCaseSensitive(root, "content");
+    kind_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "kind");
     if (
         !cJSON_IsNumber(version_obj) || version_obj->valueint != 1 ||
         !cJSON_IsString(request_id_obj) ||
@@ -327,12 +342,16 @@ static int __read_text_dialog_request(
     }
     request_id_value = request_id_obj->valuestring;
     content_value = content_obj->valuestring;
+    kind_value = cJSON_IsString(kind_obj) ? kind_obj->valuestring : "question";
     if (
         request_id_value == NULL || content_value == NULL ||
         strlen(request_id_value) == 0 ||
         strlen(request_id_value) > DIALOG_TEXT_REQUEST_ID_MAX_LEN ||
         strlen(content_value) == 0 ||
-        strlen(content_value) > DIALOG_TEXT_MAX_BYTES
+        strlen(content_value) > DIALOG_TEXT_MAX_BYTES ||
+        kind_value == NULL || strlen(kind_value) == 0 ||
+        strlen(kind_value) > DIALOG_REQUEST_KIND_MAX_LEN ||
+        (strcmp(kind_value, "question") != 0 && strcmp(kind_value, "speak") != 0)
     ) {
         goto cleanup;
     }
@@ -347,6 +366,7 @@ static int __read_text_dialog_request(
     }
     snprintf(request_id, request_id_size, "%s", request_id_value);
     snprintf(content, content_size, "%s", content_value);
+    snprintf(request_kind, request_kind_size, "%s", kind_value);
     result = 0;
 
 cleanup:
@@ -638,6 +658,10 @@ static void __end_continuous_session(const char* message) {
     speech_start_deadline_ms = 0;
     follow_up_deadline_ms = 0;
     thinking_deadline_ms = 0;
+    proactive_speech_pending = false;
+    proactive_speech_active = false;
+    proactive_speech_finish_request = false;
+    proactive_speech_deadline_ms = 0;
     __reset_client_turn_state();
     __reset_local_vad();
     __reset_barge_in_guard();
@@ -1037,6 +1061,10 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         return;
     }
     if (status == VOLC_CONV_STATUS_LISTENING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
         thinking_deadline_ms = 0;
         if (!session_active) {
             __write_dialog_status("ready", "等待唤醒词“小安小安”");
@@ -1066,6 +1094,10 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
                 : "正在接收语音"
         );
     } else if (status == VOLC_CONV_STATUS_THINKING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
         __reset_local_vad();
         running = false;
         waiting_for_speech = false;
@@ -1075,6 +1107,10 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         ai_playing = true;
         __write_dialog_status("thinking", "问题已收到，正在思考");
     } else if (status == VOLC_CONV_STATUS_ANSWERING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
         __reset_local_vad();
         client_turn_pending = false;
         response_create_request = false;
@@ -1090,6 +1126,10 @@ static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_
         status == VOLC_CONV_STATUS_INTERRUPTED ||
         status == VOLC_CONV_STATUS_ANSWER_FINISH
     ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
         __reset_local_vad();
         __reset_client_turn_state();
         tool_capture_guard = false;
@@ -1184,10 +1224,12 @@ static void __on_subtitle_message_received(cJSON* root) {
     }
 }
 
-static int __send_text_dialog_item(
+static int __send_dialog_text_item(
     realtime_ws_demo_t* demo,
     const char* event_id,
-    const char* text
+    const char* text,
+    const char* content_type,
+    int interrupt_mode
 ) {
     volc_message_info_t msg_info = {0};
     cJSON* root = cJSON_CreateObject();
@@ -1199,6 +1241,7 @@ static int __send_text_dialog_item(
 
     if (
         demo == NULL || event_id == NULL || text == NULL ||
+        content_type == NULL ||
         root == NULL || item == NULL || content == NULL || content_item == NULL
     ) {
         cJSON_Delete(root);
@@ -1212,9 +1255,9 @@ static int __send_text_dialog_item(
     cJSON_AddItemToObject(root, "item", item);
     cJSON_AddStringToObject(item, "type", "message");
     cJSON_AddStringToObject(item, "role", "user");
-    cJSON_AddNumberToObject(item, "interrupt_mode", 1);
+    cJSON_AddNumberToObject(item, "interrupt_mode", interrupt_mode);
     cJSON_AddItemToObject(item, "content", content);
-    cJSON_AddStringToObject(content_item, "type", "input_text");
+    cJSON_AddStringToObject(content_item, "type", content_type);
     cJSON_AddStringToObject(content_item, "text", text);
     cJSON_AddItemToArray(content, content_item);
 
@@ -1225,9 +1268,31 @@ static int __send_text_dialog_item(
     }
     msg_info.is_binary = true;
     ret = volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
-    printf("text dialog item sent, event_id=%s, ret=%d\n", event_id, ret);
+    printf(
+        "dialog text item sent, type=%s, event_id=%s, ret=%d\n",
+        content_type,
+        event_id,
+        ret
+    );
     free(json_str);
     return ret;
+}
+
+static int __send_text_dialog_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text
+) {
+    return __send_dialog_text_item(demo, event_id, text, "input_text", 1);
+}
+
+static int __send_proactive_speech_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text
+) {
+    /* 低优先级在用户已经开始交互时由云端丢弃，不抢占真实对话。 */
+    return __send_dialog_text_item(demo, event_id, text, "input_tts", 3);
 }
 
 static int __send_function_call_output(realtime_ws_demo_t* demo, const char* call_id, const char* output) {
@@ -2120,6 +2185,28 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
         }
     } else if (
         type != NULL &&
+        strcmp(type, "response.audio_transcript.delta") == 0 &&
+        (proactive_speech_pending || proactive_speech_active)
+    ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = true;
+        proactive_speech_deadline_ms = 0;
+        ai_playing = true;
+        __write_dialog_status("answering", "正在自主播报");
+        printf("proactive input_tts playback started\n");
+    } else if (
+        type != NULL &&
+        strcmp(type, "response.audio.done") == 0 &&
+        (proactive_speech_pending || proactive_speech_active)
+    ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = true;
+        proactive_speech_deadline_ms = 0;
+        __write_dialog_status("proactive_finishing", "自主短语正在播放完毕");
+        printf("proactive input_tts audio completed\n");
+    } else if (
+        type != NULL &&
         strcmp(type, "response.audio_transcript.done") == 0
     ) {
         transcript_obj = cJSON_GetObjectItem(root, "transcript");
@@ -2449,6 +2536,7 @@ int main(int argc, const char* argv[]){
         if (text_dialog_request) {
             char text_request_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 1];
             char text_content[DIALOG_TEXT_MAX_BYTES + 1];
+            char text_request_kind[DIALOG_REQUEST_KIND_MAX_LEN + 1];
             char text_event_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 16];
             int text_result;
 
@@ -2457,12 +2545,60 @@ int main(int argc, const char* argv[]){
                 text_request_id,
                 sizeof(text_request_id),
                 text_content,
-                sizeof(text_content)
+                sizeof(text_content),
+                text_request_kind,
+                sizeof(text_request_kind)
             );
             if (text_result != 0) {
-                session_active = false;
-                __write_dialog_status("ready", "文字问题无效，请重新提交");
-                printf("invalid text dialog request\n");
+                __write_dialog_status("ready", "文字或播报请求无效，请重新提交");
+                printf("invalid dialog text request\n");
+            } else if (strcmp(text_request_kind, "speak") == 0) {
+                /*
+                 * 主动短语不建立连续会话、不清录音缓冲，也不覆盖待处理的
+                 * 唤醒信号。若用户同时开始交互，本地跳过；云端低优先级仍
+                 * 提供第二层竞争保护。
+                 */
+                if (
+                    wake_request || session_active || running || ai_playing ||
+                    proactive_speech_pending || proactive_speech_active ||
+                    proactive_speech_finish_request
+                ) {
+                    printf(
+                        "proactive speech dropped because dialog is busy, "
+                        "event_id=%s\n",
+                        text_request_id
+                    );
+                } else {
+                    snprintf(
+                        text_event_id,
+                        sizeof(text_event_id),
+                        "event_%s",
+                        text_request_id
+                    );
+                    __write_dialog_status(
+                        "proactive_queued",
+                        "自主短语已提交，等待播报"
+                    );
+                    proactive_speech_pending = true;
+                    proactive_speech_active = false;
+                    proactive_speech_finish_request = false;
+                    proactive_speech_deadline_ms =
+                        __get_time_ms() + PROACTIVE_SPEECH_ACK_TIMEOUT_MS;
+                    ai_playing = true;
+                    text_result = __send_proactive_speech_item(
+                        &demo,
+                        text_event_id,
+                        text_content
+                    );
+                    if (text_result < 0) {
+                        proactive_speech_pending = false;
+                        proactive_speech_deadline_ms = 0;
+                        ai_playing = false;
+                        __write_dialog_status("ready", "自主短语发送失败，等待唤醒");
+                    } else {
+                        printf("proactive input_tts item sent\n");
+                    }
+                }
             } else {
                 wake_request = false;
                 interrupt_only_request = false;
@@ -2516,12 +2652,32 @@ int main(int argc, const char* argv[]){
             }
         }
 
+        if (
+            proactive_speech_pending && proactive_speech_deadline_ms > 0 &&
+            __get_time_ms() >= proactive_speech_deadline_ms
+        ) {
+            proactive_speech_pending = false;
+            proactive_speech_deadline_ms = 0;
+            if (!proactive_speech_active && !proactive_speech_finish_request) {
+                ai_playing = false;
+                __write_dialog_status(
+                    "ready",
+                    "自主短语未播放或已被用户交互抢占"
+                );
+                printf("proactive input_tts acknowledgement timeout\n");
+            }
+        }
+
         /*
          * SIGUSR1 启动连续会话。本地 VAD 负责判停；长回答仍可再次说
          * 唤醒词，由独立唤醒进程发送 SIGUSR1 来打断并开始下一轮。
          */
         if (wake_request) {
             wake_request = false;
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
             follow_up_prepare_request = false;
             echo_guard_active = false;
             echo_guard_request = false;
@@ -2558,6 +2714,10 @@ int main(int argc, const char* argv[]){
         }
         if (interrupt_only_request) {
             interrupt_only_request = false;
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
             follow_up_prepare_request = false;
             echo_guard_active = false;
             echo_guard_request = false;
@@ -2578,6 +2738,10 @@ int main(int argc, const char* argv[]){
         }
         if (echo_guard_request) {
             echo_guard_request = false;
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
             follow_up_prepare_request = false;
             echo_guard_active = true;
             session_active = false;
@@ -2639,6 +2803,31 @@ int main(int argc, const char* argv[]){
                     status_message
                 );
                 printf("follow-up capture ready\n");
+            }
+        }
+        if (proactive_speech_finish_request && !session_active) {
+            int playback_pending = 0;
+            int drain_error = 0;
+
+            pthread_mutex_lock(&demo.ring_buf_mutex);
+            playback_pending =
+                volc_ringbuf_getdatasize(demo.ring_buf) > 0 ||
+                playback_write_active;
+            pthread_mutex_unlock(&demo.ring_buf_mutex);
+            if (!playback_pending) {
+                pthread_mutex_lock(&demo.playback_mutex);
+                if (pa_simple_drain(demo.p_playback, &drain_error) < 0) {
+                    printf(
+                        "proactive playback drain failed: %s\n",
+                        pa_strerror(drain_error)
+                    );
+                }
+                pthread_mutex_unlock(&demo.playback_mutex);
+                proactive_speech_finish_request = false;
+                ai_playing = false;
+                playback_capture_guard = false;
+                __write_dialog_status("ready", "自主动作完成，等待唤醒词“小安小安”");
+                printf("proactive input_tts playback drained\n");
             }
         }
         // printf("volc....................\n");

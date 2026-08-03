@@ -30,6 +30,7 @@ class LocalK1Adapter(AiCatAdapter):
             Capability.WAKE_DIALOG,
             Capability.INTERRUPT_DIALOG,
             Capability.TEXT_DIALOG,
+            Capability.SPEAK_TEXT,
         }
     )
 
@@ -406,20 +407,28 @@ class LocalK1Adapter(AiCatAdapter):
     async def interrupt_dialog(self) -> None:
         await self._signal_dialog("SIGUSR2")
 
-    def _write_text_dialog_request(self, content: str, request_id: str) -> None:
+    def _write_dialog_request(
+        self,
+        content: str,
+        request_id: str,
+        kind: str,
+    ) -> None:
         path = self._settings.dialog_text_request_path
         temporary_path = path.with_name(path.name + ".tmp")
         if path.exists():
-            raise ActionConflictError("已有文字问题等待语音进程处理")
+            raise ActionConflictError("已有文字或播报请求等待语音进程处理")
         if not content or len(content) > 500:
-            raise ValueError("文字问题长度必须为 1 到 500 个字符")
+            raise ValueError("对话文本长度必须为 1 到 500 个字符")
         if not request_id or len(request_id) > 64:
-            raise ValueError("文字问题 request_id 无效")
+            raise ValueError("对话 request_id 无效")
+        if kind not in {"question", "speak"}:
+            raise ValueError("对话请求类型无效")
 
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
             {
                 "version": 1,
+                "kind": kind,
                 "request_id": request_id,
                 "content": content,
                 "created_at_ms": int(time.time() * 1000),
@@ -444,9 +453,23 @@ class LocalK1Adapter(AiCatAdapter):
 
     async def send_text_dialog(self, content: str, request_id: str) -> None:
         await asyncio.to_thread(
-            self._write_text_dialog_request,
+            self._write_dialog_request,
             content,
             request_id,
+            "question",
+        )
+        try:
+            await self._signal_dialog("SIGHUP")
+        except Exception:
+            self._settings.dialog_text_request_path.unlink(missing_ok=True)
+            raise
+
+    async def speak_text(self, content: str, request_id: str) -> None:
+        await asyncio.to_thread(
+            self._write_dialog_request,
+            content,
+            request_id,
+            "speak",
         )
         try:
             await self._signal_dialog("SIGHUP")

@@ -16,6 +16,7 @@ class Capability(str, Enum):
     WAKE_DIALOG = "wake_dialog"
     INTERRUPT_DIALOG = "interrupt_dialog"
     TEXT_DIALOG = "text_dialog"
+    SPEAK_TEXT = "speak_text"
 
 
 class AiCatAdapter(ABC):
@@ -63,3 +64,6 @@ class AiCatAdapter(ABC):
 
     @abstractmethod
     async def send_text_dialog(self, content: str, request_id: str) -> None: ...
+
+    @abstractmethod
+    async def speak_text(self, content: str, request_id: str) -> None: ...

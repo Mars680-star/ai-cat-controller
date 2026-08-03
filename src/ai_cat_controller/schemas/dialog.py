@@ -41,6 +41,10 @@ class DialogTextRequest(DialogRequest):
         return value
 
 
+class DialogSpeakRequest(DialogTextRequest):
+    content: str = Field(min_length=1, max_length=100)
+
+
 class DialogStatusData(BaseModel):
     state: str
     message: str

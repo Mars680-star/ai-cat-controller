@@ -108,6 +108,20 @@ systemctl daemon-reload
 systemctl enable --now volc-conv-ai.service
 ```
 
+To restore low-frequency autonomous behavior without restoring the unsafe DDS
+motor executor, install the repository's replacement `toy_motor.service`. It
+uses the local FastAPI API, selects only fixed head presets, skips all active
+dialog states, and never selects the unverified tail:
+
+```bash
+install -m 0644 systemd/toy_motor.service /etc/systemd/system/toy_motor.service
+systemctl daemon-reload
+systemctl enable --now toy_motor.service
+```
+
+Do not change its `ExecStart` back to `/usr/bin/toy_control` while the FastAPI
+and voice action paths are enabled.
+
 Check service state and trigger one recording turn manually:
 
 ```bash

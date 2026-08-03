@@ -29,6 +29,17 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   回答继续由真机扬声器播放并实时进入会话历史。对话繁忙时拒绝重复提交。
 - K1 实测文字问题“一加一等于多少”无需唤醒即完成云端回答，用户文本与回答
   “一加一等于二”进入同一会话，随后正常开放免唤醒追问窗口。
+- 将原 `toy_motor.service` 服务入口替换为本项目安全自主行为进程并恢复开机启动：
+  默认开机等待 45 秒，之后每 60–120 秒只从已验收的点头、摇头中随机选择；
+  尾部硬件仍保持禁用。
+- 自主动作以一定概率同时调用火山 `input_tts` 直接播报固定短语，不经过大模型；
+  仅在对话状态为 `ready` 时执行，唤醒、聆听、思考、回答和追问期间均跳过，
+  云端使用低优先级避免与用户交互竞争。
+- 原厂 `/usr/bin/toy_control` 仍不启用；自主动作统一经过 FastAPI 调度和
+  `/run/ai-cat/motor.lock`，避免恢复此前的双电机控制源与摇头抽动问题。
+- K1 实测单次点头/摇头、短语 `input_tts`、播放队列排空、状态恢复和常驻服务
+  首轮调度均正常；`toy_motor.service` 为 `active/enabled`，完整自动测试为
+  `114 passed`。
 
 ### 2026-08-02
 
@@ -190,6 +201,8 @@ export AI_CAT_HARDWARE_DRIVER=local_k1
 export AI_CAT_API_KEY_ENABLED=true
 export AI_CAT_API_KEY='替换为随机密钥'
 export AI_CAT_ENABLE_TAIL_MOTION=false
+export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=60
+export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=120
 ```
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
@@ -207,13 +220,14 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - Python 代码不使用 `os.system`、`shell=True` 或 Shell 字符串拼接。
 - Local K1 只允许固定服务的 `is-active`、`is-enabled`，以及对话服务的
   `SIGHUP`/`SIGUSR1`/`SIGUSR2`。
-- 文字问题只能写入固定的 `dialog-text-request.json`，限制为 500 个可见字符；
+- 文字问题和主动短语只能写入固定的 `dialog-text-request.json`；问题限制为
+  500 个字符、主动短语限制为 100 个字符；
   HTTP 请求不能指定文件路径、信号、服务或厂商鉴权信息。
 - 不执行 `systemctl start/stop/restart`，也不接受请求传入任意信号或服务名。
 - 真机电机只接受审核过的固定动作，不接受 HTTP 或 Function Calling 传入 GPIO、
   方向、角度、速度、持续时间或 Shell 参数。
-- 使用本项目真机动作时，旧 `toy_motor.service` 必须保持禁用，避免 DDS 自主动作
-  与 FastAPI/语音动作形成双控制源。
+- K1 上的 `toy_motor.service` 必须使用本仓库提供的安全单元，禁止恢复原厂
+  `ExecStart=/usr/bin/toy_control`，否则 DDS 动作会绕过锁并形成双控制源。
 - 当前触摸事件只保留检测及非电机反馈，不会执行头部或尾部动作。
 - 尾部动作必须在硬件修复、低速直连和停止验收全部通过后才允许开启配置。
 - 不执行 DDS 或 ROS2 操作。

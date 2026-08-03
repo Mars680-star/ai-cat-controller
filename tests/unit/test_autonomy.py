@@ -1,0 +1,108 @@
+import random
+
+import pytest
+
+from ai_cat_controller.autonomy import (
+    SAFE_ACTIONS,
+    SHORT_PHRASES,
+    AutonomyConfig,
+    AutonomyWorker,
+)
+
+
+class FakeClient:
+    def __init__(self, status: dict[str, object]) -> None:
+        self.status = status
+        self.actions: list[tuple[str, str]] = []
+        self.phrases: list[tuple[str, str]] = []
+
+    def dialog_status(self) -> dict[str, object]:
+        return self.status
+
+    def start_head_action(self, action: str, request_id: str) -> None:
+        self.actions.append((action, request_id))
+
+    def speak(self, content: str, request_id: str) -> None:
+        self.phrases.append((content, request_id))
+
+
+def autonomy_config(**overrides: object) -> AutonomyConfig:
+    values = {
+        "api_port": 8000,
+        "api_key": "test-key",
+        "initial_delay_seconds": 0.0,
+        "minimum_interval_seconds": 60.0,
+        "maximum_interval_seconds": 120.0,
+        "phrase_probability": 1.0,
+    }
+    values.update(overrides)
+    return AutonomyConfig(**values)  # type: ignore[arg-type]
+
+
+def test_autonomy_submits_only_safe_head_motion_and_allowlisted_phrase() -> None:
+    client = FakeClient(
+        {"state": "ready", "session_active": False, "stale": False}
+    )
+    worker = AutonomyWorker(
+        autonomy_config(),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(7),
+    )
+
+    result = worker.run_once()
+
+    assert result["executed"] is True
+    assert client.actions[0][0] in SAFE_ACTIONS
+    assert client.phrases[0][0] in SHORT_PHRASES
+    assert all("tail" not in action for action, _ in client.actions)
+
+
+def test_autonomy_can_resume_after_user_ends_dialog() -> None:
+    client = FakeClient(
+        {"state": "interrupted", "session_active": False, "stale": False}
+    )
+    worker = AutonomyWorker(
+        autonomy_config(phrase_probability=0.0),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(2),
+    )
+
+    result = worker.run_once()
+
+    assert result["executed"] is True
+    assert len(client.actions) == 1
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"state": "listening", "session_active": True, "stale": False},
+        {"state": "thinking", "session_active": True, "stale": False},
+        {"state": "answering", "session_active": True, "stale": False},
+        {"state": "followup_listening", "session_active": True, "stale": False},
+        {"state": "ready", "session_active": False, "stale": True},
+    ],
+)
+def test_autonomy_skips_when_dialog_is_not_idle(status: dict[str, object]) -> None:
+    client = FakeClient(status)
+    worker = AutonomyWorker(
+        autonomy_config(),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(1),
+    )
+
+    result = worker.run_once()
+
+    assert result["executed"] is False
+    assert client.actions == []
+    assert client.phrases == []
+
+
+def test_autonomy_config_rejects_too_frequent_motion() -> None:
+    with pytest.raises(ValueError, match="MIN_INTERVAL"):
+        AutonomyConfig.from_env(
+            {
+                "AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS": "5",
+                "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS": "60",
+            }
+        )

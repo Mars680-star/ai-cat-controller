@@ -29,6 +29,21 @@ def test_dialog_status_is_visible(client: TestClient) -> None:
     assert response.json()["data"]["source"] == "mock"
 
 
+def test_proactive_speech_is_accepted_only_while_idle(client: TestClient) -> None:
+    first = client.post(
+        "/api/v1/dialog/speak",
+        json={"content": "我在这里呀。", "request_id": "auto-speech-1"},
+    )
+    second = client.post(
+        "/api/v1/dialog/speak",
+        json={"content": "今天也要开心哦。", "request_id": "auto-speech-2"},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["data"]["dialog_state"] == "queued"
+    assert second.status_code == 409
+
+
 def test_text_dialog_is_accepted_once_and_rejects_busy_session(
     client: TestClient,
 ) -> None:

@@ -150,3 +150,8 @@ class MockAiCatAdapter(AiCatAdapter):
         del content, request_id
         async with self._state_lock:
             self.dialog_state = "thinking"
+
+    async def speak_text(self, content: str, request_id: str) -> None:
+        del content, request_id
+        async with self._state_lock:
+            self.dialog_state = "speaking"

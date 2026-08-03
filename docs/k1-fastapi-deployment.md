@@ -36,18 +36,25 @@ polkit rule restricted to the two dialog signals.
 
 ## Validate
 
-Before enabling Local K1 motion, disable the vendor DDS motor executor. Its
-autonomous actions do not use this project's cross-process lock:
+Before enabling Local K1 motion, replace the vendor DDS motor executor with the
+safe unit from this repository. The vendor `/usr/bin/toy_control` does not use
+this project's cross-process lock:
 
 ```bash
 systemctl disable --now toy_motor.service
-systemctl is-active toy_motor.service   # expected: inactive
-systemctl is-enabled toy_motor.service  # expected: disabled
+install -m 0644 \
+  integrations/volcengine-k1/overlay/examples/low_load_solution/linux_k1/systemd/toy_motor.service \
+  /etc/systemd/system/toy_motor.service
+systemctl daemon-reload
+systemctl enable --now toy_motor.service
+systemctl is-active toy_motor.service   # expected: active
+systemctl is-enabled toy_motor.service  # expected: enabled
+systemctl cat toy_motor.service | grep ai_cat_controller.autonomy
 ```
 
 Keep `toy_main.service` only if its display, touch and emotion behavior is still
-needed; with the DDS motor executor disabled, its motor publications have no
-hardware consumer.
+needed; its DDS motor publications have no hardware consumer because the safe
+replacement service does not subscribe to DDS.
 
 For a board that must remain reachable by browser and SSH while idle, disable
 Wi-Fi power saving for the active NetworkManager connection:
