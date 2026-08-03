@@ -145,3 +145,8 @@ class MockAiCatAdapter(AiCatAdapter):
     async def interrupt_dialog(self) -> None:
         async with self._state_lock:
             self.dialog_state = "interrupted"
+
+    async def send_text_dialog(self, content: str, request_id: str) -> None:
+        del content, request_id
+        async with self._state_lock:
+            self.dialog_state = "thinking"

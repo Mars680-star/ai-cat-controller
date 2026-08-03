@@ -159,6 +159,7 @@
     unavailable: "状态不可用",
     waking: "正在请求聆听",
     interrupting: "正在请求打断",
+    submitting_text: "正在提交文字问题",
   };
 
   const batteryStateLabels = {
@@ -931,6 +932,23 @@
     const submit = ui.dialogForm.querySelector("button");
     submit.disabled = true;
     try {
+      if (state.hardwareStatus?.adapter_mode === "local_k1") {
+        const payload = await apiRequest("/api/v1/dialog/text", {
+          method: "POST",
+          body: JSON.stringify({
+            content,
+            request_id: `web-text-${Date.now()}`,
+          }),
+        });
+        ui.dialogInput.value = "";
+        showToast(payload.message);
+        await refreshVoiceStatus();
+        window.setTimeout(() => {
+          refreshDialogs({selectLatest: true, forceDetail: true})
+            .catch(reportError);
+        }, 300);
+        return;
+      }
       const payload = await apiRequest(
         `/api/v1/pets/${encodeURIComponent(state.petId)}/dialogs`,
         {

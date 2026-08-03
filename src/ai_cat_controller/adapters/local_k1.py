@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ class LocalK1Adapter(AiCatAdapter):
             Capability.STOP_MOTION,
             Capability.WAKE_DIALOG,
             Capability.INTERRUPT_DIALOG,
+            Capability.TEXT_DIALOG,
         }
     )
 
@@ -403,3 +405,51 @@ class LocalK1Adapter(AiCatAdapter):
 
     async def interrupt_dialog(self) -> None:
         await self._signal_dialog("SIGUSR2")
+
+    def _write_text_dialog_request(self, content: str, request_id: str) -> None:
+        path = self._settings.dialog_text_request_path
+        temporary_path = path.with_name(path.name + ".tmp")
+        if path.exists():
+            raise ActionConflictError("已有文字问题等待语音进程处理")
+        if not content or len(content) > 500:
+            raise ValueError("文字问题长度必须为 1 到 500 个字符")
+        if not request_id or len(request_id) > 64:
+            raise ValueError("文字问题 request_id 无效")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            {
+                "version": 1,
+                "request_id": request_id,
+                "content": content,
+                "created_at_ms": int(time.time() * 1000),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ) + "\n"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(temporary_path, flags, 0o600)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+    async def send_text_dialog(self, content: str, request_id: str) -> None:
+        await asyncio.to_thread(
+            self._write_text_dialog_request,
+            content,
+            request_id,
+        )
+        try:
+            await self._signal_dialog("SIGHUP")
+        except Exception:
+            self._settings.dialog_text_request_path.unlink(missing_ok=True)
+            raise

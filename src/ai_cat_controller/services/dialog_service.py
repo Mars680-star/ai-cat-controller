@@ -6,17 +6,23 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.adapters.base import AiCatAdapter, Capability
-from ai_cat_controller.core.errors import AdapterNotImplementedError
+from ai_cat_controller.core.errors import (
+    ActionConflictError,
+    AdapterNotImplementedError,
+    DeviceUnavailableError,
+)
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_FOLLOW_UP_SECONDS = 30
 MIN_FOLLOW_UP_SECONDS = 5
 MAX_FOLLOW_UP_SECONDS = 120
 MAX_CONFIG_BYTES = 4096
+TEXT_DIALOG_READY_STATES = frozenset({"ready", "followup_listening", "interrupted"})
 
 
 class DialogService:
@@ -203,6 +209,43 @@ class DialogService:
             return {
                 "dialog_state": self._state,
                 "request_id": request_id,
+                "changed": True,
+            }
+
+    async def send_text(
+        self,
+        content: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._adapter.supports(Capability.TEXT_DIALOG):
+            raise AdapterNotImplementedError("当前适配器不支持文字提问")
+        resolved_request_id = request_id or f"web-text-{uuid.uuid4().hex[:20]}"
+        async with self._lock:
+            status = await self._adapter.get_dialog_status()
+            current_state = str(status.get("state", "unavailable"))
+            if status.get("stale") or current_state in {
+                "starting",
+                "connecting",
+                "recovering",
+                "offline",
+                "unavailable",
+            }:
+                raise DeviceUnavailableError("语音服务尚未准备好接收文字问题")
+            if current_state not in TEXT_DIALOG_READY_STATES:
+                raise ActionConflictError(
+                    "当前对话正在进行，请等待回答结束或先打断",
+                    details={"dialog_state": current_state},
+                )
+            self._state = "submitting_text"
+            try:
+                await self._adapter.send_text_dialog(content, resolved_request_id)
+            except Exception:
+                self._state = "error"
+                raise
+            self._state = "thinking"
+            return {
+                "dialog_state": "queued",
+                "request_id": resolved_request_id,
                 "changed": True,
             }
 

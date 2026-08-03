@@ -23,6 +23,7 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_BATTERY_SUPPLY_PATH": "/tmp/test-cw-bat",
             "AI_CAT_CHARGER_SUPPLY_PATH": "/tmp/test-charger",
             "AI_CAT_DIALOG_CONFIG_PATH": "/tmp/dialog-config.json",
+            "AI_CAT_DIALOG_TEXT_REQUEST_PATH": "/tmp/dialog-text.json",
         }
     )
 
@@ -33,6 +34,7 @@ def test_environment_values_are_parsed() -> None:
     assert str(settings.battery_supply_path) == "/tmp/test-cw-bat"
     assert str(settings.charger_supply_path) == "/tmp/test-charger"
     assert str(settings.dialog_config_path) == "/tmp/dialog-config.json"
+    assert str(settings.dialog_text_request_path) == "/tmp/dialog-text.json"
 
 
 def test_local_k1_requires_api_key() -> None:

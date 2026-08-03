@@ -27,6 +27,20 @@ class DialogActionData(BaseModel):
     changed: bool
 
 
+class DialogTextRequest(DialogRequest):
+    content: str = Field(min_length=1, max_length=500)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("content must not be blank")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("content contains unsupported control characters")
+        return value
+
+
 class DialogStatusData(BaseModel):
     state: str
     message: str

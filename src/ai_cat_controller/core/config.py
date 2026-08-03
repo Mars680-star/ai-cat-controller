@@ -42,6 +42,9 @@ class Settings(BaseModel):
     systemctl_binary: Path = Path("/usr/bin/systemctl")
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
+    dialog_text_request_path: Path = Path(
+        "/var/lib/ai-cat-controller/dialog-text-request.json"
+    )
     dialog_config_path: Path = Path(".data/dialog-runtime-config.json")
     battery_supply_path: Path = Path("/sys/class/power_supply/cw-bat")
     charger_supply_path: Path = Path("/sys/class/power_supply/ip2317-charger")
@@ -117,6 +120,10 @@ class Settings(BaseModel):
             "dialog_event_path": source.get(
                 "AI_CAT_DIALOG_EVENT_PATH",
                 "/var/lib/ai-cat-controller/dialog-events.jsonl",
+            ),
+            "dialog_text_request_path": source.get(
+                "AI_CAT_DIALOG_TEXT_REQUEST_PATH",
+                "/var/lib/ai-cat-controller/dialog-text-request.json",
             ),
             "dialog_config_path": source.get(
                 "AI_CAT_DIALOG_CONFIG_PATH",

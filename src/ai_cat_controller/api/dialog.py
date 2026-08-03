@@ -11,6 +11,7 @@ from ai_cat_controller.schemas.dialog import (
     DialogConfigUpdate,
     DialogRequest,
     DialogStatusData,
+    DialogTextRequest,
 )
 
 router = APIRouter(prefix="/dialog", tags=["对话"])
@@ -92,5 +93,22 @@ async def interrupt_dialog(
     result = await services.dialog.interrupt(request.request_id if request else None)
     return ApiResponse(
         message="对话已打断",
+        data=DialogActionData.model_validate(result),
+    )
+
+
+@router.post(
+    "/text",
+    response_model=ApiResponse[DialogActionData],
+    summary="通过文字向真机提问",
+    description="将文字问题送入当前实时会话，回答仍由真机扬声器播放。",
+)
+async def send_text_dialog(
+    request: DialogTextRequest,
+    services: AppServices = Depends(get_services),
+) -> ApiResponse[DialogActionData]:
+    result = await services.dialog.send_text(request.content, request.request_id)
+    return ApiResponse(
+        message="文字问题已发送，等待 AI 回答",
         data=DialogActionData.model_validate(result),
     )

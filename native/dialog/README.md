@@ -11,6 +11,12 @@ applied by `integrations/volcengine-k1/scripts/prepare_sdk.sh`. They make PCM
 sessions wait for initial configuration, enable client-controlled turn
 detection, and separate `commit` from `response.create`.
 
+Browser text questions use the fixed
+`/var/lib/ai-cat-controller/dialog-text-request.json` handoff. FastAPI writes
+the validated request atomically and signals this process with `SIGHUP`; the
+native client sends an `input_text` item and keeps TTS, Function Calling,
+status reporting, follow-up handling, and history on the existing session.
+
 The file contains the K1 audio path, continuous conversation state machine,
 service-mode wake/interrupt signals, atomic status output, disconnect handling
 and Function Calling implementations for `shake_head`, `nod_head`, gated
@@ -33,5 +39,6 @@ same gate.
 
 - `SIGUSR1`: start listening, or interrupt the current response and listen again.
 - `SIGUSR2`: interrupt the current response and end the continuous session.
+- `SIGHUP`: consume one validated browser text question.
 - `/run/ai-cat/dialog-status.json`: state consumed by FastAPI.
 - `/run/ai-cat/dialog-session-active`: marker used to pause the wake-word capture.

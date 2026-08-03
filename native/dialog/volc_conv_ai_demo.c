@@ -77,7 +77,11 @@
 #define DIALOG_EVENT_DIR "/var/lib/ai-cat-controller"
 #define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
 #define DIALOG_CONFIG_PATH DIALOG_EVENT_DIR "/dialog-runtime-config.json"
+#define DIALOG_TEXT_REQUEST_PATH DIALOG_EVENT_DIR "/dialog-text-request.json"
 #define DIALOG_CONFIG_MAX_BYTES 4096
+#define DIALOG_TEXT_REQUEST_MAX_BYTES 8192
+#define DIALOG_TEXT_MAX_BYTES 4096
+#define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
 #define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
 #define DEVICE_SERIAL_MAX_LEN 64
 #define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
@@ -128,6 +132,7 @@ static volatile sig_atomic_t exit_request = false;           /* 主线程和播�
 static volatile sig_atomic_t session_update = false;
 static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
 static volatile sig_atomic_t interrupt_only_request = false; /* SIGUSR2 只打断，不开始录音 */
+static volatile sig_atomic_t text_dialog_request = false;    /* SIGHUP 提交网页文字问题 */
 static volatile sig_atomic_t wake_tone_after_interrupt = false;
 static volatile sig_atomic_t follow_up_prepare_request = false;
 static volatile sig_atomic_t echo_guard_request = false;     /* 连续插话触发回声保护 */
@@ -249,6 +254,104 @@ static uint64_t __get_follow_up_window_ms(void) {
     cJSON_Delete(root);
     printf("follow-up window configured: %d seconds\n", seconds);
     return (uint64_t)seconds * 1000;
+}
+
+/* FastAPI 原子写入单条文字请求；原生进程读取后立即删除，避免重复消费。 */
+static int __read_text_dialog_request(
+    char* request_id,
+    size_t request_id_size,
+    char* content,
+    size_t content_size
+) {
+    struct stat file_stat;
+    FILE* file = NULL;
+    char buffer[DIALOG_TEXT_REQUEST_MAX_BYTES + 1];
+    size_t bytes_read;
+    cJSON* root = NULL;
+    cJSON* version_obj;
+    cJSON* request_id_obj;
+    cJSON* content_obj;
+    const char* request_id_value;
+    const char* content_value;
+    size_t index;
+    bool has_visible_text = false;
+    int result = -1;
+
+    if (
+        request_id == NULL || request_id_size == 0 ||
+        content == NULL || content_size == 0
+    ) {
+        return -1;
+    }
+    request_id[0] = '\0';
+    content[0] = '\0';
+    if (
+        lstat(DIALOG_TEXT_REQUEST_PATH, &file_stat) != 0 ||
+        !S_ISREG(file_stat.st_mode) ||
+        file_stat.st_size <= 0 ||
+        file_stat.st_size > DIALOG_TEXT_REQUEST_MAX_BYTES
+    ) {
+        unlink(DIALOG_TEXT_REQUEST_PATH);
+        return -1;
+    }
+    file = fopen(DIALOG_TEXT_REQUEST_PATH, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    bytes_read = fread(buffer, 1, DIALOG_TEXT_REQUEST_MAX_BYTES, file);
+    if (ferror(file) || !feof(file)) {
+        fclose(file);
+        unlink(DIALOG_TEXT_REQUEST_PATH);
+        return -1;
+    }
+    fclose(file);
+    unlink(DIALOG_TEXT_REQUEST_PATH);
+    buffer[bytes_read] = '\0';
+
+    root = cJSON_Parse(buffer);
+    version_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "version");
+    request_id_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "request_id");
+    content_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "content");
+    if (
+        !cJSON_IsNumber(version_obj) || version_obj->valueint != 1 ||
+        !cJSON_IsString(request_id_obj) ||
+        !cJSON_IsString(content_obj)
+    ) {
+        goto cleanup;
+    }
+    request_id_value = request_id_obj->valuestring;
+    content_value = content_obj->valuestring;
+    if (
+        request_id_value == NULL || content_value == NULL ||
+        strlen(request_id_value) == 0 ||
+        strlen(request_id_value) > DIALOG_TEXT_REQUEST_ID_MAX_LEN ||
+        strlen(content_value) == 0 ||
+        strlen(content_value) > DIALOG_TEXT_MAX_BYTES
+    ) {
+        goto cleanup;
+    }
+    for (index = 0; content_value[index] != '\0'; index++) {
+        if (!isspace((unsigned char)content_value[index])) {
+            has_visible_text = true;
+            break;
+        }
+    }
+    if (!has_visible_text) {
+        goto cleanup;
+    }
+    snprintf(request_id, request_id_size, "%s", request_id_value);
+    snprintf(content, content_size, "%s", content_value);
+    result = 0;
+
+cleanup:
+    cJSON_Delete(root);
+    return result;
 }
 
 static void __reset_barge_in_guard(void) {
@@ -608,11 +711,13 @@ static void __poll_keyboard(void) {
 }
 
 /*
- * SIGUSR1 开始或继续一轮对话；SIGUSR2 只打断当前回答并结束连续会话。
+ * SIGHUP 提交网页文字问题；SIGUSR1 开始或继续语音；SIGUSR2 只打断回答。
  * SIGINT/SIGTERM 只请求退出，让主循环和播放线程有机会正常收尾。
  */
 static void __handle_signal(int sig) {
-    if (sig == SIGUSR1) {
+    if (sig == SIGHUP) {
+        text_dialog_request = true;
+    } else if (sig == SIGUSR1) {
         wake_request = true;
     } else if (sig == SIGUSR2) {
         interrupt_only_request = true;
@@ -632,6 +737,7 @@ static void __setup_async_io(void) {
     sa.sa_flags = SA_RESTART;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
 
@@ -1076,6 +1182,52 @@ static void __on_subtitle_message_received(cJSON* root) {
             }
         }
     }
+}
+
+static int __send_text_dialog_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text
+) {
+    volc_message_info_t msg_info = {0};
+    cJSON* root = cJSON_CreateObject();
+    cJSON* item = cJSON_CreateObject();
+    cJSON* content = cJSON_CreateArray();
+    cJSON* content_item = cJSON_CreateObject();
+    char* json_str = NULL;
+    int ret = -1;
+
+    if (
+        demo == NULL || event_id == NULL || text == NULL ||
+        root == NULL || item == NULL || content == NULL || content_item == NULL
+    ) {
+        cJSON_Delete(root);
+        cJSON_Delete(item);
+        cJSON_Delete(content);
+        cJSON_Delete(content_item);
+        return -1;
+    }
+    cJSON_AddStringToObject(root, "event_id", event_id);
+    cJSON_AddStringToObject(root, "type", "conversation.item.create");
+    cJSON_AddItemToObject(root, "item", item);
+    cJSON_AddStringToObject(item, "type", "message");
+    cJSON_AddStringToObject(item, "role", "user");
+    cJSON_AddNumberToObject(item, "interrupt_mode", 1);
+    cJSON_AddItemToObject(item, "content", content);
+    cJSON_AddStringToObject(content_item, "type", "input_text");
+    cJSON_AddStringToObject(content_item, "text", text);
+    cJSON_AddItemToArray(content, content_item);
+
+    json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json_str == NULL) {
+        return -1;
+    }
+    msg_info.is_binary = true;
+    ret = volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
+    printf("text dialog item sent, event_id=%s, ret=%d\n", event_id, ret);
+    free(json_str);
+    return ret;
 }
 
 static int __send_function_call_output(realtime_ws_demo_t* demo, const char* call_id, const char* output) {
@@ -2150,6 +2302,7 @@ int main(int argc, const char* argv[]){
     __load_device_serial();
     session_active = false;
     unlink(DIALOG_SESSION_MARKER);
+    unlink(DIALOG_TEXT_REQUEST_PATH);
     __write_dialog_status("starting", "语音服务正在启动");
 
     /* 阶段 1：读取配置并根据传输模式确定音频采样率和帧大小。 */
@@ -2292,6 +2445,76 @@ int main(int argc, const char* argv[]){
      */
     while (!exit_request) {
         __poll_keyboard();
+
+        if (text_dialog_request) {
+            char text_request_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 1];
+            char text_content[DIALOG_TEXT_MAX_BYTES + 1];
+            char text_event_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 16];
+            int text_result;
+
+            text_dialog_request = false;
+            text_result = __read_text_dialog_request(
+                text_request_id,
+                sizeof(text_request_id),
+                text_content,
+                sizeof(text_content)
+            );
+            if (text_result != 0) {
+                session_active = false;
+                __write_dialog_status("ready", "文字问题无效，请重新提交");
+                printf("invalid text dialog request\n");
+            } else {
+                wake_request = false;
+                interrupt_only_request = false;
+                follow_up_prepare_request = false;
+                echo_guard_active = false;
+                echo_guard_request = false;
+                session_active = true;
+                waiting_for_speech = false;
+                running = false;
+                ai_playing = false;
+                speech_start_deadline_ms = 0;
+                follow_up_deadline_ms = 0;
+                thinking_deadline_ms = 0;
+                tool_capture_guard = false;
+                __reset_client_turn_state();
+                __reset_local_vad();
+                __reset_barge_in_guard();
+                _ws_clear_buffer(&demo);
+                snprintf(
+                    text_event_id,
+                    sizeof(text_event_id),
+                    "event_%s",
+                    text_request_id
+                );
+                __write_dialog_status("submitting_text", "正在提交文字问题");
+                __write_dialog_event("user", text_content, text_event_id);
+                text_result = __send_text_dialog_item(
+                    &demo,
+                    text_event_id,
+                    text_content
+                );
+                if (text_result >= 0) {
+                    text_result = _ws_response_create(&demo);
+                }
+                if (text_result < 0) {
+                    session_active = false;
+                    ai_playing = false;
+                    __write_dialog_status(
+                        "recovering",
+                        "文字问题发送失败，正在重新连接"
+                    );
+                    printf("text dialog request failed; restarting cloud session\n");
+                    exit_request = true;
+                } else {
+                    ai_playing = true;
+                    thinking_deadline_ms =
+                        __get_time_ms() + THINKING_TIMEOUT_MS;
+                    __write_dialog_status("thinking", "文字问题已收到，正在思考");
+                    printf("text dialog response.create sent\n");
+                }
+            }
+        }
 
         /*
          * SIGUSR1 启动连续会话。本地 VAD 负责判停；长回答仍可再次说

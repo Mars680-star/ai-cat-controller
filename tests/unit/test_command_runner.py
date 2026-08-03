@@ -14,7 +14,7 @@ def make_runner() -> CommandRunner:
         allowed_services=frozenset({"volc-conv-ai.service"}),
         timeout_seconds=1.0,
         allowed_service_signals={
-            "volc-conv-ai.service": frozenset({"SIGUSR1", "SIGUSR2"})
+            "volc-conv-ai.service": frozenset({"SIGHUP", "SIGUSR1", "SIGUSR2"})
         },
         allowed_commands={
             "/usr/bin/ai-toy_app": frozenset(
@@ -122,12 +122,12 @@ async def test_runner_allows_only_confirmed_dialog_signals(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     await make_runner().run(
         "/usr/bin/systemctl",
-        ["kill", "--signal=SIGUSR2", "volc-conv-ai.service"],
+        ["kill", "--signal=SIGHUP", "volc-conv-ai.service"],
     )
 
     assert captured["args"] == (
         "kill",
-        "--signal=SIGUSR2",
+        "--signal=SIGHUP",
         "volc-conv-ai.service",
     )
 

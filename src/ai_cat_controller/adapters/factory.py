@@ -26,7 +26,9 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
         ),
         allowed_services=frozenset(settings.service_names),
         allowed_service_signals={
-            settings.dialog_service: frozenset({"SIGUSR1", "SIGUSR2"})
+            settings.dialog_service: frozenset(
+                {"SIGHUP", "SIGUSR1", "SIGUSR2"}
+            )
         },
         allowed_commands={
             hardware_binary: frozenset(hardware_commands)

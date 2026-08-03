@@ -40,6 +40,7 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert 'cache: options.cache || "no-store"' in script.text
     assert 'apiRequest("/api/v1/dialog/config")' in script.text
     assert "/dialog-conversations" in script.text
+    assert 'apiRequest("/api/v1/dialog/text"' in script.text
     assert "renderConversationList" in script.text
     assert "refreshDialogDetail" in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200

@@ -99,7 +99,20 @@ curl -sS -X POST -H "X-API-Key: $KEY" \
   -H "Content-Type: application/json" \
   -d '{"request_id":"manual-interrupt-1"}' \
   "$BASE/api/v1/dialog/interrupt"
+curl -sS -X POST -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"你现在电量是多少？","request_id":"manual-text-1"}' \
+  "$BASE/api/v1/dialog/text"
 ```
+
+The text endpoint does not open the microphone. FastAPI writes one private,
+bounded JSON request to
+`/var/lib/ai-cat-controller/dialog-text-request.json` and sends the fixed
+`SIGHUP` signal. The native process consumes and deletes the file, submits an
+`input_text` conversation item, asks for a response, speaks the returned TTS,
+and appends both sides to the normal dialogue event history. A second text
+request during listening, thinking, playback, or pending submission returns
+`409` instead of replacing the active turn.
 
 On K1, inspect both the native status and logs:
 

@@ -1,4 +1,6 @@
+import json
 import os
+import stat
 import time
 
 import pytest
@@ -7,7 +9,10 @@ from ai_cat_controller.adapters.command_runner import CommandResult
 from ai_cat_controller.adapters.base import Capability
 from ai_cat_controller.adapters.local_k1 import LocalK1Adapter
 from ai_cat_controller.core.config import Settings
-from ai_cat_controller.core.errors import AdapterNotImplementedError
+from ai_cat_controller.core.errors import (
+    ActionConflictError,
+    AdapterNotImplementedError,
+)
 
 
 class FakeRunner:
@@ -129,6 +134,37 @@ async def test_local_dialog_control_uses_fixed_signals() -> None:
             ("kill", "--signal=SIGUSR2", "volc-conv-ai.service"),
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_text_dialog_writes_private_request_and_fixed_signal(
+    tmp_path,
+) -> None:
+    runner = FakeRunner()
+    request_path = tmp_path / "dialog-text-request.json"
+    settings = local_settings().model_copy(
+        update={"dialog_text_request_path": request_path}
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.send_text_dialog("北京今天天气怎么样？", "web-text-1")
+
+    assert json.loads(request_path.read_text(encoding="utf-8")) == {
+        "version": 1,
+        "request_id": "web-text-1",
+        "content": "北京今天天气怎么样？",
+        "created_at_ms": pytest.approx(int(time.time() * 1000), abs=1000),
+    }
+    assert stat.S_IMODE(request_path.stat().st_mode) == 0o600
+    assert runner.calls == [
+        (
+            "/usr/bin/systemctl",
+            ("kill", "--signal=SIGHUP", "volc-conv-ai.service"),
+        )
+    ]
+
+    with pytest.raises(ActionConflictError, match="已有文字问题"):
+        await adapter.send_text_dialog("第二个问题", "web-text-2")
 
 
 @pytest.mark.asyncio

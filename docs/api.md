@@ -40,6 +40,7 @@ Error:
 | PATCH | `/api/v1/dialog/config` | Set the follow-up window to `5..120` seconds. |
 | POST | `/api/v1/dialog/wake` | Enter dialog state. |
 | POST | `/api/v1/dialog/interrupt` | Interrupt dialog state. |
+| POST | `/api/v1/dialog/text` | Submit text to the live Volcengine session; K1 speaks the answer. |
 | POST | `/api/v1/auth/mock-login` | 创建 Mock 用户会话。 |
 | GET | `/api/v1/personalities` | 查询 5 种逻辑性格配置。 |
 | GET | `/api/v1/pets` | 查询当前用户的宠物。 |
@@ -97,6 +98,20 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+文字提问请求：
+
+```json
+{
+  "content": "你现在电量是多少？",
+  "request_id": "web-text-1720000000000"
+}
+```
+
+`content` 为 `1..500` 个非控制字符。真机只在对话状态为 `ready`、
+`followup_listening` 或 `interrupted` 时接收；正在聆听、思考或回答时返回 `409`。
+接口成功表示原生进程已收到请求，不表示模型已经回答。最终用户文本和 AI 回答
+通过会话历史接口同步。
 
 会话摘要接口默认返回最近 `30` 个会话，可用 `limit=1..50` 调整。响应中的
 `sync.revision`、`message_count` 和 `latest_message_at` 可用于客户端增量刷新；

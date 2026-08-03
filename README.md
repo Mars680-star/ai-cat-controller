@@ -20,10 +20,15 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - 增加会话汇总、单会话详情和同步版本 API；真机字幕仍按事件 ID 幂等导入，旧版
   重复会话编号会按真实问答轮次自动拆分，原生程序重启后的新编号包含启动时间。
 - 新增部分问答实时补全、重复原生编号拆分、会话详情和页面结构测试；完整自动
-  测试结果为 `98 passed`。
+  测试结果为 `102 passed`。
 - K1 部署将当前宠物的占位设备序列号迁移为板端真实序列号，保留原宠物 ID、
   性格、亲密度和 Mock 记录；迁移前 SQLite 已保存一致性备份，历史真机字幕随后
   成功导入。
+- 增加网页文字提问：FastAPI 校验后将问题原子写入固定请求文件，仅通过白名单
+  `SIGHUP` 通知原生进程；原生进程以 `input_text` 送入同一个火山引擎会话，
+  回答继续由真机扬声器播放并实时进入会话历史。对话繁忙时拒绝重复提交。
+- K1 实测文字问题“一加一等于多少”无需唤醒即完成云端回答，用户文本与回答
+  “一加一等于二”进入同一会话，随后正常开放免唤醒追问窗口。
 
 ### 2026-08-02
 
@@ -97,6 +102,7 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - 真机最终字幕近实时同步、按会话汇总及单会话详情查询。
 - API Key、动作串行、停止取消、超时和退出清理。
 - Local K1 固定 systemd 服务状态查询、对话唤醒/打断和实时阶段显示。
+- Local K1 网页文字提问、真机语音回答和统一会话历史。
 - Local K1 网页配置免唤醒追问时间，设备重启后保持设置。
 - Local K1 真实电量、充电状态、电池电压和充电器在线检测，以及语音查询。
 - Local K1 固定摇头、点头和停止动作，以及默认关闭的维修后摇尾接口。
@@ -105,7 +111,7 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 Local K1 只执行固定的 `head_lr 1`、`head_ud 2`、`motor stop` 命令。摇尾只在
 维修并完成低速验收后设置 `AI_CAT_ENABLE_TAIL_MOTION=true` 才开放固定的
 `tail_lr 1`；默认返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
-固定的 `SIGUSR1`/`SIGUSR2`；产品 Mock 的对话仍是本地模板，逻辑音色 ID
+固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`；产品 Mock 的对话仍是本地模板，逻辑音色 ID
 未映射到火山引擎真实音色。
 
 ## 目录
@@ -200,7 +206,9 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - HTTP 请求不能指定可执行文件、服务名或 Shell 参数。
 - Python 代码不使用 `os.system`、`shell=True` 或 Shell 字符串拼接。
 - Local K1 只允许固定服务的 `is-active`、`is-enabled`，以及对话服务的
-  `SIGUSR1`/`SIGUSR2`。
+  `SIGHUP`/`SIGUSR1`/`SIGUSR2`。
+- 文字问题只能写入固定的 `dialog-text-request.json`，限制为 500 个可见字符；
+  HTTP 请求不能指定文件路径、信号、服务或厂商鉴权信息。
 - 不执行 `systemctl start/stop/restart`，也不接受请求传入任意信号或服务名。
 - 真机电机只接受审核过的固定动作，不接受 HTTP 或 Function Calling 传入 GPIO、
   方向、角度、速度、持续时间或 Shell 参数。

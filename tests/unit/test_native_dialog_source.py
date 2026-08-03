@@ -43,6 +43,16 @@ def test_native_dialog_ids_are_unique_across_service_restarts() -> None:
     assert '"native-%s-%" PRIu64 "-%lu"' in source
 
 
+def test_native_dialog_accepts_fixed_file_text_requests() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '#define DIALOG_TEXT_REQUEST_PATH DIALOG_EVENT_DIR' in source
+    assert "sigaction(SIGHUP, &sa, NULL);" in source
+    assert 'cJSON_AddStringToObject(content_item, "type", "input_text");' in source
+    assert "__write_dialog_event(\"user\", text_content, text_event_id);" in source
+    assert "text dialog response.create sent" in source
+
+
 def test_prepare_sdk_installs_canonical_dialog_source() -> None:
     script = PREPARE_SCRIPT_PATH.read_text(encoding="utf-8")
 
