@@ -1,5 +1,5 @@
-import time
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -194,6 +194,24 @@ def test_dialog_history_settings_device_status_and_feedback(
     ).json()["data"]
     assert [message["role"] for message in history] == ["assistant", "user"]
 
+    conversations = client.get(
+        f"/api/v1/pets/{pet_id}/dialog-conversations",
+        headers=headers,
+    ).json()["data"]
+    assert conversations["sync"]["conversation_count"] == 1
+    assert conversations["conversations"][0]["status"] == "complete"
+    assert conversations["conversations"][0]["source"] == "mock"
+    assert conversations["conversations"][0]["message_count"] == 2
+    conversation_id = conversations["conversations"][0]["conversation_id"]
+    detail = client.get(
+        f"/api/v1/pets/{pet_id}/dialog-conversations/{conversation_id}",
+        headers=headers,
+    ).json()["data"]
+    assert [message["role"] for message in detail["messages"]] == [
+        "user",
+        "assistant",
+    ]
+
     settings = client.patch(
         f"/api/v1/pets/{pet_id}/settings",
         headers=headers,
@@ -290,6 +308,112 @@ def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> No
         ]
         assert second == first
         assert first[0]["voice_id"] == "volcengine_tts"
+
+
+def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(
+    tmp_path,
+) -> None:
+    event_path = tmp_path / "dialog-events.jsonl"
+    settings = Settings(
+        hardware_driver="mock",
+        motion_cooldown_seconds=0.0,
+        data_path=tmp_path / "native-conversations.db",
+        dialog_event_path=event_path,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        headers, _ = _login(client, code="native-realtime-user")
+        pet_id = _bind(client, headers, serial="K1-REALTIME")["pet"]["pet_id"]
+        created_at_ms = int(time.time() * 1000) + 100
+        raw_conversation_id = "native-K1-REALTIME-1"
+        user_event = {
+            "event_id": "event-user-first",
+            "conversation_id": raw_conversation_id,
+            "device_serial": "K1-REALTIME",
+            "role": "user",
+            "content": "现在电量是多少？",
+            "created_at_ms": created_at_ms,
+        }
+        event_path.write_text(
+            json.dumps(user_event, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        partial = client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations",
+            headers=headers,
+        ).json()["data"]
+        assert partial["sync"]["imported_messages"] == 1
+        assert partial["conversations"][0]["status"] == "waiting_assistant"
+        first_conversation_id = partial["conversations"][0]["conversation_id"]
+        first_revision = partial["sync"]["revision"]
+
+        assistant_event = {
+            "event_id": "event-assistant-first",
+            "conversation_id": raw_conversation_id,
+            "device_serial": "K1-REALTIME",
+            "role": "assistant",
+            "content": "当前电量为 78%。",
+            "created_at_ms": created_at_ms + 1,
+        }
+        with event_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(assistant_event, ensure_ascii=False) + "\n")
+
+        complete = client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations",
+            headers=headers,
+        ).json()["data"]
+        assert complete["sync"]["imported_messages"] == 1
+        assert complete["sync"]["revision"] != first_revision
+        assert complete["conversations"][0]["conversation_id"] == first_conversation_id
+        assert complete["conversations"][0]["status"] == "complete"
+        detail = client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations/{first_conversation_id}",
+            headers=headers,
+        ).json()["data"]
+        assert [item["content"] for item in detail["messages"]] == [
+            "现在电量是多少？",
+            "当前电量为 78%。",
+        ]
+
+        reused_events = [
+            {
+                "event_id": "event-user-second",
+                "conversation_id": raw_conversation_id,
+                "device_serial": "K1-REALTIME",
+                "role": "user",
+                "content": "请点点头。",
+                "created_at_ms": created_at_ms + 2,
+            },
+            {
+                "event_id": "event-assistant-second",
+                "conversation_id": raw_conversation_id,
+                "device_serial": "K1-REALTIME",
+                "role": "assistant",
+                "content": "好的。",
+                "created_at_ms": created_at_ms + 3,
+            },
+        ]
+        with event_path.open("a", encoding="utf-8") as stream:
+            for event in reused_events:
+                stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+        repeated = client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations",
+            headers=headers,
+        ).json()["data"]
+        assert repeated["sync"]["conversation_count"] == 2
+        assert len(repeated["conversations"]) == 2
+        assert {item["preview"] for item in repeated["conversations"]} == {
+            "现在电量是多少？",
+            "请点点头。",
+        }
+
+        missing = client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations/missing-turn",
+            headers=headers,
+        )
+        assert missing.status_code == 404
 
 
 def test_critical_data_survives_application_restart(tmp_path) -> None:

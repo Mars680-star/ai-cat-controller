@@ -51,6 +51,8 @@ Error:
 | POST | `/api/v1/pets/{pet_id}/actions/{action_id}/execute` | 执行预设动作。 |
 | GET | `/api/v1/pets/{pet_id}/actions/executions` | 查询动作结果。 |
 | GET/POST | `/api/v1/pets/{pet_id}/dialogs` | 查询或生成 Mock 对话。 |
+| GET | `/api/v1/pets/{pet_id}/dialog-conversations` | 同步真机字幕并查询会话摘要。 |
+| GET | `/api/v1/pets/{pet_id}/dialog-conversations/{conversation_id}` | 查询单个会话及时间顺序消息。 |
 | PATCH | `/api/v1/pets/{pet_id}/settings` | 修改名称与音量。 |
 | POST | `/api/v1/pets/{pet_id}/mock-device-status` | 模拟电量和网络状态。 |
 | POST | `/api/v1/pets/{pet_id}/feedback` | 记录异常反馈。 |
@@ -95,6 +97,11 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+会话摘要接口默认返回最近 `30` 个会话，可用 `limit=1..50` 调整。响应中的
+`sync.revision`、`message_count` 和 `latest_message_at` 可用于客户端增量刷新；
+`status` 为 `waiting_assistant`、`complete` 或 `assistant_only`。单会话详情的
+`messages` 按时间升序返回。旧 `/dialogs` 查询接口保留，供已有调用方兼容。
 
 在 `local_k1` 模式下，设备状态从 Linux `power_supply` 接口返回：
 

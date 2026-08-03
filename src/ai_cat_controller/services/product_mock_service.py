@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -48,6 +49,10 @@ class ProductMockService:
         self._settings = settings
         self._sessions: dict[str, str] = {}
         self._finalizers: set[asyncio.Task[None]] = set()
+        self._dialog_sync_lock = asyncio.Lock()
+        self._dialog_source_signatures: dict[
+            tuple[str, str], tuple[int, int]
+        ] = {}
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
@@ -405,19 +410,164 @@ class ProductMockService:
     async def dialog_history(
         self, user_id: str, pet_id: str
     ) -> list[dict[str, Any]]:
-        events = await asyncio.to_thread(self._read_native_dialog_events)
-        if events:
-            imported = await asyncio.to_thread(
-                self._repository.import_native_dialog_events,
-                user_id=user_id,
-                pet_id=pet_id,
-                events=events,
-            )
-            if imported:
-                LOGGER.info("imported %d native dialog messages", imported)
+        await self._sync_native_dialog_events(user_id, pet_id)
         return await asyncio.to_thread(
             self._repository.list_dialogs, user_id, pet_id, 50
         )
+
+    async def dialog_conversations(
+        self, user_id: str, pet_id: str, limit: int = 30
+    ) -> dict[str, Any]:
+        sync = await self._sync_native_dialog_events(user_id, pet_id)
+        rows = await asyncio.to_thread(
+            self._repository.list_dialog_conversations,
+            user_id,
+            pet_id,
+            limit,
+        )
+        return {
+            "conversations": [self._conversation_summary(row) for row in rows],
+            "sync": sync,
+        }
+
+    async def dialog_conversation(
+        self, user_id: str, pet_id: str, conversation_id: str
+    ) -> dict[str, Any]:
+        sync = await self._sync_native_dialog_events(user_id, pet_id)
+        messages = await asyncio.to_thread(
+            self._repository.get_dialog_conversation,
+            user_id,
+            pet_id,
+            conversation_id,
+        )
+        return {
+            "conversation": self._conversation_summary_from_messages(messages),
+            "messages": messages,
+            "sync": sync,
+        }
+
+    async def _sync_native_dialog_events(
+        self, user_id: str, pet_id: str
+    ) -> dict[str, Any]:
+        source_signature: tuple[int, int] | None = None
+        source_updated_at: str | None = None
+        try:
+            source_stat = self._settings.dialog_event_path.stat()
+            source_signature = (source_stat.st_mtime_ns, source_stat.st_size)
+            source_updated_at = datetime.fromtimestamp(
+                source_stat.st_mtime,
+                timezone.utc,
+            ).isoformat()
+        except OSError:
+            pass
+
+        owner_key = (user_id, pet_id)
+        async with self._dialog_sync_lock:
+            imported = 0
+            if (
+                source_signature is not None
+                and self._dialog_source_signatures.get(owner_key)
+                != source_signature
+            ):
+                events = await asyncio.to_thread(self._read_native_dialog_events)
+                if events:
+                    imported = await asyncio.to_thread(
+                        self._repository.import_native_dialog_events,
+                        user_id=user_id,
+                        pet_id=pet_id,
+                        events=events,
+                    )
+                    if imported:
+                        LOGGER.info("imported %d native dialog messages", imported)
+                self._dialog_source_signatures[owner_key] = source_signature
+            state = await asyncio.to_thread(
+                self._repository.dialog_sync_state,
+                user_id,
+                pet_id,
+            )
+
+        latest_message_at = state["latest_message_at"]
+        return {
+            "imported_messages": imported,
+            "message_count": int(state["message_count"]),
+            "conversation_count": int(state["conversation_count"]),
+            "latest_message_at": latest_message_at,
+            "source_updated_at": source_updated_at,
+            "source_available": source_updated_at is not None,
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "revision": f"{state['message_count']}:{latest_message_at or ''}",
+        }
+
+    @staticmethod
+    def _conversation_summary(row: dict[str, Any]) -> dict[str, Any]:
+        user_count = int(row["user_message_count"])
+        assistant_count = int(row["assistant_message_count"])
+        if user_count and assistant_count:
+            status = "complete"
+        elif user_count:
+            status = "waiting_assistant"
+        else:
+            status = "assistant_only"
+        started_at = str(row["started_at"])
+        updated_at = str(row["updated_at"])
+        try:
+            duration_seconds = max(
+                int(
+                    (
+                        datetime.fromisoformat(updated_at)
+                        - datetime.fromisoformat(started_at)
+                    ).total_seconds()
+                ),
+                0,
+            )
+        except ValueError:
+            duration_seconds = 0
+        return {
+            "conversation_id": row["conversation_id"],
+            "status": status,
+            "source": "device" if int(row["device_source"]) else "mock",
+            "started_at": started_at,
+            "updated_at": updated_at,
+            "duration_seconds": duration_seconds,
+            "message_count": int(row["message_count"]),
+            "user_message_count": user_count,
+            "assistant_message_count": assistant_count,
+            "preview": row["preview"],
+            "assistant_preview": row["assistant_preview"],
+        }
+
+    @classmethod
+    def _conversation_summary_from_messages(
+        cls, messages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        user_messages = [item for item in messages if item["role"] == "user"]
+        assistant_messages = [
+            item for item in messages if item["role"] == "assistant"
+        ]
+        row = {
+            "conversation_id": messages[0]["conversation_id"],
+            "started_at": messages[0]["created_at"],
+            "updated_at": messages[-1]["created_at"],
+            "message_count": len(messages),
+            "user_message_count": len(user_messages),
+            "assistant_message_count": len(assistant_messages),
+            "device_source": int(
+                any(
+                    item.get("voice_id") == "volcengine_tts"
+                    or str(item["conversation_id"]).startswith("native-")
+                    for item in messages
+                )
+            ),
+            "preview": (
+                user_messages[0]["content"]
+                if user_messages
+                else messages[0]["content"]
+            ),
+            "assistant_preview": (
+                assistant_messages[-1]["content"] if assistant_messages else None
+            ),
+        }
+        return cls._conversation_summary(row)
 
     def _read_native_dialog_events(self) -> list[dict[str, Any]]:
         path = self._settings.dialog_event_path
@@ -439,7 +589,7 @@ class ProductMockService:
             try:
                 payload = json.loads(line)
                 event_id = str(payload["event_id"]).strip()
-                conversation_id = str(payload["conversation_id"]).strip()
+                source_conversation_id = str(payload["conversation_id"]).strip()
                 device_serial = str(payload["device_serial"]).strip()
                 role = str(payload["role"]).strip()
                 content = str(payload["content"]).strip()
@@ -449,8 +599,8 @@ class ProductMockService:
             if (
                 not event_id
                 or len(event_id) > 256
-                or not conversation_id
-                or len(conversation_id) > 256
+                or not source_conversation_id
+                or len(source_conversation_id) > 256
                 or not device_serial
                 or len(device_serial) > 64
                 or role not in {"user", "assistant"}
@@ -462,7 +612,8 @@ class ProductMockService:
             events.append(
                 {
                     "event_id": event_id,
-                    "conversation_id": conversation_id,
+                    "conversation_id": source_conversation_id,
+                    "source_conversation_id": source_conversation_id,
                     "device_serial": device_serial,
                     "role": role,
                     "content": content,
@@ -472,6 +623,42 @@ class ProductMockService:
                     ).isoformat(),
                 }
             )
+        return self._normalize_native_turn_ids(events)
+
+    @staticmethod
+    def _normalize_native_turn_ids(
+        events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        active_turns: dict[tuple[str, str], dict[str, Any]] = {}
+        for event in events:
+            key = (event["device_serial"], event["source_conversation_id"])
+            active = active_turns.get(key)
+            starts_new_turn = active is None
+            if event["role"] == "user":
+                starts_new_turn = starts_new_turn or bool(
+                    active and (active["user_seen"] or active["assistant_seen"])
+                )
+            else:
+                starts_new_turn = starts_new_turn or bool(
+                    active and active["assistant_seen"]
+                )
+            if starts_new_turn:
+                digest = hashlib.sha256(
+                    (
+                        f"{event['device_serial']}:"
+                        f"{event['source_conversation_id']}:"
+                        f"{event['event_id']}"
+                    ).encode("utf-8")
+                ).hexdigest()[:24]
+                active = {
+                    "conversation_id": f"native-turn-{digest}",
+                    "user_seen": False,
+                    "assistant_seen": False,
+                }
+                active_turns[key] = active
+            event["conversation_id"] = active["conversation_id"]
+            active[f"{event['role']}_seen"] = True
+            event.pop("source_conversation_id", None)
         return events
 
     async def update_settings(

@@ -22,6 +22,9 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="real-device-status"' in response.text
     assert 'id="real-battery-percent"' in response.text
     assert 'id="settings-follow-up"' in response.text
+    assert 'id="conversation-list"' in response.text
+    assert 'id="conversation-detail-title"' in response.text
+    assert 'id="dialog-sync-state"' in response.text
     assert "https://" not in response.text
     assert "cdn" not in response.text.lower()
 
@@ -36,6 +39,9 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert 'deviceStatusForm.classList.toggle("hidden", isLocalK1)' in script.text
     assert 'cache: options.cache || "no-store"' in script.text
     assert 'apiRequest("/api/v1/dialog/config")' in script.text
+    assert "/dialog-conversations" in script.text
+    assert "renderConversationList" in script.text
+    assert "refreshDialogDetail" in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 

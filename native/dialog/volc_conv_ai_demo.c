@@ -24,6 +24,7 @@
 #include <termios.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <ctype.h>
 #include <string.h>
 #include <strings.h>
@@ -162,6 +163,7 @@ static unsigned long dialog_status_sequence = 0;
 static pthread_mutex_t dialog_event_mutex = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long dialog_event_sequence = 0;
 static unsigned long dialog_turn_sequence = 0;
+static uint64_t dialog_runtime_started_ms = 0;
 static char device_serial[DEVICE_SERIAL_MAX_LEN + 1] = "unknown";
 
 /* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
@@ -394,14 +396,16 @@ static void __write_dialog_event(
     snprintf(
         generated_event_id,
         sizeof(generated_event_id),
-        "native-%lu",
+        "native-%" PRIu64 "-%lu",
+        dialog_runtime_started_ms,
         dialog_event_sequence
     );
     snprintf(
         conversation_id,
         sizeof(conversation_id),
-        "native-%s-%lu",
+        "native-%s-%" PRIu64 "-%lu",
         device_serial,
+        dialog_runtime_started_ms,
         dialog_turn_sequence
     );
 
@@ -2142,6 +2146,7 @@ int main(int argc, const char* argv[]){
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    dialog_runtime_started_ms = __get_time_ms();
     __load_device_serial();
     session_active = false;
     unlink(DIALOG_SESSION_MARKER);

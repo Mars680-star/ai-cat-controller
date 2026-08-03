@@ -84,6 +84,11 @@
     voiceFollowupRemaining: $("#voice-followup-remaining"),
     voiceStart: $("#voice-start"),
     voiceInterrupt: $("#voice-interrupt"),
+    dialogSyncState: $("#dialog-sync-state"),
+    conversationList: $("#conversation-list"),
+    conversationDetailTitle: $("#conversation-detail-title"),
+    conversationDetailMeta: $("#conversation-detail-meta"),
+    conversationDetailStatus: $("#conversation-detail-status"),
     dialogList: $("#dialog-list"),
     dialogForm: $("#dialog-form"),
     dialogInput: $("#dialog-input"),
@@ -117,6 +122,10 @@
     toastTimer: null,
     refreshing: false,
     dialogsRefreshing: false,
+    dialogDetailRequestId: 0,
+    dialogConversations: [],
+    selectedConversationId: null,
+    selectedConversationSignature: null,
     voiceStatus: null,
     hardwareStatus: null,
     dialogConfig: null,
@@ -159,6 +168,12 @@
     not_charging: "已接电，未充电",
     unknown: "状态未知",
     unavailable: "电池状态不可用",
+  };
+
+  const conversationStatusLabels = {
+    complete: "已完成",
+    waiting_assistant: "等待回答",
+    assistant_only: "仅有回答",
   };
 
   function showToast(message, level = "info") {
@@ -262,6 +277,17 @@
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+    });
+  }
+
+  function formatClock(value) {
+    if (!value) {
+      return "--";
+    }
+    return new Date(value).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
     });
   }
 
@@ -667,14 +693,113 @@
     await Promise.all([refreshIntimacy(), refreshDashboard(), refreshActions()]);
   }
 
-  function renderDialogs(messages) {
+  function renderDialogSync(sync) {
+    if (!sync) {
+      ui.dialogSyncState.textContent = "等待同步";
+      return;
+    }
+    if (sync.imported_messages > 0) {
+      ui.dialogSyncState.textContent = `新增 ${sync.imported_messages} 条`;
+      return;
+    }
+    if (!sync.source_available && sync.message_count === 0) {
+      ui.dialogSyncState.textContent = "等待真机字幕";
+      return;
+    }
+    ui.dialogSyncState.textContent = `已同步 ${formatClock(sync.synced_at)}`;
+  }
+
+  function conversationSignature(conversation) {
+    return [
+      conversation.conversation_id,
+      conversation.updated_at,
+      conversation.message_count,
+      conversation.status,
+    ].join(":");
+  }
+
+  function renderConversationList(conversations) {
+    ui.conversationList.replaceChildren();
+    ui.conversationList.classList.toggle("empty-state", conversations.length === 0);
+    if (conversations.length === 0) {
+      ui.conversationList.textContent = "暂无真实语音会话";
+      return;
+    }
+    conversations.forEach((conversation) => {
+      const button = document.createElement("button");
+      button.className = "conversation-item";
+      button.type = "button";
+      button.dataset.conversationId = conversation.conversation_id;
+      button.setAttribute(
+        "aria-selected",
+        String(conversation.conversation_id === state.selectedConversationId),
+      );
+
+      const heading = document.createElement("span");
+      heading.className = "conversation-item-heading";
+      const preview = document.createElement("strong");
+      preview.textContent = conversation.preview || "无用户字幕";
+      const time = document.createElement("time");
+      time.dateTime = conversation.updated_at;
+      time.textContent = formatDate(conversation.updated_at);
+      heading.append(preview, time);
+
+      const meta = document.createElement("span");
+      meta.className = "conversation-item-meta";
+      const status = document.createElement("span");
+      status.className = `conversation-status ${conversation.status}`;
+      status.textContent = conversationStatusLabels[conversation.status]
+        || conversation.status;
+      const count = document.createElement("span");
+      count.textContent = `${conversation.message_count} 条消息`;
+      meta.append(status, count);
+      button.append(heading, meta);
+      button.addEventListener("click", () => {
+        if (state.selectedConversationId === conversation.conversation_id) {
+          return;
+        }
+        state.selectedConversationId = conversation.conversation_id;
+        state.selectedConversationSignature = null;
+        renderConversationList(state.dialogConversations);
+        refreshDialogDetail(conversation.conversation_id).catch(reportError);
+      });
+      ui.conversationList.append(button);
+    });
+  }
+
+  function clearDialogDetail() {
+    state.selectedConversationId = null;
+    state.selectedConversationSignature = null;
+    ui.conversationDetailTitle.textContent = "选择一条会话";
+    ui.conversationDetailMeta.textContent = "--";
+    ui.conversationDetailStatus.textContent = "--";
+    ui.conversationDetailStatus.className = "state-label";
+    ui.dialogList.replaceChildren();
+    ui.dialogList.classList.add("empty-state");
+    ui.dialogList.textContent = "暂无对话记录";
+  }
+
+  function renderDialogDetail(data) {
+    const {conversation, messages} = data;
+    ui.conversationDetailTitle.textContent = conversation.preview || "会话详情";
+    const source = conversation.source === "device" ? "真机语音" : "网页 Mock";
+    const duration = conversation.duration_seconds > 0
+      ? ` · ${conversation.duration_seconds} 秒`
+      : "";
+    ui.conversationDetailMeta.textContent =
+      `${formatDate(conversation.started_at)} · ${source}${duration}`;
+    ui.conversationDetailStatus.textContent =
+      conversationStatusLabels[conversation.status] || conversation.status;
+    ui.conversationDetailStatus.className =
+      `state-label ${conversation.status}`;
+
     ui.dialogList.replaceChildren();
     ui.dialogList.classList.toggle("empty-state", messages.length === 0);
     if (messages.length === 0) {
-      ui.dialogList.textContent = "暂无真实语音字幕记录";
+      ui.dialogList.textContent = "暂无对话记录";
       return;
     }
-    [...messages].reverse().forEach((message) => {
+    messages.forEach((message) => {
       const block = document.createElement("article");
       block.className = `dialog-message ${message.role}`;
       const content = document.createElement("p");
@@ -689,16 +814,61 @@
     ui.dialogList.scrollTop = ui.dialogList.scrollHeight;
   }
 
-  async function refreshDialogs() {
+  async function refreshDialogDetail(conversationId) {
+    if (!conversationId) {
+      return;
+    }
+    const requestId = ++state.dialogDetailRequestId;
+    const payload = await apiRequest(
+      `/api/v1/pets/${encodeURIComponent(state.petId)}`
+      + `/dialog-conversations/${encodeURIComponent(conversationId)}`,
+    );
+    if (
+      requestId !== state.dialogDetailRequestId
+      || state.selectedConversationId !== conversationId
+    ) {
+      return;
+    }
+    renderDialogDetail(payload.data);
+    state.selectedConversationSignature = conversationSignature(
+      payload.data.conversation,
+    );
+    renderDialogSync(payload.data.sync);
+  }
+
+  async function refreshDialogs(options = {}) {
     if (!state.petId || state.dialogsRefreshing) {
       return;
     }
     state.dialogsRefreshing = true;
     try {
       const payload = await apiRequest(
-        `/api/v1/pets/${encodeURIComponent(state.petId)}/dialogs`,
+        `/api/v1/pets/${encodeURIComponent(state.petId)}/dialog-conversations`,
       );
-      renderDialogs(payload.data);
+      const conversations = payload.data.conversations;
+      state.dialogConversations = conversations;
+      renderDialogSync(payload.data.sync);
+
+      const selectedExists = conversations.some(
+        (item) => item.conversation_id === state.selectedConversationId,
+      );
+      if (options.selectLatest || !selectedExists) {
+        state.selectedConversationId = conversations[0]?.conversation_id || null;
+        state.selectedConversationSignature = null;
+      }
+      renderConversationList(conversations);
+      if (!state.selectedConversationId) {
+        clearDialogDetail();
+        return;
+      }
+
+      const selected = conversations.find(
+        (item) => item.conversation_id === state.selectedConversationId,
+      );
+      const nextSignature = conversationSignature(selected);
+      if (options.forceDetail || nextSignature !== state.selectedConversationSignature) {
+        await refreshDialogDetail(state.selectedConversationId);
+      }
     } finally {
       state.dialogsRefreshing = false;
     }
@@ -771,7 +941,7 @@
       ui.dialogInput.value = "";
       showToast(`已使用 ${payload.data.style.tone} 风格回应`);
       await Promise.all([
-        refreshDialogs(),
+        refreshDialogs({selectLatest: true, forceDetail: true}),
         refreshIntimacy(),
         refreshDashboard(),
       ]);
@@ -999,5 +1169,5 @@
       refreshVoiceStatus().catch(reportError);
       refreshDialogs().catch(reportError);
     }
-  }, 2000);
+  }, 1000);
 })();

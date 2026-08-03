@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>AI 猫伴侣</title>
-  <link rel="stylesheet" href="/static/control.css">
+  <link rel="stylesheet" href="/static/control.css?v=20260803-1">
 </head>
 <body>
   <header class="topbar">
@@ -336,7 +336,28 @@
             </button>
           </div>
         </section>
-        <div id="dialog-list" class="dialog-list empty-state">暂无对话记录</div>
+        <section class="conversation-workspace" aria-label="对话会话">
+          <aside class="conversation-sidebar">
+            <div class="conversation-sidebar-heading">
+              <h3>会话</h3>
+              <span id="dialog-sync-state" class="sync-state" role="status"
+                    aria-live="polite">正在同步</span>
+            </div>
+            <div id="conversation-list" class="conversation-list empty-state">
+              暂无会话
+            </div>
+          </aside>
+          <section class="conversation-detail" aria-labelledby="conversation-detail-title">
+            <div class="conversation-detail-heading">
+              <div>
+                <h3 id="conversation-detail-title">选择一条会话</h3>
+                <p id="conversation-detail-meta">--</p>
+              </div>
+              <span id="conversation-detail-status" class="state-label">--</span>
+            </div>
+            <div id="dialog-list" class="dialog-list empty-state">暂无对话记录</div>
+          </section>
+        </section>
         <form id="dialog-form" class="dialog-composer">
           <input id="dialog-input" maxlength="500" required
                  placeholder="输入一条测试消息">
@@ -423,6 +444,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260802-4" defer></script>
+  <script src="/static/control.js?v=20260803-1" defer></script>
 </body>
 </html>

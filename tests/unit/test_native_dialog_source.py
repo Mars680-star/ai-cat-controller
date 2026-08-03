@@ -35,6 +35,14 @@ def test_native_dialog_reopens_capture_after_ready_tone() -> None:
     assert "pa_simple_flush(demo->p_capture" not in source
 
 
+def test_native_dialog_ids_are_unique_across_service_restarts() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "dialog_runtime_started_ms = __get_time_ms();" in source
+    assert '"native-%" PRIu64 "-%lu"' in source
+    assert '"native-%s-%" PRIu64 "-%lu"' in source
+
+
 def test_prepare_sdk_installs_canonical_dialog_source() -> None:
     script = PREPARE_SCRIPT_PATH.read_text(encoding="utf-8")
 

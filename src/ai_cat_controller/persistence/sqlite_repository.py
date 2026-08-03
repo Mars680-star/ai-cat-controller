@@ -138,6 +138,10 @@ class SQLiteRepository:
                     ON interaction_events(pet_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_dialog_pet_time
                     ON dialog_history(pet_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_dialog_conversation_time
+                    ON dialog_history(
+                        pet_id, user_id, conversation_id, created_at ASC
+                    );
                 CREATE INDEX IF NOT EXISTS idx_actions_pet_time
                     ON action_executions(pet_id, created_at DESC);
                 """
@@ -542,6 +546,21 @@ class SQLiteRepository:
                     ),
                 )
                 imported += int(cursor.rowcount == 1)
+                connection.execute(
+                    """
+                    UPDATE dialog_history
+                    SET conversation_id = ?
+                    WHERE message_id = ? AND pet_id = ? AND user_id = ?
+                      AND conversation_id != ?
+                    """,
+                    (
+                        event["conversation_id"],
+                        message_id,
+                        pet_id,
+                        user_id,
+                        event["conversation_id"],
+                    ),
+                )
         return imported
 
     def list_dialogs(
@@ -560,6 +579,104 @@ class SQLiteRepository:
                 (pet_id, user_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_dialog_conversations(
+        self, user_id: str, pet_id: str, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            rows = connection.execute(
+                """
+                SELECT
+                    h.conversation_id,
+                    MIN(h.created_at) AS started_at,
+                    MAX(h.created_at) AS updated_at,
+                    COUNT(*) AS message_count,
+                    SUM(CASE WHEN h.role = 'user' THEN 1 ELSE 0 END)
+                        AS user_message_count,
+                    SUM(CASE WHEN h.role = 'assistant' THEN 1 ELSE 0 END)
+                        AS assistant_message_count,
+                    MAX(
+                        CASE
+                            WHEN h.voice_id = 'volcengine_tts'
+                                 OR h.conversation_id LIKE 'native-%'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS device_source,
+                    COALESCE(
+                        (
+                            SELECT d.content
+                            FROM dialog_history AS d
+                            WHERE d.pet_id = h.pet_id
+                              AND d.user_id = h.user_id
+                              AND d.conversation_id = h.conversation_id
+                              AND d.role = 'user'
+                            ORDER BY d.created_at ASC, d.rowid ASC
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT d.content
+                            FROM dialog_history AS d
+                            WHERE d.pet_id = h.pet_id
+                              AND d.user_id = h.user_id
+                              AND d.conversation_id = h.conversation_id
+                            ORDER BY d.created_at ASC, d.rowid ASC
+                            LIMIT 1
+                        )
+                    ) AS preview,
+                    (
+                        SELECT d.content
+                        FROM dialog_history AS d
+                        WHERE d.pet_id = h.pet_id
+                          AND d.user_id = h.user_id
+                          AND d.conversation_id = h.conversation_id
+                          AND d.role = 'assistant'
+                        ORDER BY d.created_at DESC, d.rowid DESC
+                        LIMIT 1
+                    ) AS assistant_preview
+                FROM dialog_history AS h
+                WHERE h.pet_id = ? AND h.user_id = ?
+                GROUP BY h.pet_id, h.user_id, h.conversation_id
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (pet_id, user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_dialog_conversation(
+        self, user_id: str, pet_id: str, conversation_id: str
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            rows = connection.execute(
+                """
+                SELECT message_id, conversation_id, role, content, voice_id,
+                       created_at
+                FROM dialog_history
+                WHERE pet_id = ? AND user_id = ? AND conversation_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (pet_id, user_id, conversation_id),
+            ).fetchall()
+        if not rows:
+            raise ResourceNotFoundError("对话会话不存在")
+        return [dict(row) for row in rows]
+
+    def dialog_sync_state(self, user_id: str, pet_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS message_count,
+                       COUNT(DISTINCT conversation_id) AS conversation_count,
+                       MAX(created_at) AS latest_message_at
+                FROM dialog_history
+                WHERE pet_id = ? AND user_id = ?
+                """,
+                (pet_id, user_id),
+            ).fetchone()
+        return dict(row)
 
     def create_action_execution(
         self,

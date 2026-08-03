@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Path, Query, status
 
 from ai_cat_controller.api.dependencies import get_services
 from ai_cat_controller.core.state import AppServices
@@ -199,6 +199,42 @@ async def dialog_history(
 ) -> ApiResponse[Any]:
     history = await services.product.dialog_history(user_id, pet_id)
     return _response("对话历史", history[:limit])
+
+
+@router.get(
+    "/pets/{pet_id}/dialog-conversations",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def dialog_conversations(
+    pet_id: str,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 30,
+) -> ApiResponse[Any]:
+    result = await services.product.dialog_conversations(
+        user_id,
+        pet_id,
+        limit,
+    )
+    return _response("对话会话已同步", result)
+
+
+@router.get(
+    "/pets/{pet_id}/dialog-conversations/{conversation_id}",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def dialog_conversation_detail(
+    pet_id: str,
+    conversation_id: Annotated[str, Path(min_length=4, max_length=256)],
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    result = await services.product.dialog_conversation(
+        user_id,
+        pet_id,
+        conversation_id,
+    )
+    return _response("会话详情已同步", result)
 
 
 @router.patch(

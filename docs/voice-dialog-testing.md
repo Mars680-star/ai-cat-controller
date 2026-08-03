@@ -74,6 +74,14 @@ stores final user and assistant transcripts in
 idempotently into SQLite using the bound device serial number and binding
 timestamp.
 
+While the browser history page is open, it polls the conversation summary every
+second. A final user transcript is shown immediately as `waiting_assistant`;
+the same conversation changes to `complete` when the final assistant subtitle
+arrives. Selecting a summary loads that conversation's messages in chronological
+order. Native event and conversation IDs include the dialogue process start time,
+so a service restart cannot overwrite an earlier turn. The importer also splits
+legacy repeated IDs deterministically and updates already imported rows.
+
 ## API checks
 
 Replace the address and API key with the K1 values:
