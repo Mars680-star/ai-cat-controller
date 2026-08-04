@@ -15,9 +15,17 @@ import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.domain.personalities import PERSONALITIES
+from ai_cat_controller.local_speech import (
+    DEFAULT_ASSET_ROOT,
+    DEFAULT_MARKER_PATH,
+    DEFAULT_PLAYER_PATH,
+    LocalPhrasePlayer,
+    LocalSpeechError,
+)
 
 LOGGER = logging.getLogger("ai_cat_controller.autonomy")
 MAX_RESPONSE_BYTES = 65_536
@@ -63,6 +71,10 @@ class AutonomyConfig:
     maximum_interval_seconds: float
     phrase_probability: float
     cloud_speech_enabled: bool = False
+    local_speech_enabled: bool = False
+    local_speech_asset_root: Path = DEFAULT_ASSET_ROOT
+    local_speech_marker_path: Path = DEFAULT_MARKER_PATH
+    local_speech_player_path: Path = DEFAULT_PLAYER_PATH
 
     @classmethod
     def from_env(
@@ -89,14 +101,14 @@ class AutonomyConfig:
         minimum_interval = _bounded_float(
             source,
             "AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS",
-            60.0,
+            180.0,
             15.0,
             3600.0,
         )
         maximum_interval = _bounded_float(
             source,
             "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS",
-            120.0,
+            180.0,
             15.0,
             3600.0,
         )
@@ -105,6 +117,16 @@ class AutonomyConfig:
                 "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS must be greater than or equal "
                 "to AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS"
             )
+        cloud_speech_enabled = (
+            source.get("AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED", "false").lower()
+            == "true"
+        )
+        local_speech_enabled = (
+            source.get("AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED", "false").lower()
+            == "true"
+        )
+        if cloud_speech_enabled and local_speech_enabled:
+            raise ValueError("cloud and local autonomy speech cannot both be enabled")
         return cls(
             api_port=api_port,
             api_key=api_key,
@@ -114,13 +136,29 @@ class AutonomyConfig:
             phrase_probability=_bounded_float(
                 source,
                 "AI_CAT_AUTONOMY_PHRASE_PROBABILITY",
-                0.7,
+                1.0,
                 0.0,
                 1.0,
             ),
-            cloud_speech_enabled=(
-                source.get("AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED", "false").lower()
-                == "true"
+            cloud_speech_enabled=cloud_speech_enabled,
+            local_speech_enabled=local_speech_enabled,
+            local_speech_asset_root=Path(
+                source.get(
+                    "AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT",
+                    str(DEFAULT_ASSET_ROOT),
+                )
+            ),
+            local_speech_marker_path=Path(
+                source.get(
+                    "AI_CAT_AUTONOMY_LOCAL_SPEECH_MARKER_PATH",
+                    str(DEFAULT_MARKER_PATH),
+                )
+            ),
+            local_speech_player_path=Path(
+                source.get(
+                    "AI_CAT_AUTONOMY_LOCAL_SPEECH_PLAYER_PATH",
+                    str(DEFAULT_PLAYER_PATH),
+                )
             ),
         )
 
@@ -213,11 +251,17 @@ class AutonomyWorker:
         *,
         random_source: random.Random | None = None,
         stop_event: threading.Event | None = None,
+        local_player: LocalPhrasePlayer | None = None,
     ) -> None:
         self._config = config
         self._client = client
         self._random = random_source or random.Random()
         self._stop_event = stop_event or threading.Event()
+        self._local_player = local_player or LocalPhrasePlayer(
+            asset_root=config.local_speech_asset_root,
+            marker_path=config.local_speech_marker_path,
+            player_path=config.local_speech_player_path,
+        )
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -280,7 +324,10 @@ class AutonomyWorker:
 
         phrase: str | None = None
         if (
-            self._config.cloud_speech_enabled
+            (
+                self._config.cloud_speech_enabled
+                or self._config.local_speech_enabled
+            )
             and self._random.random() < self._config.phrase_probability
         ):
             profile_phrases = autonomy.get("phrases")
@@ -292,8 +339,12 @@ class AutonomyWorker:
             phrase = self._random.choice(phrases) if phrases else None
         if phrase is not None:
             try:
-                self._client.speak(phrase, f"{event_id}-speech")
-            except ControllerApiError as exc:
+                if self._config.local_speech_enabled:
+                    personality_id = str(personality.get("personality_id", ""))
+                    self._local_player.play(personality_id, phrase)
+                else:
+                    self._client.speak(phrase, f"{event_id}-speech")
+            except (ControllerApiError, LocalSpeechError) as exc:
                 LOGGER.info("autonomous phrase skipped after motion start: %s", exc)
                 phrase = None
 

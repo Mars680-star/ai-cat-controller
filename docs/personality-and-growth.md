@@ -26,7 +26,8 @@ Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖
 4. 原生 Function Calling 在执行电机前再次检查性格动作白名单；不允许的动作只
    返回拒绝结果，不启动电机。
 5. `toy_motor.service` 从 `/api/v1/personality/runtime` 读取同一性格的安全头部
-   动作权重与固定主动短语。
+   动作权重与固定主动短语。K1 使用预生成 WAV 本地播放，每 3 分钟最多 1 句，
+   不启动火山服务；播放期间通过 `/run/ai-cat/local-speech-active` 暂停唤醒收音。
 
 绑定、宠物改名、亲密度跨级和 FastAPI 重启都会刷新配置。设备重启后 SQLite 与
 运行时文件会恢复当前性格。`GET /api/v1/personality/runtime` 中

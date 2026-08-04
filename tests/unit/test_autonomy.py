@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 
 import pytest
 
@@ -45,6 +46,15 @@ class FakeClient:
         self.phrases.append((content, request_id))
 
 
+class FakeLocalPlayer:
+    def __init__(self) -> None:
+        self.plays: list[tuple[str, str]] = []
+
+    def play(self, personality_id: str, phrase: str) -> Path:
+        self.plays.append((personality_id, phrase))
+        return Path("/fixed/local/phrase.wav")
+
+
 def autonomy_config(**overrides: object) -> AutonomyConfig:
     values = {
         "api_port": 8000,
@@ -54,6 +64,7 @@ def autonomy_config(**overrides: object) -> AutonomyConfig:
         "maximum_interval_seconds": 120.0,
         "phrase_probability": 1.0,
         "cloud_speech_enabled": False,
+        "local_speech_enabled": False,
     }
     values.update(overrides)
     return AutonomyConfig(**values)  # type: ignore[arg-type]
@@ -75,6 +86,25 @@ def test_autonomy_submits_only_safe_head_motion_and_allowlisted_phrase() -> None
     assert client.actions[0][0] in SAFE_ACTIONS
     assert client.phrases[0][0] in SHORT_PHRASES
     assert all("tail" not in action for action, _ in client.actions)
+
+
+def test_autonomy_plays_personality_phrase_locally_without_cloud() -> None:
+    client = FakeClient(
+        {"state": "offline", "session_active": False, "stale": True}
+    )
+    player = FakeLocalPlayer()
+    worker = AutonomyWorker(
+        autonomy_config(local_speech_enabled=True),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(7),
+        local_player=player,  # type: ignore[arg-type]
+    )
+
+    result = worker.run_once()
+
+    assert result["phrase"] in SHORT_PHRASES
+    assert player.plays == [("sunny_explorer", result["phrase"])]
+    assert client.phrases == []
 
 
 def test_autonomy_can_resume_after_user_ends_dialog() -> None:
@@ -124,6 +154,21 @@ def test_autonomy_config_rejects_too_frequent_motion() -> None:
             {
                 "AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS": "5",
                 "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS": "60",
+            }
+        )
+
+
+def test_autonomy_config_defaults_to_three_minutes_and_rejects_two_speech_modes() -> None:
+    config = AutonomyConfig.from_env({})
+
+    assert config.minimum_interval_seconds == 180.0
+    assert config.maximum_interval_seconds == 180.0
+
+    with pytest.raises(ValueError, match="cannot both be enabled"):
+        AutonomyConfig.from_env(
+            {
+                "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED": "true",
+                "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED": "true",
             }
         )
 

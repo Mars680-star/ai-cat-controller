@@ -37,13 +37,15 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   `Restart=on-failure` 且不再开机启用，异常断线最多快速重试 3 次。本地唤醒、
   FastAPI、PulseAudio 和安全自主动作继续常驻。
 - 安全自主头部动作可在云端离线时继续执行；后台随机云端短语默认关闭，避免
-  自主行为重新产生云端会话。需要专项测试时才设置
-  `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=true`。
+  自主行为重新产生云端会话。5 种性格各有 3 句固定本地 WAV，K1 每 3 分钟最多
+  随机播放 1 句；播放只使用 PulseAudio，不启动火山服务。播放期间本地唤醒自动
+  暂停收音，结束后恢复。离线音频由 `espeak-ng` 一次性生成，音质和音色不等同于
+  火山云端音色。
 - K1 上已验证 RISC-V 对话与唤醒程序编译、网页文字按需启动、云端错误最多重试
   3 次，以及离线自主头部动作不启动云端。新产品鉴权、模型文字回复、动态 TTS
   音色和完整回答结束事件均已通过；实测回答完成后云端按 90 秒空闲策略正常退出，
   本地唤醒服务保持运行。
-- 自动测试更新为 `130 passed`。产品重绑回滚包位于
+- 自动测试更新为 `136 passed`。产品重绑回滚包位于
   `/root/ai-cat-backups/before-product-rebind-6a715196-20260804/rebind-backup.tar.gz`；
   TTS 修复前的服务文件和运行时配置位于
   `/root/ai-cat-backups/before-tts-resource-fix-20260804/`。
@@ -246,9 +248,19 @@ export AI_CAT_HARDWARE_DRIVER=local_k1
 export AI_CAT_API_KEY_ENABLED=true
 export AI_CAT_API_KEY='替换为随机密钥'
 export AI_CAT_ENABLE_TAIL_MOTION=false
-export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=60
-export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=120
+export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180
+export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180
+export AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
 export AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
+export AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true
+export AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
+```
+
+首次部署或修改固定短语后生成本地 WAV：
+
+```bash
+/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.local_speech \
+  --generate-assets
 ```
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
@@ -269,8 +281,9 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - 仅允许无 Shell 地执行固定的
   `systemctl --no-block start volc-conv-ai.service`；HTTP 请求不能改变命令、
   服务名或启动参数。
-- 文字问题和主动短语只能写入固定的 `dialog-text-request.json`；问题限制为
-  500 个字符、主动短语限制为 100 个字符；
+- 文字问题和云端主动短语只能写入固定的 `dialog-text-request.json`；本地主动
+  短语只能从 5 种性格的预生成 WAV 白名单中选择；问题限制为 500 个字符、
+  云端主动短语限制为 100 个字符；
   HTTP 请求不能指定文件路径、信号、服务或厂商鉴权信息。
 - 不执行任意 `systemctl stop/restart`，也不接受请求传入任意信号或服务名。
 - 真机电机只接受审核过的固定动作，不接受 HTTP 或 Function Calling 传入 GPIO、

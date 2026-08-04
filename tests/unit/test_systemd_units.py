@@ -28,6 +28,14 @@ def test_toy_motor_unit_runs_only_safe_autonomy_worker() -> None:
     assert "/usr/bin/toy_control" not in unit
     assert "EnvironmentFile=/etc/ai-cat-controller.env" in unit
     assert "volc-conv-ai.service" not in unit
+    assert "Group=pulse-access" in unit
+    assert "PULSE_SERVER=unix:/var/run/pulse/native" in unit
+    assert "Requires=ai-cat-controller.service volc-pulseaudio.service" in unit
+    assert unit.count("/run/ai-cat/local-speech-active") == 2
+    assert "AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180" in unit
+    assert "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180" in unit
+    assert "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false" in unit
+    assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true" in unit
 
 
 def test_wake_word_service_does_not_pull_in_cloud_dialog() -> None:

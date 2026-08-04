@@ -1,15 +1,26 @@
 [Unit]
 Description=AI Cat Safe Autonomous Head Motion and Speech
-After=ai-cat-controller.service
-Requires=ai-cat-controller.service
+After=ai-cat-controller.service volc-pulseaudio.service
+Requires=ai-cat-controller.service volc-pulseaudio.service
 
 [Service]
 Type=simple
 User=root
+Group=pulse-access
+SupplementaryGroups=root
 WorkingDirectory=/opt/ai-cat-controller
 EnvironmentFile=/etc/ai-cat-controller.env
 Environment=PYTHONUNBUFFERED=1
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+Environment=AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180
+Environment=AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180
+Environment=AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
+Environment=AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
+Environment=AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true
+Environment=AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
+ExecStartPre=/usr/bin/rm -f /run/ai-cat/local-speech-active
 ExecStart=/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.autonomy
+ExecStopPost=/usr/bin/rm -f /run/ai-cat/local-speech-active
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10

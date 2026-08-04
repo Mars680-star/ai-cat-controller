@@ -91,6 +91,14 @@ def test_local_wake_word_starts_cloud_only_after_match_and_waits_for_ready() -> 
     )
 
 
+def test_local_wake_word_pauses_capture_during_local_speech() -> None:
+    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'kLocalSpeechMarker = "/run/ai-cat/local-speech-active"' in source
+    assert "dialog_active || local_speech_active" in source
+    assert "Capture paused for local speech" in source
+
+
 def test_native_dialog_uses_fixed_motion_commands() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 

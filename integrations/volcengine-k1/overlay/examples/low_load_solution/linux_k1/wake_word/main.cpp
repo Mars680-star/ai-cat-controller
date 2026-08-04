@@ -36,6 +36,7 @@ constexpr size_t kMaxUtteranceSamples = 80000;
 constexpr float kVadThreshold = 0.5f;
 constexpr auto kTriggerSettleDelay = std::chrono::seconds(1);
 constexpr const char* kDialogSessionMarker = "/run/ai-cat/dialog-session-active";
+constexpr const char* kLocalSpeechMarker = "/run/ai-cat/local-speech-active";
 constexpr const char* kDialogStatusPath = "/run/ai-cat/dialog-status.json";
 constexpr const char* kDialogService = "volc-conv-ai.service";
 constexpr size_t kMaxDialogStatusBytes = 16 * 1024;
@@ -337,7 +338,9 @@ int main(int argc, char** argv) {
 
     std::cout << "[WakeWord] Listening" << std::endl;
     while (!exit_requested) {
-        if (access(kDialogSessionMarker, F_OK) == 0) {
+        const bool dialog_active = access(kDialogSessionMarker, F_OK) == 0;
+        const bool local_speech_active = access(kLocalSpeechMarker, F_OK) == 0;
+        if (dialog_active || local_speech_active) {
             if (capture != nullptr) {
                 pa_simple_free(capture);
                 capture = nullptr;
@@ -346,8 +349,11 @@ int main(int argc, char** argv) {
                 silence_run = 0;
                 utterance.clear();
                 pre_speech.clear();
-                std::cout << "[WakeWord] Capture paused for active conversation"
-                          << std::endl;
+                std::cout
+                    << (dialog_active
+                            ? "[WakeWord] Capture paused for active conversation"
+                            : "[WakeWord] Capture paused for local speech")
+                    << std::endl;
             }
             usleep(50 * 1000);
             continue;
