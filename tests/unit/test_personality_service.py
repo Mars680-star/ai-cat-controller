@@ -42,6 +42,11 @@ def test_five_personalities_have_distinct_volcengine_runtime_profiles() -> None:
             update_config["TTSConfig"]["ProviderParams"]["audio"]["voice_type"]
             == personality.voice_id
         )
+        assert update_config["TTSConfig"]["Provider"] == "volcano_bidirection"
+        assert (
+            update_config["TTSConfig"]["ProviderParams"]["ResourceId"]
+            == "volc.service_type.10029"
+        )
 
 
 def test_intimacy_level_changes_address_prompt_and_revision() -> None:

@@ -19,8 +19,15 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - 增加 `/api/v1/personality/runtime` 同步状态接口；原生状态上报当前
   `personality_id`、配置 revision 和 `voice_type`。K1 已编译部署，当前
   “元气探险家”revision 与原生状态一致，火山网关返回 `session.updated`。
-- 火山随后返回 `code=1000003: AI license duration quota exceeded`，因此 5 个音色
-  尚不能逐一完成人工听感验收。为降低语音时长消耗，云端对话进程改为按需启动：
+- 原硬件产品的语音 License 用尽后，新建硬件产品已通过 ProductKey、
+  ProductSecret、实例 ID 和 Bot ID 在同一 K1 上完成动态注册；新的设备密钥已按
+  `0600` 权限独立缓存，旧产品密钥保留用于回滚，配置和凭据备份不进入 Git。
+- 新产品首次测试暴露出动态性格音色只更新 `voice_type`、未携带 TTS 服务信息的
+  问题，网关返回 `code=1005004: resource ID is mismatched with speaker related
+  resource`。性格运行时现固定携带 `Provider=volcano_bidirection` 和
+  `ResourceId=volc.service_type.10029`，已验证“撒娇学妹”音色能完成 TTS 播放并
+  返回 `response.done`；其余 4 个音色仍需逐一人工听感验收。
+- 为降低语音时长消耗，云端对话进程改为按需启动：
   本地“小安小安”唤醒服务常驻，匹配后才启动固定的
   `volc-conv-ai.service`，等待云端与人格配置就绪后自动进入聆听。
 - 网页文字提问和显式播报同样会按需启动云端；FastAPI 只允许执行固定的
@@ -33,10 +40,10 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   自主行为重新产生云端会话。需要专项测试时才设置
   `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=true`。
 - K1 上已验证 RISC-V 对话与唤醒程序编译、网页文字按需启动、云端错误最多重试
-  3 次，以及离线自主头部动作不启动云端。当前 License/TTS 资源错误会让云端
-  异常断开，因此 90 秒正常空闲退出还需在控制台资源恢复后做计时验收。
+  3 次，以及离线自主头部动作不启动云端。新产品鉴权、模型文字回复、动态 TTS
+  音色和完整回答结束事件均已通过；90 秒正常空闲退出仍需做一次独立计时验收。
 - 自动测试更新为 `130 passed`。本次部署回滚点为
-  `/root/ai-cat-backups/before-on-demand-cloud-20260804/deployment.tar.gz`。
+  `/root/ai-cat-backups/before-product-rebind-6a715196-20260804/rebind-backup.tar.gz`。
 
 ### 2026-08-03
 

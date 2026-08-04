@@ -20,6 +20,8 @@ from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 
 LOGGER = logging.getLogger(__name__)
 MAX_RUNTIME_BYTES = 32 * 1024
+TTS_PROVIDER = "volcano_bidirection"
+TTS_RESOURCE_ID = "volc.service_type.10029"
 FUNCTION_LABELS = {
     "shake_head": "左右轻轻摇头",
     "nod_head": "上下轻轻点头",
@@ -128,6 +130,8 @@ class PersonalityService:
             "address": style.address,
             "voice_name": personality.voice_name,
             "voice_type": personality.voice_id,
+            "tts_provider": TTS_PROVIDER,
+            "tts_resource_id": TTS_RESOURCE_ID,
             "allowed_functions": list(allowed_functions),
             "autonomy": {
                 "action_weights": personality.autonomy_action_weights,
@@ -160,7 +164,9 @@ class PersonalityService:
                             "SystemMessages": [profile_core["system_prompt"]],
                         },
                         "TTSConfig": {
+                            "Provider": TTS_PROVIDER,
                             "ProviderParams": {
+                                "ResourceId": TTS_RESOURCE_ID,
                                 "audio": {
                                     "voice_type": personality.voice_id,
                                 }
