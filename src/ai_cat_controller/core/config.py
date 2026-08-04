@@ -45,7 +45,11 @@ class Settings(BaseModel):
     dialog_text_request_path: Path = Path(
         "/var/lib/ai-cat-controller/dialog-text-request.json"
     )
+    personality_runtime_path: Path = Path(
+        "/var/lib/ai-cat-controller/personality-runtime.json"
+    )
     dialog_config_path: Path = Path(".data/dialog-runtime-config.json")
+    device_serial_path: Path = Path("/proc/device-tree/serial-number")
     battery_supply_path: Path = Path("/sys/class/power_supply/cw-bat")
     charger_supply_path: Path = Path("/sys/class/power_supply/ip2317-charger")
     dialog_service: str = "volc-conv-ai.service"
@@ -125,9 +129,17 @@ class Settings(BaseModel):
                 "AI_CAT_DIALOG_TEXT_REQUEST_PATH",
                 "/var/lib/ai-cat-controller/dialog-text-request.json",
             ),
+            "personality_runtime_path": source.get(
+                "AI_CAT_PERSONALITY_RUNTIME_PATH",
+                "/var/lib/ai-cat-controller/personality-runtime.json",
+            ),
             "dialog_config_path": source.get(
                 "AI_CAT_DIALOG_CONFIG_PATH",
                 ".data/dialog-runtime-config.json",
+            ),
+            "device_serial_path": source.get(
+                "AI_CAT_DEVICE_SERIAL_PATH",
+                "/proc/device-tree/serial-number",
             ),
             "battery_supply_path": source.get(
                 "AI_CAT_BATTERY_SUPPLY_PATH",

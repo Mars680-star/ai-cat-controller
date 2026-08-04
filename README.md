@@ -6,6 +6,25 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 
 ## 更新记录
 
+### 2026-08-04
+
+修改人：Mars
+
+- 将 5 种持久化性格映射到火山引擎真实音色和独立系统提示词；当前宠物绑定、
+  改名、亲密度升级及服务启动时会生成固定的
+  `personality-runtime.json`，原生对话进程通过 `session.update` 在空闲阶段应用。
+- 语音 Function Calling 增加独立的性格动作触发表和板端白名单，网页动作库继续
+  按性格与亲密度解锁；安全自主行为改为读取同一运行时性格的动作权重和主动短语。
+  尾部动作还需同时满足亲密度 1 级、性格允许和硬件开关开启。
+- 增加 `/api/v1/personality/runtime` 同步状态接口；原生状态上报当前
+  `personality_id`、配置 revision 和 `voice_type`。K1 已编译部署，当前
+  “元气探险家”revision 与原生状态一致，火山网关返回 `session.updated`。
+- 火山随后返回 `code=1000003: AI license duration quota exceeded`，因此 5 个音色
+  尚不能逐一完成人工听感验收。为避免持续重连，语音、唤醒和自主动作服务暂时
+  停止但仍保持开机启用；补充有效 License 后需恢复并完成听音测试。
+- 自动测试更新为 `121 passed`。部署前回滚点为
+  `/root/ai-cat-backups/before-personality-sync-20260803-183146`。
+
 ### 2026-08-03
 
 修改人：Mars
@@ -108,6 +127,7 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - `/api/v1` 稳定 REST API，可供后续微信小程序复用。
 - Mock 登录、设备绑定、性格盲盒、主页、培养、历史和设置。
 - 5 种持久化性格、5 个亲密度等级、每日增长上限和解锁规则。
+- Local K1 将当前性格的真实火山音色、提示词和动作规则动态应用到现有会话。
 - 7 个安全预设动作、异步结果、重复请求幂等和离线拒绝。
 - SQLite 持久化，进程重启后恢复性格、亲密度和历史。
 - 真机最终字幕近实时同步、按会话汇总及单会话详情查询。
@@ -122,8 +142,8 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 Local K1 只执行固定的 `head_lr 1`、`head_ud 2`、`motor stop` 命令。摇尾只在
 维修并完成低速验收后设置 `AI_CAT_ENABLE_TAIL_MOTION=true` 才开放固定的
 `tail_lr 1`；默认返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
-固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`；产品 Mock 的对话仍是本地模板，逻辑音色 ID
-未映射到火山引擎真实音色。
+固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`。产品 Mock 的回答仍是本地模板，不会消耗
+火山服务；Local K1 使用同一性格定义中的真实火山音色 ID 和提示词。
 
 ## 目录
 

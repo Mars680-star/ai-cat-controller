@@ -4,6 +4,7 @@ import time
 from fastapi.testclient import TestClient
 
 from ai_cat_controller.core.config import Settings
+from ai_cat_controller.domain.personalities import PERSONALITY_BY_ID
 from ai_cat_controller.main import create_app
 
 
@@ -60,6 +61,11 @@ def test_login_bind_blind_box_and_dashboard(client: TestClient) -> None:
     assert dashboard.status_code == 200
     assert dashboard.json()["data"]["pet"]["serial_number"] == "K1-MOCK-0001"
     assert dashboard.json()["data"]["intimacy"]["level"]["level"] == 0
+    runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    assert runtime["active"] is True
+    assert runtime["sync_state"] == "mock_only"
+    assert runtime["personality_id"] == bound["pet"]["personality_id"]
+    assert runtime["native_applied"] is False
 
 
 def test_session_and_owner_isolation(client: TestClient) -> None:
@@ -186,7 +192,9 @@ def test_dialog_history_settings_device_status_and_feedback(
     )
     assert dialog.status_code == 200
     dialog_data = dialog.json()["data"]
-    assert dialog_data["voice_id"].startswith("mock_voice_")
+    assert dialog_data["voice_id"] in {
+        personality.voice_id for personality in PERSONALITY_BY_ID.values()
+    }
     assert dialog_data["voice_integration_status"] == "mock_only"
 
     history = client.get(

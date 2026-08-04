@@ -55,6 +55,9 @@ class DialogStatusData(BaseModel):
     sequence: int
     source: str
     stale: bool
+    personality_id: str | None = None
+    personality_revision: str | None = None
+    voice_type: str | None = None
 
 
 class DialogConfigUpdate(BaseModel):

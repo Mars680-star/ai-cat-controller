@@ -41,6 +41,7 @@ Error:
 | POST | `/api/v1/dialog/wake` | Enter dialog state. |
 | POST | `/api/v1/dialog/interrupt` | Interrupt dialog state. |
 | POST | `/api/v1/dialog/text` | Submit text to the live Volcengine session; K1 speaks the answer. |
+| GET | `/api/v1/personality/runtime` | Read the current personality revision, Volcengine voice and native apply state. |
 | POST | `/api/v1/auth/mock-login` | 创建 Mock 用户会话。 |
 | GET | `/api/v1/personalities` | 查询 5 种逻辑性格配置。 |
 | GET | `/api/v1/pets` | 查询当前用户的宠物。 |
@@ -98,6 +99,10 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+性格运行时接口返回当前 `personality_id`、`voice_type`、亲密度称呼、语音动作
+白名单和自主行为配置。`native_applied=true` 表示原生进程上报的 revision 与
+FastAPI 当前 revision 一致；它不代表 5 种音色都已完成人工听感验收。
 
 文字提问请求：
 

@@ -17,16 +17,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ai_cat_controller.domain.personalities import PERSONALITIES
+
 LOGGER = logging.getLogger("ai_cat_controller.autonomy")
 MAX_RESPONSE_BYTES = 65_536
 SAFE_ACTIONS = ("head/nod", "head/shake")
 AUTONOMY_READY_STATES = frozenset({"ready", "interrupted"})
-SHORT_PHRASES = (
-    "我在这里呀。",
-    "要不要陪我玩一会儿？",
-    "今天也要开心哦。",
-    "记得休息一下呀。",
-    "我刚刚想起你啦。",
+SHORT_PHRASES = tuple(
+    dict.fromkeys(
+        phrase
+        for personality in PERSONALITIES
+        for phrase in personality.proactive_phrases
+    )
 )
 
 
@@ -171,6 +173,9 @@ class LocalControllerClient:
     def dialog_status(self) -> dict[str, Any]:
         return self._request("GET", "/dialog/status")
 
+    def personality_profile(self) -> dict[str, Any]:
+        return self._request("GET", "/personality/runtime")
+
     def start_head_action(self, action: str, request_id: str) -> None:
         if action not in SAFE_ACTIONS:
             raise ValueError("autonomy action is not allowlisted")
@@ -226,13 +231,48 @@ class AutonomyWorker:
             LOGGER.info("autonomous behavior skipped: %s", result)
             return result
 
-        action = self._random.choice(SAFE_ACTIONS)
+        personality = self._client.personality_profile()
+        if not personality.get("active") or not personality.get("native_applied"):
+            result = {
+                "executed": False,
+                "reason": "personality_not_ready",
+                "personality_id": personality.get("personality_id"),
+            }
+            LOGGER.info("autonomous behavior skipped: %s", result)
+            return result
+        autonomy = personality.get("autonomy")
+        action_weights = (
+            autonomy.get("action_weights") if isinstance(autonomy, dict) else None
+        )
+        if not isinstance(action_weights, dict):
+            raise ControllerApiError("personality has no autonomy action profile")
+        actions: list[str] = []
+        weights: list[float] = []
+        for action, weight in action_weights.items():
+            if (
+                action in SAFE_ACTIONS
+                and isinstance(weight, (int, float))
+                and weight > 0
+            ):
+                actions.append(action)
+                weights.append(float(weight))
+        if not actions:
+            raise ControllerApiError("personality has no safe autonomous action")
+
+        action = self._random.choices(actions, weights=weights, k=1)[0]
         event_id = f"auto-{int(time.time())}-{uuid.uuid4().hex[:10]}"
         self._client.start_head_action(action, f"{event_id}-motion")
 
         phrase: str | None = None
         if self._random.random() < self._config.phrase_probability:
-            phrase = self._random.choice(SHORT_PHRASES)
+            profile_phrases = autonomy.get("phrases")
+            phrases = (
+                [item for item in profile_phrases if item in SHORT_PHRASES]
+                if isinstance(profile_phrases, list)
+                else []
+            )
+            phrase = self._random.choice(phrases) if phrases else None
+        if phrase is not None:
             try:
                 self._client.speak(phrase, f"{event_id}-speech")
             except ControllerApiError as exc:

@@ -37,6 +37,15 @@ requests are rejected unless `AI_CAT_ENABLE_TAIL_MOTION=true`; the systemd unit
 loads this value from `/etc/ai-cat-controller.env` so voice and FastAPI use the
 same gate.
 
+FastAPI writes the current pet personality to
+`/var/lib/ai-cat-controller/personality-runtime.json`. At startup and while the
+conversation is fully idle, the native client validates this bounded file and
+sends its embedded `session.update` to override the current Volcengine system
+prompt and TTS `voice_type`. The same file provides an allowlist for
+`shake_head`, `nod_head`, and `wag_tail`; a disallowed Function Calling request
+returns a normal tool result without starting a motor. The applied personality
+ID, revision, and voice are included in `/run/ai-cat/dialog-status.json`.
+
 - `SIGUSR1`: start listening, or interrupt the current response and listen again.
 - `SIGUSR2`: interrupt the current response and end the continuous session.
 - `SIGHUP`: consume one validated browser text question.

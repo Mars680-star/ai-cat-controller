@@ -72,9 +72,10 @@ def test_prepare_sdk_installs_canonical_dialog_source() -> None:
 def test_native_dialog_uses_fixed_motion_commands() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'strcmp(task->name, "shake_head") == 0' in source
-    assert 'strcmp(task->name, "nod_head") == 0' in source
-    assert 'strcmp(task->name, "wag_tail") == 0' in source
+    assert '__is_motion_function(task->name)' in source
+    assert 'strcmp(name, "shake_head") == 0' in source
+    assert 'strcmp(name, "nod_head") == 0' in source
+    assert 'strcmp(name, "wag_tail") == 0' in source
     assert 'strcmp(actuator, "head_lr") != 0' in source
     assert 'strcmp(actuator, "head_ud") != 0' in source
     assert 'strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0' in source
@@ -82,3 +83,15 @@ def test_native_dialog_uses_fixed_motion_commands() -> None:
     assert 'const char* executable = "/usr/bin/ai-toy_app";' in source
     assert 'getenv("AI_CAT_ENABLE_TAIL_MOTION")' in source
     assert 'const char* speed = (is_tail || !is_nod) ? "1" : "2";' in source
+
+
+def test_native_dialog_applies_personality_and_enforces_action_rules() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '#define PERSONALITY_RUNTIME_PATH' in source
+    assert '__apply_personality_runtime(&demo, true)' in source
+    assert '__apply_personality_runtime(&demo, false)' in source
+    assert 'strcmp(update_type_obj->valuestring, "session.update") != 0' in source
+    assert '__personality_allows_motion(' in source
+    assert 'rejected by personality action rules' in source
+    assert 'PERSONALITY_POLL_INTERVAL_MS' in source

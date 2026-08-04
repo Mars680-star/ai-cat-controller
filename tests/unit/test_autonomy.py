@@ -11,13 +11,32 @@ from ai_cat_controller.autonomy import (
 
 
 class FakeClient:
-    def __init__(self, status: dict[str, object]) -> None:
+    def __init__(
+        self,
+        status: dict[str, object],
+        personality: dict[str, object] | None = None,
+    ) -> None:
         self.status = status
+        self.personality = personality or {
+            "active": True,
+            "native_applied": True,
+            "personality_id": "sunny_explorer",
+            "autonomy": {
+                "action_weights": {"head/shake": 0.55, "head/nod": 0.45},
+                "phrases": [
+                    "要不要一起发现点新鲜事？",
+                    "今天也要元气满满呀。",
+                ],
+            },
+        }
         self.actions: list[tuple[str, str]] = []
         self.phrases: list[tuple[str, str]] = []
 
     def dialog_status(self) -> dict[str, object]:
         return self.status
+
+    def personality_profile(self) -> dict[str, object]:
+        return self.personality
 
     def start_head_action(self, action: str, request_id: str) -> None:
         self.actions.append((action, request_id))
@@ -106,3 +125,24 @@ def test_autonomy_config_rejects_too_frequent_motion() -> None:
                 "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS": "60",
             }
         )
+
+
+def test_autonomy_waits_until_native_personality_is_applied() -> None:
+    client = FakeClient(
+        {"state": "ready", "session_active": False, "stale": False},
+        {
+            "active": True,
+            "native_applied": False,
+            "personality_id": "gentle_companion",
+        },
+    )
+    worker = AutonomyWorker(
+        autonomy_config(),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(1),
+    )
+
+    result = worker.run_once()
+
+    assert result["reason"] == "personality_not_ready"
+    assert client.actions == []

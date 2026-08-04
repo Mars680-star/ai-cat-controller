@@ -274,6 +274,21 @@ class SQLiteRepository:
             row = self._owned_pet_row(connection, user_id, pet_id)
         return dict(row)
 
+    def get_pet_by_serial(self, serial_number: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT p.*, d.serial_number, d.online, d.battery_percent,
+                       d.charging, d.network_status, d.network_name, d.volume,
+                       d.last_seen_at
+                FROM pets p
+                JOIN devices d ON d.device_id = p.device_id
+                WHERE d.serial_number = ?
+                """,
+                (serial_number,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
     def unbind_pet(self, user_id: str, pet_id: str) -> None:
         with self._connect() as connection:
             self._owned_pet_row(connection, user_id, pet_id)

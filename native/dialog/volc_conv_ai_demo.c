@@ -78,12 +78,19 @@
 #define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
 #define DIALOG_CONFIG_PATH DIALOG_EVENT_DIR "/dialog-runtime-config.json"
 #define DIALOG_TEXT_REQUEST_PATH DIALOG_EVENT_DIR "/dialog-text-request.json"
+#define PERSONALITY_RUNTIME_PATH DIALOG_EVENT_DIR "/personality-runtime.json"
 #define DIALOG_CONFIG_MAX_BYTES 4096
 #define DIALOG_TEXT_REQUEST_MAX_BYTES 8192
 #define DIALOG_TEXT_MAX_BYTES 4096
 #define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
 #define DIALOG_REQUEST_KIND_MAX_LEN 16
 #define PROACTIVE_SPEECH_ACK_TIMEOUT_MS 3000
+#define PERSONALITY_RUNTIME_MAX_BYTES (32 * 1024)
+#define PERSONALITY_ID_MAX_LEN 64
+#define PERSONALITY_NAME_MAX_LEN 64
+#define PERSONALITY_REVISION_MAX_LEN 64
+#define PERSONALITY_VOICE_MAX_LEN 128
+#define PERSONALITY_POLL_INTERVAL_MS 1000
 #define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
 #define DEVICE_SERIAL_MAX_LEN 64
 #define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
@@ -176,6 +183,17 @@ static unsigned long dialog_event_sequence = 0;
 static unsigned long dialog_turn_sequence = 0;
 static uint64_t dialog_runtime_started_ms = 0;
 static char device_serial[DEVICE_SERIAL_MAX_LEN + 1] = "unknown";
+static pthread_mutex_t personality_config_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char active_personality_id[PERSONALITY_ID_MAX_LEN + 1];
+static char active_personality_name[PERSONALITY_NAME_MAX_LEN + 1];
+static char active_personality_revision[PERSONALITY_REVISION_MAX_LEN + 1];
+static char active_voice_type[PERSONALITY_VOICE_MAX_LEN + 1];
+static bool personality_allow_shake = true;
+static bool personality_allow_nod = true;
+static bool personality_allow_tail = false;
+static time_t personality_runtime_mtime = 0;
+static off_t personality_runtime_size = -1;
+static uint64_t personality_last_poll_ms = 0;
 
 /* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
 typedef struct {
@@ -578,6 +596,25 @@ static void __write_dialog_status(const char* state, const char* message) {
     cJSON* root = NULL;
     char* json = NULL;
     FILE* fp = NULL;
+    char personality_id[PERSONALITY_ID_MAX_LEN + 1];
+    char personality_revision[PERSONALITY_REVISION_MAX_LEN + 1];
+    char voice_type[PERSONALITY_VOICE_MAX_LEN + 1];
+
+    pthread_mutex_lock(&personality_config_mutex);
+    snprintf(
+        personality_id,
+        sizeof(personality_id),
+        "%s",
+        active_personality_id
+    );
+    snprintf(
+        personality_revision,
+        sizeof(personality_revision),
+        "%s",
+        active_personality_revision
+    );
+    snprintf(voice_type, sizeof(voice_type), "%s", active_voice_type);
+    pthread_mutex_unlock(&personality_config_mutex);
 
     pthread_mutex_lock(&dialog_status_mutex);
     if (mkdir(DIALOG_STATUS_DIR, 0755) != 0 && errno != EEXIST) {
@@ -607,6 +644,19 @@ static void __write_dialog_status(const char* state, const char* message) {
     cJSON_AddNumberToObject(root, "updated_at_ms", (double)__get_time_ms());
     cJSON_AddNumberToObject(root, "sequence", (double)++dialog_status_sequence);
     cJSON_AddNumberToObject(root, "pid", (double)getpid());
+    if (personality_id[0] != '\0') {
+        cJSON_AddStringToObject(root, "personality_id", personality_id);
+    }
+    if (personality_revision[0] != '\0') {
+        cJSON_AddStringToObject(
+            root,
+            "personality_revision",
+            personality_revision
+        );
+    }
+    if (voice_type[0] != '\0') {
+        cJSON_AddStringToObject(root, "voice_type", voice_type);
+    }
     json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (json == NULL) {
@@ -625,6 +675,187 @@ static void __write_dialog_status(const char* state, const char* message) {
     }
     free(json);
     pthread_mutex_unlock(&dialog_status_mutex);
+}
+
+static bool __bounded_json_string(cJSON* item, size_t maximum_length) {
+    return cJSON_IsString(item) && item->valuestring != NULL &&
+        item->valuestring[0] != '\0' && strlen(item->valuestring) <= maximum_length;
+}
+
+static int __apply_personality_runtime(
+    realtime_ws_demo_t* demo,
+    bool force
+) {
+    struct stat file_stat;
+    FILE* file = NULL;
+    char* buffer = NULL;
+    size_t bytes_read;
+    cJSON* root = NULL;
+    cJSON* version_obj;
+    cJSON* personality_id_obj;
+    cJSON* personality_name_obj;
+    cJSON* revision_obj;
+    cJSON* voice_type_obj;
+    cJSON* allowed_functions_obj;
+    cJSON* session_update_obj;
+    cJSON* update_type_obj;
+    cJSON* function_obj;
+    char* session_update_json = NULL;
+    bool allow_shake = false;
+    bool allow_nod = false;
+    bool allow_tail = false;
+    int update_result = -1;
+
+    if (demo == NULL || demo->engine == NULL) {
+        return -1;
+    }
+    if (
+        lstat(PERSONALITY_RUNTIME_PATH, &file_stat) != 0 ||
+        !S_ISREG(file_stat.st_mode) || file_stat.st_size <= 0 ||
+        file_stat.st_size > PERSONALITY_RUNTIME_MAX_BYTES
+    ) {
+        return -1;
+    }
+    if (
+        !force && file_stat.st_mtime == personality_runtime_mtime &&
+        file_stat.st_size == personality_runtime_size
+    ) {
+        return 0;
+    }
+
+    buffer = calloc((size_t)file_stat.st_size + 1, 1);
+    if (buffer == NULL) {
+        return -1;
+    }
+    file = fopen(PERSONALITY_RUNTIME_PATH, "rb");
+    if (file == NULL) {
+        goto cleanup;
+    }
+    bytes_read = fread(buffer, 1, (size_t)file_stat.st_size, file);
+    if (ferror(file) || bytes_read != (size_t)file_stat.st_size) {
+        goto cleanup;
+    }
+    fclose(file);
+    file = NULL;
+    buffer[bytes_read] = '\0';
+
+    root = cJSON_Parse(buffer);
+    version_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "version");
+    personality_id_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "personality_id");
+    personality_name_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "personality_name");
+    revision_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "revision");
+    voice_type_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "voice_type");
+    allowed_functions_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "allowed_functions");
+    session_update_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "session_update");
+    update_type_obj = cJSON_IsObject(session_update_obj)
+        ? cJSON_GetObjectItemCaseSensitive(session_update_obj, "type")
+        : NULL;
+    if (
+        !cJSON_IsNumber(version_obj) || version_obj->valueint != 1 ||
+        !__bounded_json_string(personality_id_obj, PERSONALITY_ID_MAX_LEN) ||
+        !__bounded_json_string(personality_name_obj, PERSONALITY_NAME_MAX_LEN) ||
+        !__bounded_json_string(revision_obj, PERSONALITY_REVISION_MAX_LEN) ||
+        !__bounded_json_string(voice_type_obj, PERSONALITY_VOICE_MAX_LEN) ||
+        !cJSON_IsArray(allowed_functions_obj) ||
+        !cJSON_IsObject(session_update_obj) ||
+        !cJSON_IsString(update_type_obj) ||
+        strcmp(update_type_obj->valuestring, "session.update") != 0
+    ) {
+        fprintf(stderr, "invalid personality runtime configuration\n");
+        goto cleanup;
+    }
+
+    cJSON_ArrayForEach(function_obj, allowed_functions_obj) {
+        if (!cJSON_IsString(function_obj) || function_obj->valuestring == NULL) {
+            fprintf(stderr, "invalid personality function allowlist\n");
+            goto cleanup;
+        }
+        if (strcmp(function_obj->valuestring, "shake_head") == 0) {
+            allow_shake = true;
+        } else if (strcmp(function_obj->valuestring, "nod_head") == 0) {
+            allow_nod = true;
+        } else if (strcmp(function_obj->valuestring, "wag_tail") == 0) {
+            allow_tail = true;
+        } else {
+            fprintf(stderr, "unknown personality function: %s\n", function_obj->valuestring);
+            goto cleanup;
+        }
+    }
+    session_update_json = cJSON_PrintUnformatted(session_update_obj);
+    if (session_update_json == NULL) {
+        goto cleanup;
+    }
+    update_result = volc_update(
+        demo->engine,
+        session_update_json,
+        strlen(session_update_json)
+    );
+    if (update_result < 0) {
+        fprintf(stderr, "personality session.update failed: %d\n", update_result);
+        goto cleanup;
+    }
+
+    pthread_mutex_lock(&personality_config_mutex);
+    snprintf(
+        active_personality_id,
+        sizeof(active_personality_id),
+        "%s",
+        personality_id_obj->valuestring
+    );
+    snprintf(
+        active_personality_name,
+        sizeof(active_personality_name),
+        "%s",
+        personality_name_obj->valuestring
+    );
+    snprintf(
+        active_personality_revision,
+        sizeof(active_personality_revision),
+        "%s",
+        revision_obj->valuestring
+    );
+    snprintf(
+        active_voice_type,
+        sizeof(active_voice_type),
+        "%s",
+        voice_type_obj->valuestring
+    );
+    personality_allow_shake = allow_shake;
+    personality_allow_nod = allow_nod;
+    personality_allow_tail = allow_tail;
+    personality_runtime_mtime = file_stat.st_mtime;
+    personality_runtime_size = file_stat.st_size;
+    pthread_mutex_unlock(&personality_config_mutex);
+    printf(
+        "personality applied: id=%s revision=%s voice=%s update_result=%d\n",
+        personality_id_obj->valuestring,
+        revision_obj->valuestring,
+        voice_type_obj->valuestring,
+        update_result
+    );
+
+cleanup:
+    if (file != NULL) {
+        fclose(file);
+    }
+    free(session_update_json);
+    cJSON_Delete(root);
+    free(buffer);
+    return update_result < 0 ? -1 : 1;
 }
 
 static void __reset_client_turn_state(void) {
@@ -1818,6 +2049,43 @@ static bool __tail_motion_enabled(void) {
     );
 }
 
+static bool __is_motion_function(const char* name) {
+    return name != NULL && (
+        strcmp(name, "shake_head") == 0 ||
+        strcmp(name, "nod_head") == 0 ||
+        strcmp(name, "wag_tail") == 0
+    );
+}
+
+static bool __personality_allows_motion(
+    const char* name,
+    char* personality_name,
+    size_t personality_name_size
+) {
+    bool allowed = false;
+
+    pthread_mutex_lock(&personality_config_mutex);
+    if (strcmp(name, "shake_head") == 0) {
+        allowed = personality_allow_shake;
+    } else if (strcmp(name, "nod_head") == 0) {
+        allowed = personality_allow_nod;
+    } else if (strcmp(name, "wag_tail") == 0) {
+        allowed = personality_allow_tail;
+    }
+    if (personality_name != NULL && personality_name_size > 0) {
+        snprintf(
+            personality_name,
+            personality_name_size,
+            "%s",
+            active_personality_name[0] == '\0'
+                ? "当前性格"
+                : active_personality_name
+        );
+    }
+    pthread_mutex_unlock(&personality_config_mutex);
+    return allowed;
+}
+
 static int __run_motor_motion(const char* actuator, const char* speed) {
     /*
      * 使用固定可执行文件和固定参数，不经 shell 拼接用户输入，
@@ -1874,17 +2142,34 @@ static void* __run_function_call(void* arg) {
         return NULL;
     }
     if (
-        strcmp(task->name, "shake_head") == 0 ||
-        strcmp(task->name, "nod_head") == 0 ||
-        strcmp(task->name, "wag_tail") == 0
+        __is_motion_function(task->name)
     ) {
         bool is_nod = strcmp(task->name, "nod_head") == 0;
         bool is_tail = strcmp(task->name, "wag_tail") == 0;
         const char* action_name = is_tail ? "摇尾" : (is_nod ? "点头" : "摇头");
         const char* actuator = is_tail ? "tail_lr" : (is_nod ? "head_ud" : "head_lr");
         const char* speed = (is_tail || !is_nod) ? "1" : "2";
+        char personality_name[PERSONALITY_NAME_MAX_LEN + 1];
         uint64_t now_ms;
-        if (is_tail && !__tail_motion_enabled()) {
+        if (!__personality_allows_motion(
+            task->name,
+            personality_name,
+            sizeof(personality_name)
+        )) {
+            ret = 0;
+            snprintf(
+                output,
+                sizeof(output),
+                "%s不执行%s动作",
+                personality_name,
+                action_name
+            );
+            printf(
+                "%s rejected by personality action rules, call_id=%s\n",
+                task->name,
+                task->call_id
+            );
+        } else if (is_tail && !__tail_motion_enabled()) {
             ret = 0;
             snprintf(
                 output,
@@ -2019,7 +2304,7 @@ static void __handle_ws_conversation_item_created_call(realtime_ws_demo_t* demo,
     name = name_obj->valuestring;
     call_id = call_id_obj->valuestring;
     if (
-        strcmp(name, "shake_head") != 0 &&
+        !__is_motion_function(name) &&
         !__is_weather_function(name) &&
         !__is_battery_function(name)
     ) {
@@ -2060,7 +2345,7 @@ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSO
     name = cJSON_IsString(name_obj) ? name_obj->valuestring : NULL;
     if (
         name != NULL &&
-        strcmp(name, "shake_head") != 0 &&
+        !__is_motion_function(name) &&
         !__is_weather_function(name) &&
         !__is_battery_function(name)
     ) {
@@ -2512,6 +2797,10 @@ int main(int argc, const char* argv[]){
         strlen(WS_SESSION_UPDATE)
     );
     printf("session update result: %d\n", error);
+    error = __apply_personality_runtime(&demo, true);
+    if (error < 0) {
+        fprintf(stderr, "personality runtime was not applied at startup\n");
+    }
     __write_dialog_status("ready", "等待唤醒词“小安小安”");
 
 
@@ -2531,7 +2820,32 @@ int main(int argc, const char* argv[]){
      * 判定句尾并提交缓冲区；收到云端 commit 确认后才请求模型回答。
      */
     while (!exit_request) {
+        uint64_t now_ms;
+
         __poll_keyboard();
+
+        now_ms = __get_time_ms();
+        if (
+            now_ms - personality_last_poll_ms >=
+                PERSONALITY_POLL_INTERVAL_MS
+        ) {
+            personality_last_poll_ms = now_ms;
+            if (
+                !session_active && !running && !ai_playing &&
+                !wake_request && !text_dialog_request &&
+                !proactive_speech_pending && !proactive_speech_active &&
+                !tool_capture_guard && !client_turn_pending
+            ) {
+                int personality_result =
+                    __apply_personality_runtime(&demo, false);
+                if (personality_result > 0) {
+                    __write_dialog_status(
+                        "ready",
+                        "性格配置已同步，等待唤醒词“小安小安”"
+                    );
+                }
+            }
+        }
 
         if (text_dialog_request) {
             char text_request_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 1];

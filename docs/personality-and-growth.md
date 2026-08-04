@@ -2,25 +2,38 @@
 
 ## 五种性格
 
-| ID | 性格 | 对话风格 | Mock 音色 ID | 默认动作 |
-|---|---|---|---|---|
-| `sunny_explorer` | 元气探险家 | 明快、有活力、邀请探索 | `mock_voice_sunny_01` | 摇头、摇尾 |
-| `gentle_companion` | 温柔陪伴者 | 柔和、慢节奏、先倾听 | `mock_voice_gentle_01` | 点头、安静陪伴 |
-| `proud_star` | 傲娇小明星 | 俏皮、嘴硬心软、不贬低用户 | `mock_voice_proud_01` | 摇头、骄傲转身 |
-| `curious_scholar` | 好奇小博士 | 清晰解释、鼓励验证 | `mock_voice_curious_01` | 点头、摇尾 |
-| `calm_guardian` | 沉稳守护者 | 稳重直接、优先安全 | `mock_voice_guardian_01` | 点头、安静陪伴 |
+| ID | 性格 | 对话风格 | 火山音色 | `voice_type` | 语音动作白名单 |
+|---|---|---|---|---|---|
+| `sunny_explorer` | 元气探险家 | 明快、有活力、邀请探索 | 撒娇学妹 | `zh_female_yuanqinvyou_moon_bigtts` | 摇头、点头、摇尾 |
+| `gentle_companion` | 温柔陪伴者 | 柔和、慢节奏、先倾听 | 温柔小雅 | `zh_female_wenrouxiaoya_moon_bigtts` | 点头 |
+| `proud_star` | 傲娇小明星 | 俏皮、嘴硬心软、不贬低用户 | 傲娇霸总 | `zh_male_aojiaobazong_moon_bigtts` | 摇头、点头 |
+| `curious_scholar` | 好奇小博士 | 清晰解释、鼓励验证 | 少年梓辛 | `zh_male_shaonianzixin_moon_bigtts` | 点头、摇头、摇尾 |
+| `calm_guardian` | 沉稳守护者 | 稳重直接、优先安全 | 渊博小叔 | `zh_male_yuanboxiaoshu_moon_bigtts` | 点头 |
 
 完整提示词、等级称呼、动作触发规则和禁止内容位于
 `src/ai_cat_controller/domain/personalities.py`。首次创建宠物实例时随机选择性格；
 重新绑定只恢复原性格，不重新抽取。
 
-这些 `voice_id` 是仓库内逻辑标识，不是火山引擎真实音色 ID。生产接入前需要：
+Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖性格配置：
 
-1. 在火山控制台分别创建或复制 5 份智能体配置。
-2. 把仓库提示词、语言风格和禁止内容映射到智能体配置。
-3. 为每种性格选择差异明显且已购买授权的真实音色。
-4. 在服务端保存 `personality_id -> bot_id -> voice_type` 映射。
-5. 用同一组测试语句人工验收语气、音色和动作差异。
+1. FastAPI 根据设备序列号找到已绑定宠物，并组合性格、人名、亲密度称呼、禁止
+   内容和可用动作。
+2. 配置原子写入
+   `/var/lib/ai-cat-controller/personality-runtime.json`，权限为 `0600`。
+3. 原生对话进程只在没有唤醒、收音、思考、播放或工具执行时读取新 revision，
+   通过火山 `session.update` 更新 `LLMConfig.SystemMessages` 和
+   `TTSConfig.ProviderParams.audio.voice_type`。
+4. 原生 Function Calling 在执行电机前再次检查性格动作白名单；不允许的动作只
+   返回拒绝结果，不启动电机。
+5. `toy_motor.service` 从 `/api/v1/personality/runtime` 读取同一性格的安全头部
+   动作权重与固定主动短语。
+
+绑定、宠物改名、亲密度跨级和 FastAPI 重启都会刷新配置。设备重启后 SQLite 与
+运行时文件会恢复当前性格。`GET /api/v1/personality/runtime` 中
+`native_applied=true` 表示原生状态上报的 revision 与 FastAPI 配置一致。
+
+摇尾还受两层限制：亲密度至少 1 级，并且维修验收后显式设置
+`AI_CAT_ENABLE_TAIL_MOTION=true`；否则不会出现在语音动作白名单中。
 
 ## 亲密度
 

@@ -251,6 +251,9 @@ class LocalK1Adapter(AiCatAdapter):
             "sequence": 0,
             "source": "local_k1",
             "stale": True,
+            "personality_id": None,
+            "personality_revision": None,
+            "voice_type": None,
         }
 
     @staticmethod
@@ -291,6 +294,21 @@ class LocalK1Adapter(AiCatAdapter):
             "sequence": self._safe_int(payload.get("sequence", 0)),
             "source": "local_k1",
             "stale": age_ms > 30_000 and not native_process_alive,
+            "personality_id": (
+                str(payload["personality_id"])
+                if payload.get("personality_id")
+                else None
+            ),
+            "personality_revision": (
+                str(payload["personality_revision"])
+                if payload.get("personality_revision")
+                else None
+            ),
+            "voice_type": (
+                str(payload["voice_type"])
+                if payload.get("voice_type")
+                else None
+            ),
         }
 
     async def get_dialog_status(self) -> dict[str, Any]:

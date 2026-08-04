@@ -363,7 +363,7 @@
     ui.homeNetwork.textContent = networkText;
     ui.homeNetworkName.textContent = pet.network_name;
     ui.homeAddress.textContent = intimacy.address;
-    ui.dialogVoice.textContent = personality.voice_id;
+    ui.dialogVoice.textContent = personality.voice_name || personality.voice_id;
     ui.settingsName.value = pet.name;
     ui.settingsVolume.value = pet.volume;
     ui.settingsVolumeValue.textContent = `${pet.volume}%`;

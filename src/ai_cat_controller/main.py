@@ -22,6 +22,7 @@ from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 from ai_cat_controller.services.device_service import DeviceService
 from ai_cat_controller.services.dialog_service import DialogService
 from ai_cat_controller.services.motion_service import MotionService
+from ai_cat_controller.services.personality_service import PersonalityService
 from ai_cat_controller.services.product_mock_service import ProductMockService
 from ai_cat_controller.web.router import router as web_router
 
@@ -51,10 +52,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         dialog = DialogService(adapter, resolved_settings.dialog_config_path)
         device = DeviceService(adapter, resolved_settings, motion, dialog)
+        personality = PersonalityService(resolved_settings)
         product = ProductMockService(
             SQLiteRepository(resolved_settings.data_path),
             motion,
             resolved_settings,
+            personality,
         )
         await product.initialize()
         application.state.services = AppServices(
@@ -63,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             device=device,
             motion=motion,
             dialog=dialog,
+            personality=personality,
             product=product,
         )
         LOGGER.info("AI Cat Controller started in %s mode", resolved_settings.hardware_driver)

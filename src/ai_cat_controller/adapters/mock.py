@@ -91,6 +91,9 @@ class MockAiCatAdapter(AiCatAdapter):
                 "sequence": 0,
                 "source": "mock",
                 "stale": False,
+                "personality_id": None,
+                "personality_revision": None,
+                "voice_type": None,
             }
 
     async def _run_motion(

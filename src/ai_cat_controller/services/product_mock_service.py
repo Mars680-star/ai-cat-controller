@@ -29,6 +29,7 @@ from ai_cat_controller.domain.intimacy import (
 from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
 from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 from ai_cat_controller.services.motion_service import MotionService
+from ai_cat_controller.services.personality_service import PersonalityService
 
 LOGGER = logging.getLogger(__name__)
 MAX_NATIVE_DIALOG_FILE_BYTES = 4 * 1024 * 1024
@@ -43,10 +44,12 @@ class ProductMockService:
         repository: SQLiteRepository,
         motion: MotionService,
         settings: Settings,
+        personality: PersonalityService,
     ) -> None:
         self._repository = repository
         self._motion = motion
         self._settings = settings
+        self._personality = personality
         self._sessions: dict[str, str] = {}
         self._finalizers: set[asyncio.Task[None]] = set()
         self._dialog_sync_lock = asyncio.Lock()
@@ -56,6 +59,7 @@ class ProductMockService:
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
+        await self._personality.initialize(self._repository)
 
     async def login(self, login_code: str, nickname: str) -> dict[str, Any]:
         user = await asyncio.to_thread(
@@ -92,7 +96,8 @@ class ProductMockService:
                     style.model_dump() for style in item.intimacy_styles
                 ],
                 "prohibited_content": item.prohibited_content,
-                "integration_status": "mock_configuration",
+                "voice_name": item.voice_name,
+                "integration_status": "volcengine_runtime_target",
             }
             for item in PERSONALITIES
         ]
@@ -118,6 +123,7 @@ class ProductMockService:
             network_name=network_name,
             personality_id=selected.personality_id,
         )
+        personality_sync = await self._personality.sync_pet(pet)
         return {
             "pet": self._pet_summary(pet),
             "blind_box_revealed": personality_created,
@@ -125,6 +131,7 @@ class ProductMockService:
                 PERSONALITY_BY_ID[pet["personality_id"]]
             ),
             "persistence": "device_bound",
+            "personality_sync": personality_sync,
         }
 
     async def dashboard(self, user_id: str, pet_id: str) -> dict[str, Any]:
@@ -193,6 +200,12 @@ class ProductMockService:
         )
         event["level"] = level_for_points(event["points_after"]).model_dump()
         event["progress"] = level_progress(event["points_after"])
+        pet = await asyncio.to_thread(
+            self._repository.get_owned_pet,
+            user_id,
+            pet_id,
+        )
+        event["personality_sync"] = await self._personality.sync_pet(pet)
         return event
 
     async def action_catalog(
@@ -676,6 +689,7 @@ class ProductMockService:
             name=name,
             volume=volume,
         )
+        await self._personality.sync_pet(pet)
         return self._pet_summary(pet)
 
     async def unbind(self, user_id: str, pet_id: str) -> None:
@@ -729,6 +743,7 @@ class ProductMockService:
             "name": personality.name,
             "description": personality.description,
             "language_style": personality.language_style,
+            "voice_name": personality.voice_name,
             "voice_id": personality.voice_id,
         }
 
