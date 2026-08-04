@@ -41,9 +41,12 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=true`。
 - K1 上已验证 RISC-V 对话与唤醒程序编译、网页文字按需启动、云端错误最多重试
   3 次，以及离线自主头部动作不启动云端。新产品鉴权、模型文字回复、动态 TTS
-  音色和完整回答结束事件均已通过；90 秒正常空闲退出仍需做一次独立计时验收。
-- 自动测试更新为 `130 passed`。本次部署回滚点为
-  `/root/ai-cat-backups/before-product-rebind-6a715196-20260804/rebind-backup.tar.gz`。
+  音色和完整回答结束事件均已通过；实测回答完成后云端按 90 秒空闲策略正常退出，
+  本地唤醒服务保持运行。
+- 自动测试更新为 `130 passed`。产品重绑回滚包位于
+  `/root/ai-cat-backups/before-product-rebind-6a715196-20260804/rebind-backup.tar.gz`；
+  TTS 修复前的服务文件和运行时配置位于
+  `/root/ai-cat-backups/before-tts-resource-fix-20260804/`。
 
 ### 2026-08-03
 
