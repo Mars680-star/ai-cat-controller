@@ -1,4 +1,5 @@
 import subprocess
+import wave
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,10 @@ from ai_cat_controller.domain.personalities import PERSONALITIES
 from ai_cat_controller.local_speech import (
     LocalPhrasePlayer,
     LocalSpeechError,
-    generate_assets,
     phrase_asset_path,
 )
+
+REPOSITORY_ASSETS = Path(__file__).parents[2] / "assets/local-speech"
 
 
 def test_local_player_uses_fixed_asset_and_removes_marker(tmp_path: Path) -> None:
@@ -53,21 +55,22 @@ def test_local_player_rejects_phrase_from_another_personality(tmp_path: Path) ->
         player.play("gentle_companion", "今天也要元气满满呀。")
 
 
-def test_generate_assets_creates_all_fifteen_fixed_files(tmp_path: Path) -> None:
-    commands: list[list[str]] = []
+def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
+    paths = [
+        phrase_asset_path(
+            REPOSITORY_ASSETS,
+            personality.personality_id,
+            phrase,
+        )
+        for personality in PERSONALITIES
+        for phrase in personality.proactive_phrases
+    ]
 
-    def run_command(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        commands.append(command)
-        output = Path(command[command.index("-w") + 1])
-        output.write_bytes(b"RIFF-generated")
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    generated = generate_assets(
-        tmp_path,
-        generator_path=Path("/usr/bin/espeak-ng"),
-        run_command=run_command,
-    )
-
-    assert generated == 15
-    assert len(commands) == 15
-    assert len(list(tmp_path.glob("*/*.wav"))) == 15
+    assert len(paths) == 15
+    for path in paths:
+        assert path.is_file()
+        with wave.open(str(path), "rb") as stream:
+            assert stream.getnchannels() == 2
+            assert stream.getsampwidth() == 2
+            assert stream.getframerate() == 48_000
+            assert stream.getnframes() > 48_000

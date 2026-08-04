@@ -36,6 +36,12 @@ conv_ai_config.json
 *.mp3
 *.h264
 
+# The 15 fixed personality phrases are reviewed runtime assets.
+!assets/
+!assets/local-speech/
+!assets/local-speech/**/
+!assets/local-speech/**/*.wav
+
 # Complete vendor trees must stay outside this repository
 /ConversationalAI-Embedded-Kit-2.0/
 /starburst_aidialog_*/

@@ -114,12 +114,12 @@ To restore low-frequency autonomous behavior without restoring the unsafe DDS
 motor executor, install the repository's replacement `toy_motor.service`. It
 uses the local FastAPI API, selects only fixed head presets, skips all active
 dialog states, and never selects the unverified tail. It does not pull in the
-cloud dialog service. Generate the 15 allowlisted offline WAV assets once, then
-enable the worker with a fixed three-minute interval:
+cloud dialog service. The private controller repository includes 15 allowlisted
+WAV assets captured once from the matching Volcengine voices. Verify the assets,
+then enable the worker with a fixed three-minute interval:
 
 ```bash
-/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.local_speech \
-  --generate-assets
+test "$(find /opt/ai-cat-controller/assets/local-speech -type f -name '*.wav' | wc -l)" -eq 15
 install -m 0644 systemd/toy_motor.service /etc/systemd/system/toy_motor.service
 systemctl daemon-reload
 systemctl enable --now toy_motor.service
@@ -132,7 +132,10 @@ Set `AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180`,
 `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false` in `/etc/ai-cat-controller.env`.
 Playback uses PulseAudio and never starts `volc-conv-ai.service`. The wake-word
 process releases capture while `/run/ai-cat/local-speech-active` exists and
-resumes automatically after playback.
+resumes automatically after playback. Local playback waits 2.2 seconds after
+the head action so motor noise does not mask the phrase. Run
+`tools/capture_cloud_phrase_assets.py` as an administrator only when a fixed
+phrase or mapped voice changes.
 
 Do not change its `ExecStart` back to `/usr/bin/toy_control` while the FastAPI
 and voice action paths are enabled.

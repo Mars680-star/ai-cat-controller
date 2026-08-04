@@ -1,27 +1,18 @@
-"""Generate and play allowlisted offline personality phrases on K1."""
+"""Play allowlisted cached personality phrases on K1."""
 
 from __future__ import annotations
 
-import argparse
 import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
+from ai_cat_controller.domain.personalities import PERSONALITY_BY_ID
 
 DEFAULT_ASSET_ROOT = Path("/opt/ai-cat-controller/assets/local-speech")
 DEFAULT_MARKER_PATH = Path("/run/ai-cat/local-speech-active")
 DEFAULT_PLAYER_PATH = Path("/usr/bin/paplay")
-DEFAULT_GENERATOR_PATH = Path("/usr/bin/espeak-ng")
 PLAYER_TIMEOUT_SECONDS = 15.0
-VOICE_SETTINGS = {
-    "sunny_explorer": (175, 65),
-    "gentle_companion": (135, 55),
-    "proud_star": (155, 35),
-    "curious_scholar": (165, 50),
-    "calm_guardian": (125, 30),
-}
 
 
 class LocalSpeechError(RuntimeError):
@@ -116,83 +107,3 @@ class LocalPhrasePlayer:
         finally:
             self._marker_path.unlink(missing_ok=True)
         return asset
-
-
-def generate_assets(
-    asset_root: Path = DEFAULT_ASSET_ROOT,
-    *,
-    generator_path: Path = DEFAULT_GENERATOR_PATH,
-    run_command: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
-) -> int:
-    """Generate the fixed WAV set once; runtime playback performs no synthesis."""
-
-    generated = 0
-    for personality in PERSONALITIES:
-        speed, pitch = VOICE_SETTINGS[personality.personality_id]
-        directory = asset_root / personality.personality_id
-        directory.mkdir(parents=True, exist_ok=True)
-        for phrase in personality.proactive_phrases:
-            target = phrase_asset_path(
-                asset_root,
-                personality.personality_id,
-                phrase,
-            )
-            temporary = target.with_suffix(".wav.tmp")
-            try:
-                result = run_command(
-                    [
-                        str(generator_path),
-                        "-v",
-                        "cmn",
-                        "-s",
-                        str(speed),
-                        "-p",
-                        str(pitch),
-                        "-a",
-                        "150",
-                        "-w",
-                        str(temporary),
-                        phrase,
-                    ],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    timeout=30.0,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                temporary.unlink(missing_ok=True)
-                raise LocalSpeechError(f"offline phrase generation failed: {exc}") from exc
-            if result.returncode != 0 or not temporary.is_file():
-                error = result.stderr.decode("utf-8", errors="replace").strip()
-                temporary.unlink(missing_ok=True)
-                raise LocalSpeechError(
-                    f"offline generator exited with {result.returncode}: {error[:256]}"
-                )
-            os.chmod(temporary, 0o644)
-            os.replace(temporary, target)
-            generated += 1
-    return generated
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="AI cat offline phrase assets")
-    parser.add_argument(
-        "--generate-assets",
-        action="store_true",
-        help="generate all fixed personality WAV files with espeak-ng",
-    )
-    parser.add_argument(
-        "--asset-root",
-        type=Path,
-        default=DEFAULT_ASSET_ROOT,
-        help="fixed output directory",
-    )
-    args = parser.parse_args()
-    if not args.generate_assets:
-        parser.error("--generate-assets is required")
-    count = generate_assets(args.asset_root)
-    print(f"generated {count} local personality phrases in {args.asset_root}")
-
-
-if __name__ == "__main__":
-    main()

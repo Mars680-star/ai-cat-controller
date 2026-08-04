@@ -65,6 +65,7 @@ def autonomy_config(**overrides: object) -> AutonomyConfig:
         "phrase_probability": 1.0,
         "cloud_speech_enabled": False,
         "local_speech_enabled": False,
+        "local_speech_motion_settle_seconds": 0.0,
     }
     values.update(overrides)
     return AutonomyConfig(**values)  # type: ignore[arg-type]

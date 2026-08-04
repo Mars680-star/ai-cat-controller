@@ -75,6 +75,7 @@ class AutonomyConfig:
     local_speech_asset_root: Path = DEFAULT_ASSET_ROOT
     local_speech_marker_path: Path = DEFAULT_MARKER_PATH
     local_speech_player_path: Path = DEFAULT_PLAYER_PATH
+    local_speech_motion_settle_seconds: float = 2.2
 
     @classmethod
     def from_env(
@@ -159,6 +160,13 @@ class AutonomyConfig:
                     "AI_CAT_AUTONOMY_LOCAL_SPEECH_PLAYER_PATH",
                     str(DEFAULT_PLAYER_PATH),
                 )
+            ),
+            local_speech_motion_settle_seconds=_bounded_float(
+                source,
+                "AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS",
+                2.2,
+                0.0,
+                10.0,
             ),
         )
 
@@ -341,7 +349,12 @@ class AutonomyWorker:
             try:
                 if self._config.local_speech_enabled:
                     personality_id = str(personality.get("personality_id", ""))
-                    self._local_player.play(personality_id, phrase)
+                    if self._stop_event.wait(
+                        self._config.local_speech_motion_settle_seconds
+                    ):
+                        phrase = None
+                    else:
+                        self._local_player.play(personality_id, phrase)
                 else:
                     self._client.speak(phrase, f"{event_id}-speech")
             except (ControllerApiError, LocalSpeechError) as exc:

@@ -36,6 +36,7 @@ def test_toy_motor_unit_runs_only_safe_autonomy_worker() -> None:
     assert "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180" in unit
     assert "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false" in unit
     assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true" in unit
+    assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS=2.2" in unit
 
 
 def test_wake_word_service_does_not_pull_in_cloud_dialog() -> None:

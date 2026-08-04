@@ -39,8 +39,8 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - 安全自主头部动作可在云端离线时继续执行；后台随机云端短语默认关闭，避免
   自主行为重新产生云端会话。5 种性格各有 3 句固定本地 WAV，K1 每 3 分钟最多
   随机播放 1 句；播放只使用 PulseAudio，不启动火山服务。播放期间本地唤醒自动
-  暂停收音，结束后恢复。离线音频由 `espeak-ng` 一次性生成，音质和音色不等同于
-  火山云端音色。
+  暂停收音，结束后恢复。15 个 WAV 由对应火山音色一次性数字缓存并保存到私有
+  仓库；自主头部动作完成 2.2 秒后再播放，避免电机噪声覆盖语音。
 - K1 上已验证 RISC-V 对话与唤醒程序编译、网页文字按需启动、云端错误最多重试
   3 次，以及离线自主头部动作不启动云端。新产品鉴权、模型文字回复、动态 TTS
   音色和完整回答结束事件均已通过；实测回答完成后云端按 90 秒空闲策略正常退出，
@@ -254,14 +254,19 @@ export AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
 export AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
 export AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true
 export AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
+export AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS=2.2
 ```
 
-首次部署或修改固定短语后生成本地 WAV：
+首次部署应确认私有仓库内的 15 个 WAV 已同步：
 
 ```bash
-/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.local_speech \
-  --generate-assets
+find /opt/ai-cat-controller/assets/local-speech -type f -name '*.wav' | wc -l
+# 预期：15
 ```
+
+只有修改短语或音色时，才在已完成火山鉴权的 K1 上以管理员身份运行
+`tools/capture_cloud_phrase_assets.py` 重新缓存；工具结束后会恢复原性格并关闭
+云端服务。
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
 
