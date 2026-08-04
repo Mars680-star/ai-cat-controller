@@ -20,10 +20,23 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
   `personality_id`、配置 revision 和 `voice_type`。K1 已编译部署，当前
   “元气探险家”revision 与原生状态一致，火山网关返回 `session.updated`。
 - 火山随后返回 `code=1000003: AI license duration quota exceeded`，因此 5 个音色
-  尚不能逐一完成人工听感验收。为避免持续重连，语音、唤醒和自主动作服务暂时
-  停止但仍保持开机启用；补充有效 License 后需恢复并完成听音测试。
-- 自动测试更新为 `121 passed`。部署前回滚点为
-  `/root/ai-cat-backups/before-personality-sync-20260803-183146`。
+  尚不能逐一完成人工听感验收。为降低语音时长消耗，云端对话进程改为按需启动：
+  本地“小安小安”唤醒服务常驻，匹配后才启动固定的
+  `volc-conv-ai.service`，等待云端与人格配置就绪后自动进入聆听。
+- 网页文字提问和显式播报同样会按需启动云端；FastAPI 只允许执行固定的
+  `systemctl --no-block start volc-conv-ai.service`，并在原生状态进入 `ready`
+  后才发送 `SIGHUP` 或 `SIGUSR1`，避免启动阶段丢请求。
+- 连续对话及免唤醒追问结束后，云端再空闲 90 秒会正常断开；语音单元改为
+  `Restart=on-failure` 且不再开机启用，异常断线最多快速重试 3 次。本地唤醒、
+  FastAPI、PulseAudio 和安全自主动作继续常驻。
+- 安全自主头部动作可在云端离线时继续执行；后台随机云端短语默认关闭，避免
+  自主行为重新产生云端会话。需要专项测试时才设置
+  `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=true`。
+- K1 上已验证 RISC-V 对话与唤醒程序编译、网页文字按需启动、云端错误最多重试
+  3 次，以及离线自主头部动作不启动云端。当前 License/TTS 资源错误会让云端
+  异常断开，因此 90 秒正常空闲退出还需在控制台资源恢复后做计时验收。
+- 自动测试更新为 `130 passed`。本次部署回滚点为
+  `/root/ai-cat-backups/before-on-demand-cloud-20260804/deployment.tar.gz`。
 
 ### 2026-08-03
 
@@ -134,6 +147,7 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 - API Key、动作串行、停止取消、超时和退出清理。
 - Local K1 固定 systemd 服务状态查询、对话唤醒/打断和实时阶段显示。
 - Local K1 网页文字提问、真机语音回答和统一会话历史。
+- Local K1 本地唤醒常驻、云端对话按需启动及空闲 90 秒自动断开。
 - Local K1 网页配置免唤醒追问时间，设备重启后保持设置。
 - Local K1 真实电量、充电状态、电池电压和充电器在线检测，以及语音查询。
 - Local K1 固定摇头、点头和停止动作，以及默认关闭的维修后摇尾接口。
@@ -142,8 +156,9 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 Local K1 只执行固定的 `head_lr 1`、`head_ud 2`、`motor stop` 命令。摇尾只在
 维修并完成低速验收后设置 `AI_CAT_ENABLE_TAIL_MOTION=true` 才开放固定的
 `tail_lr 1`；默认返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
-固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`。产品 Mock 的回答仍是本地模板，不会消耗
-火山服务；Local K1 使用同一性格定义中的真实火山音色 ID 和提示词。
+固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`，并只允许按需启动这一个固定服务。产品
+Mock 的回答仍是本地模板，不会消耗火山服务；Local K1 使用同一性格定义中的
+真实火山音色 ID 和提示词。
 
 ## 目录
 
@@ -223,6 +238,7 @@ export AI_CAT_API_KEY='替换为随机密钥'
 export AI_CAT_ENABLE_TAIL_MOTION=false
 export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=60
 export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=120
+export AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
 ```
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。
@@ -240,10 +256,13 @@ export AI_CAT_INTIMACY_DAILY_CAP=20
 - Python 代码不使用 `os.system`、`shell=True` 或 Shell 字符串拼接。
 - Local K1 只允许固定服务的 `is-active`、`is-enabled`，以及对话服务的
   `SIGHUP`/`SIGUSR1`/`SIGUSR2`。
+- 仅允许无 Shell 地执行固定的
+  `systemctl --no-block start volc-conv-ai.service`；HTTP 请求不能改变命令、
+  服务名或启动参数。
 - 文字问题和主动短语只能写入固定的 `dialog-text-request.json`；问题限制为
   500 个字符、主动短语限制为 100 个字符；
   HTTP 请求不能指定文件路径、信号、服务或厂商鉴权信息。
-- 不执行 `systemctl start/stop/restart`，也不接受请求传入任意信号或服务名。
+- 不执行任意 `systemctl stop/restart`，也不接受请求传入任意信号或服务名。
 - 真机电机只接受审核过的固定动作，不接受 HTTP 或 Function Calling 传入 GPIO、
   方向、角度、速度、持续时间或 Shell 参数。
 - K1 上的 `toy_motor.service` 必须使用本仓库提供的安全单元，禁止恢复原厂

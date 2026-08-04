@@ -12,6 +12,7 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
         return MockAiCatAdapter(settings.service_names)
 
     hardware_binary = str(settings.hardware_binary)
+    systemctl_binary = str(settings.systemctl_binary)
     hardware_commands = {
         ("motor", "head_lr", "1"),
         ("motor", "head_ud", "2"),
@@ -31,7 +32,10 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
             )
         },
         allowed_commands={
-            hardware_binary: frozenset(hardware_commands)
+            hardware_binary: frozenset(hardware_commands),
+            systemctl_binary: frozenset(
+                {("--no-block", "start", settings.dialog_service)}
+            ),
         },
         timeout_seconds=settings.command_timeout_seconds,
     )

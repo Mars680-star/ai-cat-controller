@@ -43,6 +43,22 @@ def local_settings() -> Settings:
     )
 
 
+def write_dialog_status(path, state: str = "ready") -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "state": state,
+                "message": "test dialog state",
+                "session_active": False,
+                "updated_at_ms": int(time.time() * 1000),
+                "sequence": 1,
+                "pid": os.getpid(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.asyncio
 async def test_local_status_uses_only_confirmed_read_commands() -> None:
     runner = FakeRunner()
@@ -117,14 +133,21 @@ async def test_local_tail_action_uses_fixed_low_speed_when_enabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_local_dialog_control_uses_fixed_signals() -> None:
+async def test_local_dialog_control_uses_fixed_signals(tmp_path) -> None:
     runner = FakeRunner()
-    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+    status_path = tmp_path / "dialog-status.json"
+    write_dialog_status(status_path)
+    settings = local_settings().model_copy(update={"dialog_status_path": status_path})
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
 
     await adapter.wake_dialog()
     await adapter.interrupt_dialog()
 
     assert runner.calls == [
+        (
+            "/usr/bin/systemctl",
+            ("is-active", "volc-conv-ai.service"),
+        ),
         (
             "/usr/bin/systemctl",
             ("kill", "--signal=SIGUSR1", "volc-conv-ai.service"),
@@ -143,8 +166,12 @@ async def test_local_text_dialog_writes_private_request_and_fixed_signal(
     runner = FakeRunner()
     request_path = tmp_path / "dialog-text-request.json"
     settings = local_settings().model_copy(
-        update={"dialog_text_request_path": request_path}
+        update={
+            "dialog_text_request_path": request_path,
+            "dialog_status_path": tmp_path / "dialog-status.json",
+        }
     )
+    write_dialog_status(settings.dialog_status_path)
     adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
 
     await adapter.send_text_dialog("北京今天天气怎么样？", "web-text-1")
@@ -160,6 +187,10 @@ async def test_local_text_dialog_writes_private_request_and_fixed_signal(
     assert runner.calls == [
         (
             "/usr/bin/systemctl",
+            ("is-active", "volc-conv-ai.service"),
+        ),
+        (
+            "/usr/bin/systemctl",
             ("kill", "--signal=SIGHUP", "volc-conv-ai.service"),
         )
     ]
@@ -173,8 +204,12 @@ async def test_local_proactive_speech_writes_speak_request(tmp_path) -> None:
     runner = FakeRunner()
     request_path = tmp_path / "dialog-text-request.json"
     settings = local_settings().model_copy(
-        update={"dialog_text_request_path": request_path}
+        update={
+            "dialog_text_request_path": request_path,
+            "dialog_status_path": tmp_path / "dialog-status.json",
+        }
     )
+    write_dialog_status(settings.dialog_status_path)
     adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
 
     await adapter.speak_text("我在这里呀。", "auto-1-speech")
@@ -186,9 +221,79 @@ async def test_local_proactive_speech_writes_speak_request(tmp_path) -> None:
     assert runner.calls == [
         (
             "/usr/bin/systemctl",
+            ("is-active", "volc-conv-ai.service"),
+        ),
+        (
+            "/usr/bin/systemctl",
             ("kill", "--signal=SIGHUP", "volc-conv-ai.service"),
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_text_dialog_starts_cloud_service_on_demand(tmp_path) -> None:
+    status_path = tmp_path / "dialog-status.json"
+    request_path = tmp_path / "dialog-text-request.json"
+
+    class StartingRunner(FakeRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = False
+
+        async def run(self, executable: str, args: list[str]) -> CommandResult:
+            self.calls.append((executable, tuple(args)))
+            if args == ["is-active", "volc-conv-ai.service"]:
+                return CommandResult(
+                    0 if self.started else 3,
+                    "active" if self.started else "inactive",
+                    "",
+                    False,
+                )
+            if args == ["--no-block", "start", "volc-conv-ai.service"]:
+                self.started = True
+                write_dialog_status(status_path)
+                return CommandResult(0, "", "", False)
+            return CommandResult(0, "", "", False)
+
+    runner = StartingRunner()
+    settings = local_settings().model_copy(
+        update={
+            "dialog_status_path": status_path,
+            "dialog_text_request_path": request_path,
+        }
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.send_text_dialog("测试按需启动", "web-start-1")
+
+    assert runner.calls == [
+        ("/usr/bin/systemctl", ("is-active", "volc-conv-ai.service")),
+        (
+            "/usr/bin/systemctl",
+            ("--no-block", "start", "volc-conv-ai.service"),
+        ),
+        ("/usr/bin/systemctl", ("is-active", "volc-conv-ai.service")),
+        (
+            "/usr/bin/systemctl",
+            ("kill", "--signal=SIGHUP", "volc-conv-ai.service"),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_runtime_status_is_reported_as_waiting_for_local_wake(
+    tmp_path,
+) -> None:
+    settings = local_settings().model_copy(
+        update={"dialog_status_path": tmp_path / "missing-status.json"}
+    )
+    adapter = LocalK1Adapter(settings, FakeRunner())  # type: ignore[arg-type]
+
+    status = await adapter.get_dialog_status()
+
+    assert status["state"] == "offline"
+    assert status["stale"] is False
+    assert "小安小安" in status["message"]
 
 
 @pytest.mark.asyncio

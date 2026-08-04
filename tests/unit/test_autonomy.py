@@ -53,6 +53,7 @@ def autonomy_config(**overrides: object) -> AutonomyConfig:
         "minimum_interval_seconds": 60.0,
         "maximum_interval_seconds": 120.0,
         "phrase_probability": 1.0,
+        "cloud_speech_enabled": False,
     }
     values.update(overrides)
     return AutonomyConfig(**values)  # type: ignore[arg-type]
@@ -63,7 +64,7 @@ def test_autonomy_submits_only_safe_head_motion_and_allowlisted_phrase() -> None
         {"state": "ready", "session_active": False, "stale": False}
     )
     worker = AutonomyWorker(
-        autonomy_config(),
+        autonomy_config(cloud_speech_enabled=True),
         client,  # type: ignore[arg-type]
         random_source=random.Random(7),
     )
@@ -146,3 +147,29 @@ def test_autonomy_waits_until_native_personality_is_applied() -> None:
 
     assert result["reason"] == "personality_not_ready"
     assert client.actions == []
+
+
+def test_autonomy_runs_motion_offline_without_starting_cloud_speech() -> None:
+    client = FakeClient(
+        {"state": "offline", "session_active": False, "stale": True},
+        {
+            "active": True,
+            "native_applied": False,
+            "personality_id": "gentle_companion",
+            "autonomy": {
+                "action_weights": {"head/nod": 1.0},
+                "phrases": ["我在这里，慢慢来就好。"],
+            },
+        },
+    )
+    worker = AutonomyWorker(
+        autonomy_config(cloud_speech_enabled=False),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(1),
+    )
+
+    result = worker.run_once()
+
+    assert result == {"executed": True, "action": "head/nod", "phrase": None}
+    assert len(client.actions) == 1
+    assert client.phrases == []

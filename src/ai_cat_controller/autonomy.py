@@ -23,6 +23,7 @@ LOGGER = logging.getLogger("ai_cat_controller.autonomy")
 MAX_RESPONSE_BYTES = 65_536
 SAFE_ACTIONS = ("head/nod", "head/shake")
 AUTONOMY_READY_STATES = frozenset({"ready", "interrupted"})
+AUTONOMY_OFFLINE_STATES = frozenset({"offline", "unavailable"})
 SHORT_PHRASES = tuple(
     dict.fromkeys(
         phrase
@@ -61,6 +62,7 @@ class AutonomyConfig:
     minimum_interval_seconds: float
     maximum_interval_seconds: float
     phrase_probability: float
+    cloud_speech_enabled: bool = False
 
     @classmethod
     def from_env(
@@ -115,6 +117,10 @@ class AutonomyConfig:
                 0.7,
                 0.0,
                 1.0,
+            ),
+            cloud_speech_enabled=(
+                source.get("AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED", "false").lower()
+                == "true"
             ),
         )
 
@@ -218,21 +224,30 @@ class AutonomyWorker:
 
     def run_once(self) -> dict[str, Any]:
         status = self._client.dialog_status()
+        dialog_state = str(status.get("state", "unavailable"))
+        dialog_is_offline = dialog_state in AUTONOMY_OFFLINE_STATES
         if (
-            status.get("stale")
-            or status.get("session_active")
-            or status.get("state") not in AUTONOMY_READY_STATES
+            status.get("session_active")
+            or (
+                not dialog_is_offline
+                and (
+                    status.get("stale")
+                    or dialog_state not in AUTONOMY_READY_STATES
+                )
+            )
         ):
             result = {
                 "executed": False,
                 "reason": "dialog_busy",
-                "dialog_state": status.get("state", "unknown"),
+                "dialog_state": dialog_state,
             }
             LOGGER.info("autonomous behavior skipped: %s", result)
             return result
 
         personality = self._client.personality_profile()
-        if not personality.get("active") or not personality.get("native_applied"):
+        if not personality.get("active") or (
+            not personality.get("native_applied") and not dialog_is_offline
+        ):
             result = {
                 "executed": False,
                 "reason": "personality_not_ready",
@@ -264,7 +279,10 @@ class AutonomyWorker:
         self._client.start_head_action(action, f"{event_id}-motion")
 
         phrase: str | None = None
-        if self._random.random() < self._config.phrase_probability:
+        if (
+            self._config.cloud_speech_enabled
+            and self._random.random() < self._config.phrase_probability
+        ):
             profile_phrases = autonomy.get("phrases")
             phrases = (
                 [item for item in profile_phrases if item in SHORT_PHRASES]

@@ -17,6 +17,9 @@ def make_runner() -> CommandRunner:
             "volc-conv-ai.service": frozenset({"SIGHUP", "SIGUSR1", "SIGUSR2"})
         },
         allowed_commands={
+            "/usr/bin/systemctl": frozenset(
+                {("--no-block", "start", "volc-conv-ai.service")}
+            ),
             "/usr/bin/ai-toy_app": frozenset(
                 {
                     ("motor", "head_lr", "1"),
@@ -130,6 +133,45 @@ async def test_runner_allows_only_confirmed_dialog_signals(
         "--signal=SIGHUP",
         "volc-conv-ai.service",
     )
+
+
+@pytest.mark.asyncio
+async def test_runner_allows_only_fixed_dialog_service_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+        def kill(self) -> None:
+            pass
+
+        def terminate(self) -> None:
+            pass
+
+    async def fake_create_subprocess_exec(
+        executable: str, *args: str, **kwargs: object
+    ) -> FakeProcess:
+        del kwargs
+        captured["executable"] = executable
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await make_runner().run(
+        "/usr/bin/systemctl",
+        ["--no-block", "start", "volc-conv-ai.service"],
+    )
+
+    assert captured == {
+        "executable": "/usr/bin/systemctl",
+        "args": ("--no-block", "start", "volc-conv-ai.service"),
+    }
 
 
 @pytest.mark.asyncio

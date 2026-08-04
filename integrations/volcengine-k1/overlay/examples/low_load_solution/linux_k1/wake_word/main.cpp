@@ -1,13 +1,16 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cerrno>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <iostream>
 #include <spawn.h>
 #include <string>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <vector>
 
@@ -33,6 +36,10 @@ constexpr size_t kMaxUtteranceSamples = 80000;
 constexpr float kVadThreshold = 0.5f;
 constexpr auto kTriggerSettleDelay = std::chrono::seconds(1);
 constexpr const char* kDialogSessionMarker = "/run/ai-cat/dialog-session-active";
+constexpr const char* kDialogStatusPath = "/run/ai-cat/dialog-status.json";
+constexpr const char* kDialogService = "volc-conv-ai.service";
+constexpr size_t kMaxDialogStatusBytes = 16 * 1024;
+constexpr auto kCloudReadyTimeout = std::chrono::seconds(30);
 
 volatile std::sig_atomic_t exit_requested = 0;
 
@@ -102,30 +109,141 @@ std::vector<float> normalizeAudio(const std::vector<int16_t>& samples) {
     return audio;
 }
 
-bool triggerConversation() {
+struct FileVersion {
+    bool exists = false;
+    dev_t device = 0;
+    ino_t inode = 0;
+    time_t modified_seconds = 0;
+    long modified_nanoseconds = 0;
+    off_t size = 0;
+};
+
+FileVersion readFileVersion(const char* path) {
+    struct stat file_stat {};
+    FileVersion version;
+    if (stat(path, &file_stat) != 0) {
+        return version;
+    }
+    version.exists = true;
+    version.device = file_stat.st_dev;
+    version.inode = file_stat.st_ino;
+    version.modified_seconds = file_stat.st_mtim.tv_sec;
+    version.modified_nanoseconds = file_stat.st_mtim.tv_nsec;
+    version.size = file_stat.st_size;
+    return version;
+}
+
+bool fileVersionChanged(const FileVersion& before, const FileVersion& after) {
+    return before.exists != after.exists || before.device != after.device ||
+        before.inode != after.inode ||
+        before.modified_seconds != after.modified_seconds ||
+        before.modified_nanoseconds != after.modified_nanoseconds ||
+        before.size != after.size;
+}
+
+int runSystemctl(std::vector<std::string> arguments) {
+    arguments.insert(arguments.begin(), "systemctl");
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 1);
+    for (std::string& argument : arguments) {
+        argv.push_back(argument.data());
+    }
+    argv.push_back(nullptr);
+
     pid_t pid = -1;
-    char systemctl[] = "systemctl";
-    char kill[] = "kill";
-    char signal[] = "--signal=SIGUSR1";
-    char service[] = "volc-conv-ai.service";
-    char* argv[] = {systemctl, kill, signal, service, nullptr};
     const int spawn_status = posix_spawn(
         &pid,
         "/bin/systemctl",
         nullptr,
         nullptr,
-        argv,
+        argv.data(),
         environ);
     if (spawn_status != 0) {
         std::cerr << "[WakeWord] Failed to start systemctl: "
                   << spawn_status << std::endl;
-        return false;
+        return -1;
     }
     int child_status = 0;
-    if (waitpid(pid, &child_status, 0) < 0 ||
-        !WIFEXITED(child_status) ||
-        WEXITSTATUS(child_status) != 0) {
-        std::cerr << "[WakeWord] Failed to signal volc-conv-ai.service" << std::endl;
+    pid_t wait_result;
+    do {
+        wait_result = waitpid(pid, &child_status, 0);
+    } while (wait_result < 0 && errno == EINTR);
+    if (wait_result < 0 || !WIFEXITED(child_status)) {
+        return -1;
+    }
+    return WEXITSTATUS(child_status);
+}
+
+bool dialogStatusIsReady(
+    const FileVersion& previous_version,
+    bool require_new_status
+) {
+    const FileVersion current_version = readFileVersion(kDialogStatusPath);
+    if (!current_version.exists || current_version.size <= 0 ||
+        current_version.size > static_cast<off_t>(kMaxDialogStatusBytes) ||
+        (require_new_status && !fileVersionChanged(previous_version, current_version))) {
+        return false;
+    }
+
+    FILE* file = std::fopen(kDialogStatusPath, "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    std::vector<char> buffer(static_cast<size_t>(current_version.size) + 1, '\0');
+    const size_t bytes_read = std::fread(
+        buffer.data(),
+        1,
+        static_cast<size_t>(current_version.size),
+        file);
+    const bool read_ok = bytes_read == static_cast<size_t>(current_version.size);
+    std::fclose(file);
+    if (!read_ok) {
+        return false;
+    }
+
+    const std::string status(buffer.data(), bytes_read);
+    const bool ready = status.find("\"state\":\"ready\"") != std::string::npos ||
+        status.find("\"state\":\"interrupted\"") != std::string::npos;
+    const size_t pid_key = status.find("\"pid\":");
+    if (!ready || pid_key == std::string::npos) {
+        return false;
+    }
+    const char* pid_start = status.c_str() + pid_key + 6;
+    char* pid_end = nullptr;
+    errno = 0;
+    const long dialog_pid = std::strtol(pid_start, &pid_end, 10);
+    return errno == 0 && pid_end != pid_start && dialog_pid > 1 &&
+        (::kill(static_cast<pid_t>(dialog_pid), 0) == 0 || errno == EPERM);
+}
+
+bool triggerConversation() {
+    const bool already_active =
+        runSystemctl({"is-active", "--quiet", kDialogService}) == 0;
+    const FileVersion previous_status = readFileVersion(kDialogStatusPath);
+    if (!already_active &&
+        runSystemctl({"--no-block", "start", kDialogService}) != 0) {
+        std::cerr << "[WakeWord] Failed to start " << kDialogService << std::endl;
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kCloudReadyTimeout;
+    while (!exit_requested && std::chrono::steady_clock::now() < deadline) {
+        if (dialogStatusIsReady(previous_status, !already_active)) {
+            break;
+        }
+        usleep(100 * 1000);
+    }
+    if (exit_requested ||
+        !dialogStatusIsReady(previous_status, !already_active)) {
+        std::cerr << "[WakeWord] Cloud dialog did not become ready within "
+                  << std::chrono::duration_cast<std::chrono::seconds>(
+                         kCloudReadyTimeout).count()
+                  << " seconds" << std::endl;
+        return false;
+    }
+
+    if (runSystemctl({"kill", "--signal=SIGUSR1", kDialogService}) != 0) {
+        std::cerr << "[WakeWord] Failed to signal " << kDialogService << std::endl;
         return false;
     }
     std::cout << "[WakeWord] Conversation triggered" << std::endl;
@@ -306,13 +424,16 @@ int main(int argc, char** argv) {
             }
             if (matched) {
                 std::cout << "[WakeWord] Matched: " << wake_phrase << std::endl;
+                pa_simple_free(capture);
+                capture = nullptr;
                 if (triggerConversation()) {
                     resume_not_before =
                         std::chrono::steady_clock::now() + kTriggerSettleDelay;
-                    pa_simple_free(capture);
-                    capture = nullptr;
                     std::cout << "[WakeWord] Waiting for dialog session marker"
                               << std::endl;
+                } else {
+                    resume_not_before =
+                        std::chrono::steady_clock::now() + kTriggerSettleDelay;
                 }
             }
         }

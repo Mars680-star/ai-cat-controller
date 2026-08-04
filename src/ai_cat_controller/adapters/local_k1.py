@@ -41,6 +41,7 @@ class LocalK1Adapter(AiCatAdapter):
             self.capabilities = self.capabilities | {Capability.WAG_TAIL}
         self._connected = False
         self._connected_at = time.monotonic()
+        self._dialog_start_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         self._connected = True
@@ -256,6 +257,16 @@ class LocalK1Adapter(AiCatAdapter):
             "voice_type": None,
         }
 
+    @classmethod
+    def _offline_dialog_status(cls) -> dict[str, Any]:
+        return {
+            **cls._unavailable_dialog_status(
+                "云端语音未连接，正在等待唤醒词“小安小安”"
+            ),
+            "state": "offline",
+            "stale": False,
+        }
+
     @staticmethod
     def _safe_int(value: Any) -> int:
         if isinstance(value, bool):
@@ -271,7 +282,7 @@ class LocalK1Adapter(AiCatAdapter):
                 return self._unavailable_dialog_status("对话状态文件超过安全大小")
             payload = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return self._unavailable_dialog_status("对话状态文件尚未生成")
+            return self._offline_dialog_status()
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             return self._unavailable_dialog_status(f"无法读取对话状态: {exc}")
 
@@ -331,6 +342,68 @@ class LocalK1Adapter(AiCatAdapter):
                 details={
                     "returncode": result.returncode,
                     "stderr": result.stderr,
+                },
+            )
+
+    async def _ensure_dialog_ready(self) -> None:
+        ready_states = {"ready", "interrupted"}
+        async with self._dialog_start_lock:
+            active_result = await self._query_service(
+                "is-active", self._settings.dialog_service
+            )
+            status = await self.get_dialog_status()
+            if (
+                active_result.stdout == "active"
+                and status.get("state") in ready_states
+                and not status.get("stale")
+            ):
+                return
+
+            started_at_ms = int(time.time() * 1000)
+            if active_result.stdout != "active":
+                start_result = await self._runner.run(
+                    str(self._settings.systemctl_binary),
+                    ["--no-block", "start", self._settings.dialog_service],
+                )
+                if start_result.timed_out:
+                    raise DeviceUnavailableError("启动云端语音服务超时")
+                if start_result.returncode != 0:
+                    raise DeviceUnavailableError(
+                        "启动云端语音服务失败",
+                        details={
+                            "returncode": start_result.returncode,
+                            "stderr": start_result.stderr,
+                        },
+                    )
+
+            deadline = time.monotonic() + self._settings.dialog_start_timeout_seconds
+            last_status = status
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.2)
+                last_status = await self.get_dialog_status()
+                active_result = await self._query_service(
+                    "is-active", self._settings.dialog_service
+                )
+                if (
+                    active_result.stdout == "active"
+                    and last_status.get("state") in ready_states
+                    and not last_status.get("stale")
+                    and self._safe_int(last_status.get("updated_at_ms"))
+                    >= started_at_ms
+                ):
+                    return
+                if (
+                    active_result.stdout in {"inactive", "failed"}
+                    and last_status.get("state") in {"offline", "unavailable"}
+                ):
+                    break
+
+            raise DeviceUnavailableError(
+                "云端语音服务未能在限定时间内就绪",
+                details={
+                    "dialog_state": last_status.get("state", "unavailable"),
+                    "message": last_status.get("message", ""),
+                    "service_state": active_result.stdout or "unknown",
                 },
             )
 
@@ -420,6 +493,7 @@ class LocalK1Adapter(AiCatAdapter):
         return "stop requested" in result.stdout.lower()
 
     async def wake_dialog(self) -> None:
+        await self._ensure_dialog_ready()
         await self._signal_dialog("SIGUSR1")
 
     async def interrupt_dialog(self) -> None:
@@ -470,6 +544,7 @@ class LocalK1Adapter(AiCatAdapter):
             raise
 
     async def send_text_dialog(self, content: str, request_id: str) -> None:
+        await self._ensure_dialog_ready()
         await asyncio.to_thread(
             self._write_dialog_request,
             content,
@@ -483,6 +558,7 @@ class LocalK1Adapter(AiCatAdapter):
             raise
 
     async def speak_text(self, content: str, request_id: str) -> None:
+        await self._ensure_dialog_ready()
         await asyncio.to_thread(
             self._write_dialog_request,
             content,

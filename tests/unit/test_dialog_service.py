@@ -144,3 +144,28 @@ async def test_follow_up_config_survives_service_recreation(tmp_path) -> None:
     assert restored["follow_up_seconds"] == 65
     assert restored["source"] == "persisted"
     assert config_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_offline_text_request_is_delegated_for_on_demand_start() -> None:
+    class OfflineAdapter(MockAiCatAdapter):
+        submitted: tuple[str, str] | None = None
+
+        async def get_dialog_status(self) -> dict[str, object]:
+            return {
+                "state": "offline",
+                "message": "waiting for wake word",
+                "session_active": False,
+                "stale": True,
+            }
+
+        async def send_text_dialog(self, content: str, request_id: str) -> None:
+            self.submitted = (content, request_id)
+
+    adapter = OfflineAdapter(SERVICES)
+    service = DialogService(adapter)
+
+    result = await service.send_text("网页按需提问", "web-offline-1")
+
+    assert result["dialog_state"] == "queued"
+    assert adapter.submitted == ("网页按需提问", "web-offline-1")

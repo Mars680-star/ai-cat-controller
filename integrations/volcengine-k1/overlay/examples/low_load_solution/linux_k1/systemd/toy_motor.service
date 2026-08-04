@@ -1,8 +1,7 @@
 [Unit]
 Description=AI Cat Safe Autonomous Head Motion and Speech
-After=ai-cat-controller.service volc-conv-ai.service
+After=ai-cat-controller.service
 Requires=ai-cat-controller.service
-Wants=volc-conv-ai.service
 
 [Service]
 Type=simple

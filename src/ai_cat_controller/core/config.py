@@ -32,6 +32,7 @@ class Settings(BaseModel):
     api_key: SecretStr = SecretStr("")
 
     command_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
+    dialog_start_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
     enable_tail_motion: bool = False
     service_status_cache_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
@@ -109,6 +110,9 @@ class Settings(BaseModel):
             "api_key_enabled": source.get("AI_CAT_API_KEY_ENABLED", "false"),
             "api_key": source.get("AI_CAT_API_KEY", ""),
             "command_timeout_seconds": source.get("AI_CAT_COMMAND_TIMEOUT_SECONDS", "12.0"),
+            "dialog_start_timeout_seconds": source.get(
+                "AI_CAT_DIALOG_START_TIMEOUT_SECONDS", "30.0"
+            ),
             "motion_cooldown_seconds": source.get("AI_CAT_MOTION_COOLDOWN_SECONDS", "0.2"),
             "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
             "service_status_cache_seconds": source.get(

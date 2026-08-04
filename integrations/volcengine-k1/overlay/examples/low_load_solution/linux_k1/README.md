@@ -94,7 +94,7 @@ The demo accepts two signals and can run without a terminal:
 - `SIGUSR1`: start listening; while thinking/answering, interrupt and listen.
 - `SIGUSR2`: interrupt and end the continuous session.
 
-After the first wake, the user can ask follow-up questions for 15 seconds after
+After the first wake, the user can ask follow-up questions for 30 seconds after
 each answer without repeating the wake phrase. Install the supplied units after
 building:
 
@@ -102,16 +102,19 @@ building:
 systemctl disable --now toy_voice.service
 install -m 0644 systemd/volc-pulseaudio.service /etc/systemd/system/
 install -m 0644 systemd/volc-conv-ai.service /etc/systemd/system/
+install -m 0644 systemd/volc-k1-wake-word.service /etc/systemd/system/
 install -m 0644 systemd/ai-cat-echo-cancel.pa \
   /etc/pulse/system.pa.d/ai-cat-echo-cancel.pa
 systemctl daemon-reload
-systemctl enable --now volc-conv-ai.service
+systemctl disable --now volc-conv-ai.service
+systemctl enable --now volc-pulseaudio.service volc-k1-wake-word.service
 ```
 
 To restore low-frequency autonomous behavior without restoring the unsafe DDS
 motor executor, install the repository's replacement `toy_motor.service`. It
 uses the local FastAPI API, selects only fixed head presets, skips all active
-dialog states, and never selects the unverified tail:
+dialog states, and never selects the unverified tail. It does not pull in the
+cloud dialog service; cloud-backed autonomous phrases are disabled by default:
 
 ```bash
 install -m 0644 systemd/toy_motor.service /etc/systemd/system/toy_motor.service
@@ -122,9 +125,10 @@ systemctl enable --now toy_motor.service
 Do not change its `ExecStart` back to `/usr/bin/toy_control` while the FastAPI
 and voice action paths are enabled.
 
-Check service state and trigger one recording turn manually:
+Start the cloud service on demand and trigger one recording turn manually:
 
 ```bash
+systemctl start volc-conv-ai.service
 systemctl status volc-conv-ai.service --no-pager
 systemctl kill -s SIGUSR1 volc-conv-ai.service
 cat /run/ai-cat/dialog-status.json
@@ -132,13 +136,15 @@ systemctl kill -s SIGUSR2 volc-conv-ai.service
 journalctl -u volc-conv-ai.service -f
 ```
 
-The local wake-word process sends `SIGUSR1` after matching its phrase and pauses
-its own capture while `/run/ai-cat/dialog-session-active` exists. It uses a
-weak systemd dependency on the cloud dialog service, so an idle WebSocket
-reconnect does not reload the large local wake-word model. Ordinary local ASR
-transcripts are not logged by default; add `--debug-transcripts` manually when
-diagnosing wake recognition. Audio is not sent to the cloud until the phrase
-matches and the dialog service receives `SIGUSR1`.
+The local wake-word process remains online without a cloud connection. After it
+matches the phrase, it starts `volc-conv-ai.service`, waits for the native status
+to report `ready`, sends `SIGUSR1`, and pauses its own capture while
+`/run/ai-cat/dialog-session-active` exists. The cloud process exits normally
+after 90 idle seconds once the continuous dialog has ended; only failures are
+restarted. Ordinary local ASR transcripts are not logged by default; add
+`--debug-transcripts` manually when diagnosing wake recognition. Audio is not
+sent to the cloud until the phrase matches and the dialog service receives
+`SIGUSR1`.
 
 The PulseAudio snippet routes both playback and capture through a paired WebRTC
 echo canceller. The dialog also stops a session if it still detects three

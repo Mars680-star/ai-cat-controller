@@ -85,6 +85,7 @@
 #define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
 #define DIALOG_REQUEST_KIND_MAX_LEN 16
 #define PROACTIVE_SPEECH_ACK_TIMEOUT_MS 3000
+#define CLOUD_IDLE_TIMEOUT_MS 90000
 #define PERSONALITY_RUNTIME_MAX_BYTES (32 * 1024)
 #define PERSONALITY_ID_MAX_LEN 64
 #define PERSONALITY_NAME_MAX_LEN 64
@@ -138,6 +139,7 @@ static volatile sig_atomic_t destory = false;
 static volatile sig_atomic_t clear = false;
 static volatile sig_atomic_t video_upload = false;
 static volatile sig_atomic_t exit_request = false;           /* 主线程和播放线程退出条件 */
+static volatile sig_atomic_t clean_exit_requested = false;   /* 正常空闲退出不触发 systemd 重启 */
 static volatile sig_atomic_t session_update = false;
 static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
 static volatile sig_atomic_t interrupt_only_request = false; /* SIGUSR2 只打断，不开始录音 */
@@ -162,6 +164,7 @@ static uint64_t client_commit_ack_deadline_ms = 0;            /* 端侧提交后
 static uint64_t client_transcript_deadline_ms = 0;            /* 端侧提交后等待最终转写的截止时间 */
 static uint64_t playback_capture_guard_until_ms = 0;
 static uint64_t proactive_speech_deadline_ms = 0;             /* 低优先级播报未被云端接收时恢复 ready */
+static uint64_t cloud_idle_deadline_ms = 0;                    /* 无会话时主动释放云端连接 */
 static volatile sig_atomic_t proactive_speech_pending = false;
 static volatile sig_atomic_t proactive_speech_active = false;
 static volatile sig_atomic_t proactive_speech_finish_request = false;
@@ -237,6 +240,14 @@ static uint64_t __get_time_ms(void) {
     struct timespec now_time;
     clock_gettime(CLOCK_REALTIME, &now_time);
     return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
+}
+
+static void __cancel_cloud_idle_shutdown(void) {
+    cloud_idle_deadline_ms = 0;
+}
+
+static void __schedule_cloud_idle_shutdown(void) {
+    cloud_idle_deadline_ms = __get_time_ms() + CLOUD_IDLE_TIMEOUT_MS;
 }
 
 static uint64_t __get_follow_up_window_ms(void) {
@@ -896,6 +907,7 @@ static void __end_continuous_session(const char* message) {
     __reset_client_turn_state();
     __reset_local_vad();
     __reset_barge_in_guard();
+    __schedule_cloud_idle_shutdown();
     __write_dialog_status("ready", message);
 }
 
@@ -977,6 +989,7 @@ static void __handle_signal(int sig) {
     } else if (sig == SIGUSR2) {
         interrupt_only_request = true;
     } else if (sig == SIGINT || sig == SIGTERM) {
+        clean_exit_requested = true;
         exit_request = true;
     }
 }
@@ -1250,14 +1263,15 @@ static bool is_ready = false;
 static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user_data)
 {
     /*
-     * 断线后退出进程，交给 systemd 的 Restart=always 重建完整 SDK 会话。
+     * 异常断线后以失败状态退出，交给 systemd 的 Restart=on-failure
+     * 重建完整 SDK 会话；正常空闲退出不会自动重连。
      * 这样可以避免继续向已关闭的 WebSocket engine 发送音频。
      */
     switch (event->code) {
         case VOLC_EV_CONNECTED:
             is_ready = true;
             printf("Volc Engine connected\n");
-            __write_dialog_status("ready", "等待唤醒词“小安小安”");
+            __write_dialog_status("connected", "云端已连接，正在完成会话配置");
             break;
         case VOLC_EV_DISCONNECTED:
             is_ready = false;
@@ -2801,10 +2815,9 @@ int main(int argc, const char* argv[]){
     if (error < 0) {
         fprintf(stderr, "personality runtime was not applied at startup\n");
     }
-    __write_dialog_status("ready", "等待唤醒词“小安小安”");
-
-
     __setup_async_io();
+    __schedule_cloud_idle_shutdown();
+    __write_dialog_status("ready", "等待唤醒词“小安小安”");
     printf("键盘监听程序已启动\n");
     printf("按空格键开始/停止, 按i键打断, 按c键清除, 按v键开启视频上传, 按s键stop/start, 按d键 按Ctrl+C退出\n");
     printf("当前状态: 已停止\n");
@@ -2847,6 +2860,24 @@ int main(int argc, const char* argv[]){
             }
         }
 
+        if (
+            cloud_idle_deadline_ms != 0 &&
+            now_ms >= cloud_idle_deadline_ms &&
+            !session_active && !running && !ai_playing &&
+            !wake_request && !text_dialog_request &&
+            !interrupt_only_request && !follow_up_prepare_request &&
+            !proactive_speech_pending && !proactive_speech_active &&
+            !proactive_speech_finish_request &&
+            !tool_capture_guard && !client_turn_pending &&
+            !playback_write_active
+        ) {
+            clean_exit_requested = true;
+            __write_dialog_status("stopping", "云端会话空闲，正在主动断开");
+            printf("cloud idle timeout reached; disconnecting normally\n");
+            exit_request = true;
+            continue;
+        }
+
         if (text_dialog_request) {
             char text_request_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 1];
             char text_content[DIALOG_TEXT_MAX_BYTES + 1];
@@ -2883,6 +2914,7 @@ int main(int argc, const char* argv[]){
                         text_request_id
                     );
                 } else {
+                    __cancel_cloud_idle_shutdown();
                     snprintf(
                         text_event_id,
                         sizeof(text_event_id),
@@ -2914,6 +2946,7 @@ int main(int argc, const char* argv[]){
                     }
                 }
             } else {
+                __cancel_cloud_idle_shutdown();
                 wake_request = false;
                 interrupt_only_request = false;
                 follow_up_prepare_request = false;
@@ -2974,6 +3007,7 @@ int main(int argc, const char* argv[]){
             proactive_speech_deadline_ms = 0;
             if (!proactive_speech_active && !proactive_speech_finish_request) {
                 ai_playing = false;
+                __schedule_cloud_idle_shutdown();
                 __write_dialog_status(
                     "ready",
                     "自主短语未播放或已被用户交互抢占"
@@ -2988,6 +3022,7 @@ int main(int argc, const char* argv[]){
          */
         if (wake_request) {
             wake_request = false;
+            __cancel_cloud_idle_shutdown();
             proactive_speech_pending = false;
             proactive_speech_active = false;
             proactive_speech_finish_request = false;
@@ -3048,6 +3083,7 @@ int main(int argc, const char* argv[]){
             ai_playing = false;
             start_after_interrupt = false;
             interrupt = true;
+            __schedule_cloud_idle_shutdown();
             __write_dialog_status("interrupted", "已请求打断当前回答");
         }
         if (echo_guard_request) {
@@ -3070,6 +3106,7 @@ int main(int argc, const char* argv[]){
             ai_playing = false;
             start_after_interrupt = false;
             interrupt = true;
+            __schedule_cloud_idle_shutdown();
             __write_dialog_status(
                 "echo_guard",
                 "检测到扬声器回声，已停止本次对话，请重新唤醒"
@@ -3140,6 +3177,7 @@ int main(int argc, const char* argv[]){
                 proactive_speech_finish_request = false;
                 ai_playing = false;
                 playback_capture_guard = false;
+                __schedule_cloud_idle_shutdown();
                 __write_dialog_status("ready", "自主动作完成，等待唤醒词“小安小安”");
                 printf("proactive input_tts playback drained\n");
             }
@@ -3385,6 +3423,11 @@ err_out_label:
     session_active = false;
     unlink(DIALOG_SESSION_MARKER);
     __write_dialog_status("offline", "语音服务已停止");
+	if (demo.engine) {
+		volc_stop(demo.engine);
+		volc_destroy(demo.engine);
+		demo.engine = NULL;
+	}
 	if (demo.audio_rec_buf) {
 		free(demo.audio_rec_buf);
 	}
@@ -3400,6 +3443,5 @@ err_out_label:
 		pa_simple_drain(demo.p_playback, &error);
 		pa_simple_free(demo.p_playback);
 	}
-	getchar();
-	return 0;
+	return clean_exit_requested ? EXIT_SUCCESS : EXIT_FAILURE;
 }

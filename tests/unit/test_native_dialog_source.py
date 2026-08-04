@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 SOURCE_PATH = Path(__file__).parents[2] / "native/dialog/volc_conv_ai_demo.c"
+WAKE_SOURCE_PATH = Path(__file__).parents[2] / "native/wake-word/main.cpp"
 PREPARE_SCRIPT_PATH = (
     Path(__file__).parents[2]
     / "integrations/volcengine-k1/scripts/prepare_sdk.sh"
@@ -67,6 +68,27 @@ def test_prepare_sdk_installs_canonical_dialog_source() -> None:
 
     assert 'REPO_DIR=$(CDPATH= cd -- "$INTEGRATION_DIR/../.." && pwd)' in script
     assert '"$REPO_DIR/native/dialog/volc_conv_ai_demo.c"' in script
+    assert '"$REPO_DIR/native/wake-word/main.cpp"' in script
+
+
+def test_native_dialog_exits_cleanly_after_cloud_idle_timeout() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "#define CLOUD_IDLE_TIMEOUT_MS 90000" in source
+    assert "cloud idle timeout reached; disconnecting normally" in source
+    assert "clean_exit_requested ? EXIT_SUCCESS : EXIT_FAILURE" in source
+    assert "Restart=on-failure" in source
+
+
+def test_local_wake_word_starts_cloud_only_after_match_and_waits_for_ready() -> None:
+    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'runSystemctl({"--no-block", "start", kDialogService})' in source
+    assert "dialogStatusIsReady(previous_status, !already_active)" in source
+    assert 'runSystemctl({"kill", "--signal=SIGUSR1", kDialogService})' in source
+    assert source.index('runSystemctl({"--no-block", "start", kDialogService})') < source.index(
+        'runSystemctl({"kill", "--signal=SIGUSR1", kDialogService})'
+    )
 
 
 def test_native_dialog_uses_fixed_motion_commands() -> None:
