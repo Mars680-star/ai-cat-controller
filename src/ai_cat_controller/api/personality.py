@@ -11,6 +11,19 @@ from ai_cat_controller.schemas.common import ApiResponse
 router = APIRouter(prefix="/personality", tags=["性格同步"])
 
 
+def native_personality_is_applied(
+    profile: dict[str, Any],
+    dialog_status: dict[str, Any],
+) -> bool:
+    configured_revision = profile.get("revision")
+    return bool(
+        configured_revision
+        and configured_revision == dialog_status.get("personality_revision")
+        and not dialog_status.get("stale")
+        and dialog_status.get("state") != "offline"
+    )
+
+
 @router.get(
     "/runtime",
     response_model=ApiResponse[dict[str, Any]],
@@ -22,9 +35,9 @@ async def personality_runtime(
     profile = await services.personality.status()
     dialog_status = await services.dialog.get_status()
     applied_revision = dialog_status.get("personality_revision")
-    configured_revision = profile.get("revision")
-    profile["native_applied"] = bool(
-        configured_revision and configured_revision == applied_revision
+    profile["native_applied"] = native_personality_is_applied(
+        profile,
+        dialog_status,
     )
     profile["native_revision"] = applied_revision
     return ApiResponse(
