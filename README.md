@@ -4,7 +4,26 @@ SpaceMIT K1 AI 猫的独立控制仓库。当前提供 FastAPI 产品体验 Mock
 小程序流程替身、完整 Mock 适配器和受限的 Local K1 真机控制；未完成硬件验收
 的尾部动作默认关闭。
 
+新电脑或新的 Codex 会话请先读取 [`CODEX_HANDOFF.md`](CODEX_HANDOFF.md)。从
+GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Mock 启动：
+
+```bash
+./scripts/bootstrap_dev.sh
+./scripts/run_mock.sh
+```
+
 ## 更新记录
+
+### 2026-08-07
+
+修改人：Mars
+
+- 新增根目录 `CODEX_HANDOFF.md`，集中记录仓库入口、架构、当前真机服务模型、
+  已完成功能、外部厂商依赖、安全边界、未验收范围和下一阶段优先级，供新电脑及
+  新 Codex 会话直接接续开发。
+- 新增 `scripts/bootstrap_dev.sh` 和 `scripts/run_mock.sh`：全新克隆后可创建 Python
+  环境、安装依赖、执行全量测试，并以不会操作 K1 硬件的 Mock 模式启动服务。
+- 本地复验 `136 passed`，并确认 `/health`、`/control` 和 `/docs` 均正常返回。
 
 ### 2026-08-04
 
