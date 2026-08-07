@@ -4,7 +4,10 @@ Before=volc-conv-ai.service
 
 [Service]
 Type=simple
+SupplementaryGroups=pulse-access
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
 ExecStart=/usr/bin/pulseaudio --system --daemonize=no --disallow-exit --disallow-module-loading --exit-idle-time=-1 --log-target=journal
+ExecStartPost=/bin/sh -c 'for attempt in 1 2 3 4 5; do /usr/bin/sg pulse-access -c "PULSE_SERVER=unix:/var/run/pulse/native /usr/bin/pactl set-source-volume ai_cat_echo_cancel_source 100%" && exit 0; sleep 1; done; exit 1'
 Restart=on-failure
 RestartSec=2
 

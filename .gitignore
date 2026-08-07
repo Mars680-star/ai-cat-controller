@@ -8,6 +8,8 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+*.egg-info/
+.data/
 
 # Local configuration and credentials
 .env
@@ -33,6 +35,12 @@ conv_ai_config.json
 *.wav
 *.mp3
 *.h264
+
+# The 15 fixed personality phrases are reviewed runtime assets.
+!assets/
+!assets/local-speech/
+!assets/local-speech/**/
+!assets/local-speech/**/*.wav
 
 # Complete vendor trees must stay outside this repository
 /ConversationalAI-Embedded-Kit-2.0/

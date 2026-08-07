@@ -5,15 +5,15 @@
  * 核心流程：
  *   1. main() 读取 conv_ai_config.json，初始化 PulseAudio 和 SDK。
  *   2. 空格键或 SIGUSR1 将 running 置为 true，主循环开始上传麦克风 PCM。
- *   3. SDK 检测到用户说完后回调对话状态，主循环提交当前音频段。
+ *   3. 麦克风在连续会话内持续上行，由服务端 VAD 自动判定每句话结束。
  *   4. 云端返回的 TTS PCM 先写入环形缓冲，再由播放线程送到扬声器。
- *   5. 云端 Function Calling 可异步执行 K1 摇头命令并回传结果。
+ *   5. 云端 Function Calling 可异步执行 K1 头部动作、天气和电量查询。
  *
  * 并发模型：
  *   - 主线程：录音上传、键盘/信号状态机和 SDK 控制命令。
  *   - SDK 回调线程：连接事件、对话状态、消息和下行音频。
  *   - 播放线程：消费环形缓冲中的 TTS 音频。
- *   - 工具线程：执行可能阻塞的电机命令，避免阻塞 SDK 回调。
+ *   - 工具线程：执行可能阻塞的电机命令或网络查询，避免阻塞 SDK 回调。
  */
 
 #include <stdio.h>
@@ -24,11 +24,16 @@
 #include <termios.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <inttypes.h>
+#include <ctype.h>
 #include <string.h>
+#include <strings.h>
 #include <pthread.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
+#include <curl/curl.h>
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
@@ -44,14 +49,65 @@
 #define AUDIO_PLAYBACK_CHUNK_MS 20
 #define FUNCTION_NAME_MAX_LEN 64
 #define FUNCTION_CALL_ID_MAX_LEN 128
+#define FUNCTION_ARGUMENTS_MAX_LEN 512
+#define WEATHER_LOCATION_MAX_LEN 128
+#define HTTP_RESPONSE_MAX_BYTES (128 * 1024)
+#define WAKE_SPEECH_TIMEOUT_MS 30000
+#define DEFAULT_FOLLOW_UP_WINDOW_MS 30000
+#define MIN_FOLLOW_UP_SECONDS 5
+#define MAX_FOLLOW_UP_SECONDS 120
+#define THINKING_TIMEOUT_MS 30000
+#define CLIENT_COMMIT_ACK_TIMEOUT_MS 6000
+#define CLIENT_TRANSCRIPT_TIMEOUT_MS 8000
+#define LOCAL_VAD_SPEECH_RMS 250
+#define LOCAL_VAD_START_FRAMES 2
+#define LOCAL_VAD_SILENCE_FRAMES 15
+#define LOCAL_VAD_MAX_UTTERANCE_MS 15000
+#define MOTOR_MOTION_COOLDOWN_MS 8000
+#define PLAYBACK_CAPTURE_GUARD_MS 350
+#define WAKE_TONE_DURATION_MS 350
+#define FOLLOW_UP_TONE_DURATION_MS 140
+#define WAKE_TONE_POST_GUARD_MS 120
+#define BARGE_IN_GUARD_WINDOW_MS 10000
+#define BARGE_IN_GUARD_LIMIT 3
+#define DIALOG_STATUS_DIR "/run/ai-cat"
+#define DIALOG_STATUS_PATH DIALOG_STATUS_DIR "/dialog-status.json"
+#define DIALOG_STATUS_TMP_PATH DIALOG_STATUS_DIR "/dialog-status.json.tmp"
+#define DIALOG_SESSION_MARKER DIALOG_STATUS_DIR "/dialog-session-active"
+#define DIALOG_EVENT_DIR "/var/lib/ai-cat-controller"
+#define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
+#define DIALOG_CONFIG_PATH DIALOG_EVENT_DIR "/dialog-runtime-config.json"
+#define DIALOG_TEXT_REQUEST_PATH DIALOG_EVENT_DIR "/dialog-text-request.json"
+#define PERSONALITY_RUNTIME_PATH DIALOG_EVENT_DIR "/personality-runtime.json"
+#define DIALOG_CONFIG_MAX_BYTES 4096
+#define DIALOG_TEXT_REQUEST_MAX_BYTES 8192
+#define DIALOG_TEXT_MAX_BYTES 4096
+#define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
+#define DIALOG_REQUEST_KIND_MAX_LEN 16
+#define PROACTIVE_SPEECH_ACK_TIMEOUT_MS 3000
+#define CLOUD_IDLE_TIMEOUT_MS 90000
+#define PERSONALITY_RUNTIME_MAX_BYTES (32 * 1024)
+#define PERSONALITY_ID_MAX_LEN 64
+#define PERSONALITY_NAME_MAX_LEN 64
+#define PERSONALITY_REVISION_MAX_LEN 64
+#define PERSONALITY_VOICE_MAX_LEN 128
+#define PERSONALITY_POLL_INTERVAL_MS 1000
+#define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
+#define DEVICE_SERIAL_MAX_LEN 64
+#define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
+#define BATTERY_STATUS_PATH "/sys/class/power_supply/cw-bat/status"
+#define BATTERY_PRESENT_PATH "/sys/class/power_supply/cw-bat/present"
+#define BATTERY_VOLTAGE_PATH "/sys/class/power_supply/cw-bat/voltage_now"
+#define CHARGER_ONLINE_PATH "/sys/class/power_supply/ip2317-charger/online"
 
 #define WS_BUFFER_CLEAR "{\"type\":\"input_audio_buffer.clear\"}"
-#define WS_SESSION_UPDATE "{\"event_id\":\"event_OgjwihjHg\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"model\":\"\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":0}},\"agent_config\":{\"WelcomeMessage\":\"这是一个覆盖智能体上的欢迎语.\"}}}"
+#define WS_RESPONSE_CREATE "{\"type\":\"response.create\"}"
+#define WS_RESPONSE_CANCEL "{\"type\":\"response.cancel\"}"
+#define WS_SESSION_UPDATE "{\"event_id\":\"event_ai_cat_session_config\",\"type\":\"session.update\",\"session\":{\"object\":\"realtime.session\",\"config\":{\"ASRConfig\":{\"TurnDetectionMode\":1,\"VADConfig\":{\"SilenceTime\":800,\"AIVAD\":false,\"ExpireTime\":1200},\"InterruptConfig\":{\"InterruptSpeechDuration\":600}},\"SubtitleConfig\":{\"DisableRTSSubtitle\":false,\"SubtitleMode\":1}}}}"
 
 typedef struct {
     /* 上行音频、可选视频和云端下行播放所需的运行时资源。 */
     uint8_t* audio_rec_buf;
-    bool commit;                  /* 是否需要提交当前一轮输入音频 */
     char* bot_id;
     char* video_rec_buf;
     int video_frame_len;
@@ -60,9 +116,10 @@ typedef struct {
     int sample_rate;
     int audio_frame_ms;
     volc_ringbuf_t ring_buf;
-	    pthread_mutex_t ring_buf_mutex;
-	pa_simple* p_capture;
-	pa_simple* p_playback;
+    pthread_mutex_t ring_buf_mutex;
+    pthread_mutex_t playback_mutex;
+    pa_simple* p_capture;
+    pa_simple* p_playback;
     pa_sample_spec format;
     pthread_t audio_playback_task;
     volc_engine_t engine;
@@ -82,13 +139,64 @@ static volatile sig_atomic_t destory = false;
 static volatile sig_atomic_t clear = false;
 static volatile sig_atomic_t video_upload = false;
 static volatile sig_atomic_t exit_request = false;           /* 主线程和播放线程退出条件 */
+static volatile sig_atomic_t clean_exit_requested = false;   /* 正常空闲退出不触发 systemd 重启 */
 static volatile sig_atomic_t session_update = false;
 static volatile sig_atomic_t wake_request = false;           /* SIGUSR1 转换出的唤醒请求 */
-static uint64_t wake_capture_deadline_ms = 0;                 /* 唤醒收音的最晚截止时间 */
+static volatile sig_atomic_t interrupt_only_request = false; /* SIGUSR2 只打断，不开始录音 */
+static volatile sig_atomic_t text_dialog_request = false;    /* SIGHUP 提交网页文字问题 */
+static volatile sig_atomic_t wake_tone_after_interrupt = false;
+static volatile sig_atomic_t follow_up_prepare_request = false;
+static volatile sig_atomic_t echo_guard_request = false;     /* 连续插话触发回声保护 */
+static volatile sig_atomic_t echo_guard_active = false;      /* 等待下一次唤醒解除保护 */
+static volatile sig_atomic_t session_active = false;          /* 一次唤醒后的连续对话窗口 */
+static volatile sig_atomic_t waiting_for_speech = false;      /* 等待用户开始说话 */
+static volatile sig_atomic_t playback_capture_guard = false;  /* TTS 播放时暂停上行，阻断自回声 */
+static volatile sig_atomic_t playback_write_active = false;   /* 播放线程已取出但尚未写完的音频块 */
+static volatile sig_atomic_t tool_capture_guard = false;      /* 工具执行至回复结束期间暂停上行 */
+static volatile sig_atomic_t client_turn_pending = false;     /* 等待云端确认端侧 commit */
+static volatile sig_atomic_t input_transcript_pending = false;/* 回答请求后等待用户最终转写 */
+static volatile sig_atomic_t response_create_request = false;
+static volatile sig_atomic_t response_cancel_request = false;
+static uint64_t speech_start_deadline_ms = 0;                 /* 等待首句/追问的截止时间 */
+static uint64_t follow_up_deadline_ms = 0;                    /* 无需唤醒的追问窗口 */
+static uint64_t thinking_deadline_ms = 0;                     /* 云端思考超时后重建连接 */
+static uint64_t client_commit_ack_deadline_ms = 0;            /* 端侧提交后等待云端确认的截止时间 */
+static uint64_t client_transcript_deadline_ms = 0;            /* 端侧提交后等待最终转写的截止时间 */
+static uint64_t playback_capture_guard_until_ms = 0;
+static uint64_t proactive_speech_deadline_ms = 0;             /* 低优先级播报未被云端接收时恢复 ready */
+static uint64_t cloud_idle_deadline_ms = 0;                    /* 无会话时主动释放云端连接 */
+static volatile sig_atomic_t proactive_speech_pending = false;
+static volatile sig_atomic_t proactive_speech_active = false;
+static volatile sig_atomic_t proactive_speech_finish_request = false;
+static bool local_speech_detected = false;                    /* 本地保底 VAD 已确认人声 */
+static unsigned int local_speech_frames = 0;
+static unsigned int local_silence_frames = 0;
+static uint64_t local_speech_started_ms = 0;
+static uint64_t barge_in_window_started_ms = 0;               /* 连续插话计数窗口起点 */
+static unsigned int barge_in_count = 0;                       /* 窗口内插话次数 */
+static pthread_mutex_t barge_in_guard_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct termios original_term;
 static bool terminal_configured = false;
 static int tick = 0;
 extern char** environ;
+static pthread_mutex_t dialog_status_mutex = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long dialog_status_sequence = 0;
+static pthread_mutex_t dialog_event_mutex = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long dialog_event_sequence = 0;
+static unsigned long dialog_turn_sequence = 0;
+static uint64_t dialog_runtime_started_ms = 0;
+static char device_serial[DEVICE_SERIAL_MAX_LEN + 1] = "unknown";
+static pthread_mutex_t personality_config_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char active_personality_id[PERSONALITY_ID_MAX_LEN + 1];
+static char active_personality_name[PERSONALITY_NAME_MAX_LEN + 1];
+static char active_personality_revision[PERSONALITY_REVISION_MAX_LEN + 1];
+static char active_voice_type[PERSONALITY_VOICE_MAX_LEN + 1];
+static bool personality_allow_shake = true;
+static bool personality_allow_nod = true;
+static bool personality_allow_tail = false;
+static time_t personality_runtime_mtime = 0;
+static off_t personality_runtime_size = -1;
+static uint64_t personality_last_poll_ms = 0;
 
 /* Function Calling 分两条消息到达，先暂存 name/call_id，再等待参数完成事件。 */
 typedef struct {
@@ -99,14 +207,24 @@ typedef struct {
 typedef struct {
     realtime_ws_demo_t* demo;
     char call_id[FUNCTION_CALL_ID_MAX_LEN];
+    char name[FUNCTION_NAME_MAX_LEN];
+    char arguments[FUNCTION_ARGUMENTS_MAX_LEN];
 } function_call_task_t;
 
 static pending_function_call_t pending_function_call;
 static pthread_mutex_t function_call_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t motion_motor_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t motion_last_started_ms = 0;
+static pthread_once_t curl_init_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t weather_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char cached_weather_location[WEATHER_LOCATION_MAX_LEN];
+static char cached_weather_place_name[WEATHER_LOCATION_MAX_LEN];
+static double cached_weather_latitude;
+static double cached_weather_longitude;
 
 /* 调试辅助：需要观察上行帧率时可在主循环中启用。 */
 static void __get_fps(void) {
-    static uint64_t last_sec = 0;
+    static time_t last_sec = 0;
     static int fps = 0;
     struct timespec now_time;
     fps++;
@@ -124,6 +242,675 @@ static uint64_t __get_time_ms(void) {
     return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
 }
 
+static void __cancel_cloud_idle_shutdown(void) {
+    cloud_idle_deadline_ms = 0;
+}
+
+static void __schedule_cloud_idle_shutdown(void) {
+    cloud_idle_deadline_ms = __get_time_ms() + CLOUD_IDLE_TIMEOUT_MS;
+}
+
+static uint64_t __get_follow_up_window_ms(void) {
+    char buffer[DIALOG_CONFIG_MAX_BYTES + 1];
+    FILE* file;
+    size_t bytes_read;
+    cJSON* root;
+    cJSON* seconds_obj;
+    int seconds;
+
+    file = fopen(DIALOG_CONFIG_PATH, "r");
+    if (file == NULL) {
+        return DEFAULT_FOLLOW_UP_WINDOW_MS;
+    }
+    bytes_read = fread(buffer, 1, DIALOG_CONFIG_MAX_BYTES, file);
+    if (ferror(file) || (bytes_read == DIALOG_CONFIG_MAX_BYTES && !feof(file))) {
+        fclose(file);
+        fprintf(stderr, "dialog config is unreadable or too large\n");
+        return DEFAULT_FOLLOW_UP_WINDOW_MS;
+    }
+    fclose(file);
+    buffer[bytes_read] = '\0';
+
+    root = cJSON_Parse(buffer);
+    seconds_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "follow_up_seconds");
+    if (
+        !cJSON_IsNumber(seconds_obj) ||
+        seconds_obj->valuedouble != seconds_obj->valueint ||
+        seconds_obj->valueint < MIN_FOLLOW_UP_SECONDS ||
+        seconds_obj->valueint > MAX_FOLLOW_UP_SECONDS
+    ) {
+        cJSON_Delete(root);
+        fprintf(stderr, "dialog config has invalid follow_up_seconds\n");
+        return DEFAULT_FOLLOW_UP_WINDOW_MS;
+    }
+    seconds = seconds_obj->valueint;
+    cJSON_Delete(root);
+    printf("follow-up window configured: %d seconds\n", seconds);
+    return (uint64_t)seconds * 1000;
+}
+
+/* FastAPI 原子写入单条文字请求；原生进程读取后立即删除，避免重复消费。 */
+static int __read_text_dialog_request(
+    char* request_id,
+    size_t request_id_size,
+    char* content,
+    size_t content_size,
+    char* request_kind,
+    size_t request_kind_size
+) {
+    struct stat file_stat;
+    FILE* file = NULL;
+    char buffer[DIALOG_TEXT_REQUEST_MAX_BYTES + 1];
+    size_t bytes_read;
+    cJSON* root = NULL;
+    cJSON* version_obj;
+    cJSON* request_id_obj;
+    cJSON* content_obj;
+    cJSON* kind_obj;
+    const char* request_id_value;
+    const char* content_value;
+    const char* kind_value;
+    size_t index;
+    bool has_visible_text = false;
+    int result = -1;
+
+    if (
+        request_id == NULL || request_id_size == 0 ||
+        content == NULL || content_size == 0 ||
+        request_kind == NULL || request_kind_size == 0
+    ) {
+        return -1;
+    }
+    request_id[0] = '\0';
+    content[0] = '\0';
+    request_kind[0] = '\0';
+    if (
+        lstat(DIALOG_TEXT_REQUEST_PATH, &file_stat) != 0 ||
+        !S_ISREG(file_stat.st_mode) ||
+        file_stat.st_size <= 0 ||
+        file_stat.st_size > DIALOG_TEXT_REQUEST_MAX_BYTES
+    ) {
+        unlink(DIALOG_TEXT_REQUEST_PATH);
+        return -1;
+    }
+    file = fopen(DIALOG_TEXT_REQUEST_PATH, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    bytes_read = fread(buffer, 1, DIALOG_TEXT_REQUEST_MAX_BYTES, file);
+    if (ferror(file) || !feof(file)) {
+        fclose(file);
+        unlink(DIALOG_TEXT_REQUEST_PATH);
+        return -1;
+    }
+    fclose(file);
+    unlink(DIALOG_TEXT_REQUEST_PATH);
+    buffer[bytes_read] = '\0';
+
+    root = cJSON_Parse(buffer);
+    version_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "version");
+    request_id_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "request_id");
+    content_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "content");
+    kind_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "kind");
+    if (
+        !cJSON_IsNumber(version_obj) || version_obj->valueint != 1 ||
+        !cJSON_IsString(request_id_obj) ||
+        !cJSON_IsString(content_obj)
+    ) {
+        goto cleanup;
+    }
+    request_id_value = request_id_obj->valuestring;
+    content_value = content_obj->valuestring;
+    kind_value = cJSON_IsString(kind_obj) ? kind_obj->valuestring : "question";
+    if (
+        request_id_value == NULL || content_value == NULL ||
+        strlen(request_id_value) == 0 ||
+        strlen(request_id_value) > DIALOG_TEXT_REQUEST_ID_MAX_LEN ||
+        strlen(content_value) == 0 ||
+        strlen(content_value) > DIALOG_TEXT_MAX_BYTES ||
+        kind_value == NULL || strlen(kind_value) == 0 ||
+        strlen(kind_value) > DIALOG_REQUEST_KIND_MAX_LEN ||
+        (strcmp(kind_value, "question") != 0 && strcmp(kind_value, "speak") != 0)
+    ) {
+        goto cleanup;
+    }
+    for (index = 0; content_value[index] != '\0'; index++) {
+        if (!isspace((unsigned char)content_value[index])) {
+            has_visible_text = true;
+            break;
+        }
+    }
+    if (!has_visible_text) {
+        goto cleanup;
+    }
+    snprintf(request_id, request_id_size, "%s", request_id_value);
+    snprintf(content, content_size, "%s", content_value);
+    snprintf(request_kind, request_kind_size, "%s", kind_value);
+    result = 0;
+
+cleanup:
+    cJSON_Delete(root);
+    return result;
+}
+
+static void __reset_barge_in_guard(void) {
+    pthread_mutex_lock(&barge_in_guard_mutex);
+    barge_in_window_started_ms = 0;
+    barge_in_count = 0;
+    pthread_mutex_unlock(&barge_in_guard_mutex);
+}
+
+static void __reset_local_vad(void) {
+    local_speech_detected = false;
+    local_speech_frames = 0;
+    local_silence_frames = 0;
+    local_speech_started_ms = 0;
+}
+
+static bool __local_vad_should_commit(
+    const uint8_t* pcm,
+    size_t pcm_len,
+    bool* speech_started
+) {
+    const int16_t* samples = (const int16_t*)pcm;
+    size_t sample_count = pcm_len / sizeof(*samples);
+    uint64_t sum_squares = 0;
+
+    *speech_started = false;
+    if (sample_count == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < sample_count; i++) {
+        int32_t sample = samples[i];
+        sum_squares += (uint64_t)(sample * sample);
+    }
+
+    bool has_speech =
+        sum_squares >
+        (uint64_t)LOCAL_VAD_SPEECH_RMS *
+            LOCAL_VAD_SPEECH_RMS *
+            sample_count;
+    if (
+        local_speech_detected &&
+        __get_time_ms() - local_speech_started_ms >=
+            LOCAL_VAD_MAX_UTTERANCE_MS
+    ) {
+        printf("local VAD fallback: maximum utterance duration reached\n");
+        return true;
+    }
+    if (has_speech) {
+        local_silence_frames = 0;
+        if (!local_speech_detected) {
+            local_speech_frames++;
+            if (local_speech_frames >= LOCAL_VAD_START_FRAMES) {
+                local_speech_detected = true;
+                local_speech_started_ms = __get_time_ms();
+                *speech_started = true;
+            }
+        }
+        return false;
+    }
+
+    local_speech_frames = 0;
+    if (!local_speech_detected) {
+        return false;
+    }
+    local_silence_frames++;
+    return local_silence_frames >= LOCAL_VAD_SILENCE_FRAMES;
+}
+
+/*
+ * 正常用户偶尔插话不会触发保护；扬声器回灌通常会在数秒内重复形成
+ * ANSWERING -> LISTENING 循环。达到阈值后由主线程中止云端回答和本地会话。
+ */
+static void __record_barge_in(uint64_t now_ms) {
+    pthread_mutex_lock(&barge_in_guard_mutex);
+    if (
+        barge_in_window_started_ms == 0 ||
+        now_ms - barge_in_window_started_ms > BARGE_IN_GUARD_WINDOW_MS
+    ) {
+        barge_in_window_started_ms = now_ms;
+        barge_in_count = 1;
+        pthread_mutex_unlock(&barge_in_guard_mutex);
+        return;
+    }
+
+    barge_in_count++;
+    if (barge_in_count >= BARGE_IN_GUARD_LIMIT) {
+        echo_guard_request = true;
+    }
+    pthread_mutex_unlock(&barge_in_guard_mutex);
+}
+
+static void __load_device_serial(void) {
+    FILE* fp = fopen(DEVICE_SERIAL_PATH, "rb");
+    size_t len;
+
+    if (fp == NULL) {
+        return;
+    }
+    len = fread(device_serial, 1, DEVICE_SERIAL_MAX_LEN, fp);
+    fclose(fp);
+    while (
+        len > 0 &&
+        (device_serial[len - 1] == '\0' ||
+         device_serial[len - 1] == '\n' ||
+         device_serial[len - 1] == '\r')
+    ) {
+        len--;
+    }
+    device_serial[len] = '\0';
+    if (len == 0) {
+        snprintf(device_serial, sizeof(device_serial), "unknown");
+    }
+}
+
+/*
+ * Final cloud transcripts are appended as bounded JSON lines. FastAPI imports
+ * them idempotently into SQLite and associates them with the bound device.
+ */
+static void __write_dialog_event(
+    const char* role,
+    const char* content,
+    const char* cloud_event_id
+) {
+    cJSON* root = NULL;
+    char* json = NULL;
+    FILE* fp = NULL;
+    char generated_event_id[96];
+    char conversation_id[128];
+    size_t content_len;
+
+    if (role == NULL || content == NULL || content[0] == '\0') {
+        return;
+    }
+    content_len = strlen(content);
+    if (content_len > 8192) {
+        printf("dialog transcript ignored: text is too long\n");
+        return;
+    }
+
+    pthread_mutex_lock(&dialog_event_mutex);
+    if (strcmp(role, "user") == 0 || dialog_turn_sequence == 0) {
+        dialog_turn_sequence++;
+    }
+    dialog_event_sequence++;
+    snprintf(
+        generated_event_id,
+        sizeof(generated_event_id),
+        "native-%" PRIu64 "-%lu",
+        dialog_runtime_started_ms,
+        dialog_event_sequence
+    );
+    snprintf(
+        conversation_id,
+        sizeof(conversation_id),
+        "native-%s-%" PRIu64 "-%lu",
+        device_serial,
+        dialog_runtime_started_ms,
+        dialog_turn_sequence
+    );
+
+    if (mkdir(DIALOG_EVENT_DIR, 0750) != 0 && errno != EEXIST) {
+        pthread_mutex_unlock(&dialog_event_mutex);
+        return;
+    }
+    root = cJSON_CreateObject();
+    if (root == NULL) {
+        pthread_mutex_unlock(&dialog_event_mutex);
+        return;
+    }
+    cJSON_AddStringToObject(
+        root,
+        "event_id",
+        cloud_event_id != NULL && cloud_event_id[0] != '\0'
+            ? cloud_event_id
+            : generated_event_id
+    );
+    cJSON_AddStringToObject(root, "conversation_id", conversation_id);
+    cJSON_AddStringToObject(root, "device_serial", device_serial);
+    cJSON_AddStringToObject(root, "role", role);
+    cJSON_AddStringToObject(root, "content", content);
+    cJSON_AddNumberToObject(root, "created_at_ms", (double)__get_time_ms());
+    json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json != NULL) {
+        fp = fopen(DIALOG_EVENT_PATH, "ab");
+        if (fp != NULL) {
+            fwrite(json, 1, strlen(json), fp);
+            fputc('\n', fp);
+            fflush(fp);
+            fsync(fileno(fp));
+            fclose(fp);
+            printf("dialog transcript [%s]: %s\n", role, content);
+        }
+        free(json);
+    }
+    pthread_mutex_unlock(&dialog_event_mutex);
+}
+
+/*
+ * 对话状态通过固定 JSON 文件提供给 FastAPI。先写临时文件再 rename，
+ * 读取端永远只会看到一份完整 JSON；会话 marker 供唤醒词进程协调录音占用。
+ */
+static void __write_dialog_status(const char* state, const char* message) {
+    cJSON* root = NULL;
+    char* json = NULL;
+    FILE* fp = NULL;
+    char personality_id[PERSONALITY_ID_MAX_LEN + 1];
+    char personality_revision[PERSONALITY_REVISION_MAX_LEN + 1];
+    char voice_type[PERSONALITY_VOICE_MAX_LEN + 1];
+
+    pthread_mutex_lock(&personality_config_mutex);
+    snprintf(
+        personality_id,
+        sizeof(personality_id),
+        "%s",
+        active_personality_id
+    );
+    snprintf(
+        personality_revision,
+        sizeof(personality_revision),
+        "%s",
+        active_personality_revision
+    );
+    snprintf(voice_type, sizeof(voice_type), "%s", active_voice_type);
+    pthread_mutex_unlock(&personality_config_mutex);
+
+    pthread_mutex_lock(&dialog_status_mutex);
+    if (mkdir(DIALOG_STATUS_DIR, 0755) != 0 && errno != EEXIST) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+
+    if (session_active) {
+        FILE* marker = fopen(DIALOG_SESSION_MARKER, "wb");
+        if (marker != NULL) {
+            fclose(marker);
+        }
+    } else {
+        unlink(DIALOG_SESSION_MARKER);
+    }
+
+    root = cJSON_CreateObject();
+    if (root == NULL) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+    cJSON_AddStringToObject(root, "state", state);
+    cJSON_AddStringToObject(root, "message", message);
+    cJSON_AddBoolToObject(root, "session_active", session_active != 0);
+    cJSON_AddBoolToObject(root, "can_interrupt", ai_playing != 0);
+    cJSON_AddNumberToObject(root, "follow_up_deadline_ms", (double)follow_up_deadline_ms);
+    cJSON_AddNumberToObject(root, "updated_at_ms", (double)__get_time_ms());
+    cJSON_AddNumberToObject(root, "sequence", (double)++dialog_status_sequence);
+    cJSON_AddNumberToObject(root, "pid", (double)getpid());
+    if (personality_id[0] != '\0') {
+        cJSON_AddStringToObject(root, "personality_id", personality_id);
+    }
+    if (personality_revision[0] != '\0') {
+        cJSON_AddStringToObject(
+            root,
+            "personality_revision",
+            personality_revision
+        );
+    }
+    if (voice_type[0] != '\0') {
+        cJSON_AddStringToObject(root, "voice_type", voice_type);
+    }
+    json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == NULL) {
+        pthread_mutex_unlock(&dialog_status_mutex);
+        return;
+    }
+
+    fp = fopen(DIALOG_STATUS_TMP_PATH, "wb");
+    if (fp != NULL) {
+        fwrite(json, 1, strlen(json), fp);
+        fputc('\n', fp);
+        fflush(fp);
+        fsync(fileno(fp));
+        fclose(fp);
+        rename(DIALOG_STATUS_TMP_PATH, DIALOG_STATUS_PATH);
+    }
+    free(json);
+    pthread_mutex_unlock(&dialog_status_mutex);
+}
+
+static bool __bounded_json_string(cJSON* item, size_t maximum_length) {
+    return cJSON_IsString(item) && item->valuestring != NULL &&
+        item->valuestring[0] != '\0' && strlen(item->valuestring) <= maximum_length;
+}
+
+static int __apply_personality_runtime(
+    realtime_ws_demo_t* demo,
+    bool force
+) {
+    struct stat file_stat;
+    FILE* file = NULL;
+    char* buffer = NULL;
+    size_t bytes_read;
+    cJSON* root = NULL;
+    cJSON* version_obj;
+    cJSON* personality_id_obj;
+    cJSON* personality_name_obj;
+    cJSON* revision_obj;
+    cJSON* voice_type_obj;
+    cJSON* allowed_functions_obj;
+    cJSON* session_update_obj;
+    cJSON* update_type_obj;
+    cJSON* function_obj;
+    char* session_update_json = NULL;
+    bool allow_shake = false;
+    bool allow_nod = false;
+    bool allow_tail = false;
+    int update_result = -1;
+
+    if (demo == NULL || demo->engine == NULL) {
+        return -1;
+    }
+    if (
+        lstat(PERSONALITY_RUNTIME_PATH, &file_stat) != 0 ||
+        !S_ISREG(file_stat.st_mode) || file_stat.st_size <= 0 ||
+        file_stat.st_size > PERSONALITY_RUNTIME_MAX_BYTES
+    ) {
+        return -1;
+    }
+    if (
+        !force && file_stat.st_mtime == personality_runtime_mtime &&
+        file_stat.st_size == personality_runtime_size
+    ) {
+        return 0;
+    }
+
+    buffer = calloc((size_t)file_stat.st_size + 1, 1);
+    if (buffer == NULL) {
+        return -1;
+    }
+    file = fopen(PERSONALITY_RUNTIME_PATH, "rb");
+    if (file == NULL) {
+        goto cleanup;
+    }
+    bytes_read = fread(buffer, 1, (size_t)file_stat.st_size, file);
+    if (ferror(file) || bytes_read != (size_t)file_stat.st_size) {
+        goto cleanup;
+    }
+    fclose(file);
+    file = NULL;
+    buffer[bytes_read] = '\0';
+
+    root = cJSON_Parse(buffer);
+    version_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "version");
+    personality_id_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "personality_id");
+    personality_name_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "personality_name");
+    revision_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "revision");
+    voice_type_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "voice_type");
+    allowed_functions_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "allowed_functions");
+    session_update_obj = root == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(root, "session_update");
+    update_type_obj = cJSON_IsObject(session_update_obj)
+        ? cJSON_GetObjectItemCaseSensitive(session_update_obj, "type")
+        : NULL;
+    if (
+        !cJSON_IsNumber(version_obj) || version_obj->valueint != 1 ||
+        !__bounded_json_string(personality_id_obj, PERSONALITY_ID_MAX_LEN) ||
+        !__bounded_json_string(personality_name_obj, PERSONALITY_NAME_MAX_LEN) ||
+        !__bounded_json_string(revision_obj, PERSONALITY_REVISION_MAX_LEN) ||
+        !__bounded_json_string(voice_type_obj, PERSONALITY_VOICE_MAX_LEN) ||
+        !cJSON_IsArray(allowed_functions_obj) ||
+        !cJSON_IsObject(session_update_obj) ||
+        !cJSON_IsString(update_type_obj) ||
+        strcmp(update_type_obj->valuestring, "session.update") != 0
+    ) {
+        fprintf(stderr, "invalid personality runtime configuration\n");
+        goto cleanup;
+    }
+
+    cJSON_ArrayForEach(function_obj, allowed_functions_obj) {
+        if (!cJSON_IsString(function_obj) || function_obj->valuestring == NULL) {
+            fprintf(stderr, "invalid personality function allowlist\n");
+            goto cleanup;
+        }
+        if (strcmp(function_obj->valuestring, "shake_head") == 0) {
+            allow_shake = true;
+        } else if (strcmp(function_obj->valuestring, "nod_head") == 0) {
+            allow_nod = true;
+        } else if (strcmp(function_obj->valuestring, "wag_tail") == 0) {
+            allow_tail = true;
+        } else {
+            fprintf(stderr, "unknown personality function: %s\n", function_obj->valuestring);
+            goto cleanup;
+        }
+    }
+    session_update_json = cJSON_PrintUnformatted(session_update_obj);
+    if (session_update_json == NULL) {
+        goto cleanup;
+    }
+    update_result = volc_update(
+        demo->engine,
+        session_update_json,
+        strlen(session_update_json)
+    );
+    if (update_result < 0) {
+        fprintf(stderr, "personality session.update failed: %d\n", update_result);
+        goto cleanup;
+    }
+
+    pthread_mutex_lock(&personality_config_mutex);
+    snprintf(
+        active_personality_id,
+        sizeof(active_personality_id),
+        "%s",
+        personality_id_obj->valuestring
+    );
+    snprintf(
+        active_personality_name,
+        sizeof(active_personality_name),
+        "%s",
+        personality_name_obj->valuestring
+    );
+    snprintf(
+        active_personality_revision,
+        sizeof(active_personality_revision),
+        "%s",
+        revision_obj->valuestring
+    );
+    snprintf(
+        active_voice_type,
+        sizeof(active_voice_type),
+        "%s",
+        voice_type_obj->valuestring
+    );
+    personality_allow_shake = allow_shake;
+    personality_allow_nod = allow_nod;
+    personality_allow_tail = allow_tail;
+    personality_runtime_mtime = file_stat.st_mtime;
+    personality_runtime_size = file_stat.st_size;
+    pthread_mutex_unlock(&personality_config_mutex);
+    printf(
+        "personality applied: id=%s revision=%s voice=%s update_result=%d\n",
+        personality_id_obj->valuestring,
+        revision_obj->valuestring,
+        voice_type_obj->valuestring,
+        update_result
+    );
+
+cleanup:
+    if (file != NULL) {
+        fclose(file);
+    }
+    free(session_update_json);
+    cJSON_Delete(root);
+    free(buffer);
+    return update_result < 0 ? -1 : 1;
+}
+
+static void __reset_client_turn_state(void) {
+    client_turn_pending = false;
+    input_transcript_pending = false;
+    response_create_request = false;
+    response_cancel_request = false;
+    client_commit_ack_deadline_ms = 0;
+    client_transcript_deadline_ms = 0;
+}
+
+static bool __has_non_whitespace_text(const char* text) {
+    if (text == NULL) {
+        return false;
+    }
+    while (*text != '\0') {
+        if (!isspace((unsigned char)*text)) {
+            return true;
+        }
+        text++;
+    }
+    return false;
+}
+
+static void __end_continuous_session(const char* message) {
+    running = false;
+    ai_playing = false;
+    session_active = false;
+    waiting_for_speech = false;
+    follow_up_prepare_request = false;
+    speech_start_deadline_ms = 0;
+    follow_up_deadline_ms = 0;
+    thinking_deadline_ms = 0;
+    proactive_speech_pending = false;
+    proactive_speech_active = false;
+    proactive_speech_finish_request = false;
+    proactive_speech_deadline_ms = 0;
+    __reset_client_turn_state();
+    __reset_local_vad();
+    __reset_barge_in_guard();
+    __schedule_cloud_idle_shutdown();
+    __write_dialog_status("ready", message);
+}
+
 /* 仅交互运行时恢复终端；systemd 模式没有 TTY，不执行任何操作。 */
 static void __restore_terminal(void) {
     if (terminal_configured) {
@@ -138,22 +925,17 @@ static void __handle_key(char key) {
      */
     switch (key) {
         case ' ':
-            if (ai_playing && !running) {
-                printf("\n状态: 打断AI并开始下一轮录音\n");
-                interrupt = true;
-                start_after_interrupt = true;
-                ai_playing = false;
+            if (session_active) {
+                printf("\n状态: 打断并结束连续对话\n");
+                interrupt_only_request = true;
             } else {
-                running = !running;
-                printf("\n状态: %s\n", running ? "运行中" : "已停止");
+                printf("\n状态: 开始连续对话\n");
+                wake_request = true;
             }
             break;
         case 'i':
-            printf("\n状态: 打断\n");
-            running = false;
-            ai_playing = false;
-            start_after_interrupt = false;
-            interrupt = true;
+            printf("\n状态: 打断并结束连续对话\n");
+            interrupt_only_request = true;
             break;
         case 'o':
             printf("\n状态: stop\n");
@@ -196,13 +978,18 @@ static void __poll_keyboard(void) {
 }
 
 /*
- * SIGUSR1 是无终端模式的“一轮对话”触发入口，由本地唤醒词服务发送。
+ * SIGHUP 提交网页文字问题；SIGUSR1 开始或继续语音；SIGUSR2 只打断回答。
  * SIGINT/SIGTERM 只请求退出，让主循环和播放线程有机会正常收尾。
  */
 static void __handle_signal(int sig) {
-    if (sig == SIGUSR1) {
+    if (sig == SIGHUP) {
+        text_dialog_request = true;
+    } else if (sig == SIGUSR1) {
         wake_request = true;
+    } else if (sig == SIGUSR2) {
+        interrupt_only_request = true;
     } else if (sig == SIGINT || sig == SIGTERM) {
+        clean_exit_requested = true;
         exit_request = true;
     }
 }
@@ -218,7 +1005,9 @@ static void __setup_async_io(void) {
     sa.sa_flags = SA_RESTART;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
     sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGUSR2, &sa, NULL);
 
     if (!isatty(STDIN_FILENO)) {
         return;
@@ -264,7 +1053,7 @@ static char* __load_config_from_file(const char* filename) {
     }
     memset(config_data, 0, config_len + 1);
     size_t read_size = fread(config_data, 1, config_len, config_fp);
-    if (read_size != config_len) {
+    if (read_size != (size_t)config_len) {
         printf("Failed to read %s, expected %d bytes, got %zu bytes.\n", filename, config_len, read_size);
         free(config_data);
         fclose(config_fp);
@@ -297,13 +1086,117 @@ static int __load_video_file(realtime_ws_demo_t* demo) {
     }
     memset(demo->video_rec_buf, 0, demo->video_frame_len + 1);
     size_t read_size = fread(demo->video_rec_buf, 1, demo->video_frame_len, video_fp);
-    if (read_size != demo->video_frame_len) {
+    if (read_size != (size_t)demo->video_frame_len) {
         printf("Failed to read send_video.h264, expected %d bytes, got %zu bytes.\n", demo->video_frame_len, read_size);
         free(demo->video_rec_buf);
         fclose(video_fp);
         return -1;
     }
     fclose(video_fp);
+    return 0;
+}
+
+static int __play_ready_tone(
+    realtime_ws_demo_t* demo,
+    int duration_ms,
+    const char* description
+) {
+    static const int16_t wave[16] = {
+        0, 3444, 6363, 8316, 9000, 8316, 6363, 3444,
+        0, -3444, -6363, -8316, -9000, -8316, -6363, -3444,
+    };
+    int sample_count;
+    int fade_samples;
+    int16_t* tone;
+    int error = 0;
+    int ret = 0;
+
+    if (demo == NULL || demo->p_playback == NULL || demo->sample_rate <= 0) {
+        return -1;
+    }
+    sample_count = demo->sample_rate * duration_ms / 1000;
+    fade_samples = demo->sample_rate / 200;
+    tone = calloc((size_t)sample_count, sizeof(*tone));
+    if (tone == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < sample_count; i++) {
+        int envelope = fade_samples;
+        if (i < envelope) {
+            envelope = i;
+        }
+        if (sample_count - i - 1 < envelope) {
+            envelope = sample_count - i - 1;
+        }
+        tone[i] = (int16_t)(
+            (int32_t)wave[i % 16] * envelope / fade_samples
+        );
+    }
+
+    /*
+     * 直接写播放流并 drain，保证用户先听到确认音，随后才开放麦克风。
+     * playback_mutex 防止后台 TTS 线程同时操作同一个 pa_simple 句柄。
+     */
+    playback_capture_guard = true;
+    pthread_mutex_lock(&demo->playback_mutex);
+    if (
+        pa_simple_write(
+            demo->p_playback,
+            (char*)tone,
+            sample_count * sizeof(*tone),
+            &error
+        ) < 0 ||
+        pa_simple_drain(demo->p_playback, &error) < 0
+    ) {
+        printf("wake confirmation tone playback failed: %s\n", pa_strerror(error));
+        ret = -1;
+    } else {
+        printf("%s played\n", description);
+    }
+    pthread_mutex_unlock(&demo->playback_mutex);
+    playback_capture_guard_until_ms =
+        __get_time_ms() + WAKE_TONE_POST_GUARD_MS;
+    free(tone);
+    return ret;
+}
+
+static int __reopen_capture_stream(realtime_ws_demo_t* demo) {
+    pa_simple* capture = NULL;
+    int error = 0;
+
+    if (demo == NULL || demo->p_capture == NULL) {
+        return -1;
+    }
+
+    /*
+     * A PA_STREAM_RECORD opened during idle can retain audio that predates the
+     * wake signal. pa_simple_flush() did not reliably discard that server-side
+     * queue on K1, so recreate the stream after the ready tone. The first frame
+     * read by the dialog then belongs to the user's actual question.
+     */
+    pa_simple_free(demo->p_capture);
+    demo->p_capture = NULL;
+    capture = pa_simple_new(
+        NULL,
+        "Capture",
+        PA_STREAM_RECORD,
+        NULL,
+        "Capture",
+        &demo->format,
+        NULL,
+        NULL,
+        &error
+    );
+    if (capture == NULL) {
+        fprintf(
+            stderr,
+            "capture stream reopen failed: %s\n",
+            pa_strerror(error)
+        );
+        return -1;
+    }
+    demo->p_capture = capture;
+    printf("capture stream reopened; live listening starts now\n");
     return 0;
 }
 
@@ -315,6 +1208,7 @@ static void* __audio_playback_task(void* arg) {
     int len = 0;
     int error  = 0;
     int playback_chunk_len = 0;
+    int playback_read_len = 0;
     uint8_t *buffer = NULL;
     realtime_ws_demo_t* demo = (realtime_ws_demo_t*)arg;
     playback_chunk_len = demo->sample_rate * AUDIO_CHANNEL_NUM * sizeof(int16_t) *
@@ -326,13 +1220,38 @@ static void* __audio_playback_task(void* arg) {
     }
     while (!exit_request) {
         pthread_mutex_lock(&demo->ring_buf_mutex);
-        len = volc_ringbuf_read(demo->ring_buf, (char *)buffer, playback_chunk_len);
+        playback_read_len = volc_ringbuf_getdatasize(demo->ring_buf);
+        if (playback_read_len > playback_chunk_len) {
+            playback_read_len = playback_chunk_len;
+        }
+        len = playback_read_len > 0
+            ? volc_ringbuf_read(
+                demo->ring_buf,
+                (char *)buffer,
+                playback_read_len
+            )
+            : 0;
+        if (len > 0) {
+            playback_write_active = true;
+        }
         pthread_mutex_unlock(&demo->ring_buf_mutex);
         if (len > 0) {
+            playback_capture_guard = true;
+            playback_capture_guard_until_ms =
+                __get_time_ms() + PLAYBACK_CAPTURE_GUARD_MS;
+            pthread_mutex_lock(&demo->playback_mutex);
             if (pa_simple_write(demo->p_playback, buffer, len, &error) < 0) {
                 printf("pa_simple_write error: %s\n", pa_strerror(error));
             }
+            pthread_mutex_unlock(&demo->playback_mutex);
+            playback_write_active = false;
         } else {
+            if (
+                playback_capture_guard &&
+                __get_time_ms() >= playback_capture_guard_until_ms
+            ) {
+                playback_capture_guard = false;
+            }
             usleep(10 * 1000);
         }
     }
@@ -344,17 +1263,21 @@ static bool is_ready = false;
 static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user_data)
 {
     /*
-     * 断线后退出进程，交给 systemd 的 Restart=always 重建完整 SDK 会话。
+     * 异常断线后以失败状态退出，交给 systemd 的 Restart=on-failure
+     * 重建完整 SDK 会话；正常空闲退出不会自动重连。
      * 这样可以避免继续向已关闭的 WebSocket engine 发送音频。
      */
     switch (event->code) {
         case VOLC_EV_CONNECTED:
             is_ready = true;
             printf("Volc Engine connected\n");
+            __write_dialog_status("connected", "云端已连接，正在完成会话配置");
             break;
         case VOLC_EV_DISCONNECTED:
             is_ready = false;
             printf("Volc Engine disconnected\n");
+            session_active = false;
+            __write_dialog_status("offline", "云端连接已断开，服务正在重连");
             exit_request = true;
             break;
         default:
@@ -365,17 +1288,144 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
 
 static void _on_volc_conversation_status(volc_engine_t handle, volc_conv_status_e status, void* user_data)
 {
+    realtime_ws_demo_t* demo = (realtime_ws_demo_t*)user_data;
+    uint64_t now_ms = __get_time_ms();
+
     /*
-     * 云端进入 THINKING/ANSWERING 表示本轮收音已经结束，应停止上行。
-     * ANSWER_FINISH/INTERRUPTED 则释放“AI 正在回答”状态，允许下一轮唤醒。
+     * 普通 THINKING 阶段保持上行以支持用户插话。Function Calling 和实际
+     * TTS 播放期间由独立 capture guard 阻断电机噪声与扬声器回声。
      */
     printf("conversation status changed: %d\n", status);
-    if (status == VOLC_CONV_STATUS_THINKING || status == VOLC_CONV_STATUS_ANSWERING) {
+    if (echo_guard_active) {
         running = false;
-        wake_capture_deadline_ms = 0;
-        ai_playing = true;
-    } else if (status == VOLC_CONV_STATUS_INTERRUPTED || status == VOLC_CONV_STATUS_ANSWER_FINISH) {
         ai_playing = false;
+        __write_dialog_status(
+            "echo_guard",
+            "检测到扬声器回声，已停止本次对话，请重新唤醒"
+        );
+        return;
+    }
+    if (status == VOLC_CONV_STATUS_LISTENING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
+        thinking_deadline_ms = 0;
+        if (!session_active) {
+            __write_dialog_status("ready", "等待唤醒词“小安小安”");
+            return;
+        }
+        if (
+            client_turn_pending ||
+            input_transcript_pending ||
+            response_create_request
+        ) {
+            running = false;
+            __write_dialog_status("processing_audio", "问题已发送，等待云端确认");
+            return;
+        }
+        if (ai_playing && demo != NULL) {
+            pthread_mutex_lock(&demo->ring_buf_mutex);
+            volc_ringbuf_clear(demo->ring_buf);
+            pthread_mutex_unlock(&demo->ring_buf_mutex);
+            __record_barge_in(now_ms);
+        }
+        ai_playing = false;
+        running = true;
+        __write_dialog_status(
+            "listening",
+            waiting_for_speech
+                ? "麦克风已开启，请开始说话"
+                : "正在接收语音"
+        );
+    } else if (status == VOLC_CONV_STATUS_THINKING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
+        __reset_local_vad();
+        running = false;
+        waiting_for_speech = false;
+        speech_start_deadline_ms = 0;
+        follow_up_deadline_ms = 0;
+        thinking_deadline_ms = now_ms + THINKING_TIMEOUT_MS;
+        ai_playing = true;
+        __write_dialog_status("thinking", "问题已收到，正在思考");
+    } else if (status == VOLC_CONV_STATUS_ANSWERING) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
+        __reset_local_vad();
+        client_turn_pending = false;
+        response_create_request = false;
+        client_commit_ack_deadline_ms = 0;
+        running = false;
+        waiting_for_speech = false;
+        speech_start_deadline_ms = 0;
+        follow_up_deadline_ms = 0;
+        thinking_deadline_ms = 0;
+        ai_playing = true;
+        __write_dialog_status("answering", "正在回答");
+    } else if (
+        status == VOLC_CONV_STATUS_INTERRUPTED ||
+        status == VOLC_CONV_STATUS_ANSWER_FINISH
+    ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = false;
+        proactive_speech_deadline_ms = 0;
+        __reset_local_vad();
+        __reset_client_turn_state();
+        tool_capture_guard = false;
+        ai_playing = false;
+        thinking_deadline_ms = 0;
+        if (status == VOLC_CONV_STATUS_ANSWER_FINISH) {
+            __reset_barge_in_guard();
+        }
+        if (session_active) {
+            if (status == VOLC_CONV_STATUS_ANSWER_FINISH) {
+                /*
+                 * SDK 的完成事件可能早于扬声器真正播放完毕。主线程等待播放
+                 * 队列排空后再清缓冲并开放追问，避免尾音被当作用户输入。
+                 */
+                running = false;
+                waiting_for_speech = false;
+                follow_up_deadline_ms = 0;
+                speech_start_deadline_ms = 0;
+                playback_capture_guard = true;
+                follow_up_prepare_request = true;
+                __write_dialog_status(
+                    "followup_preparing",
+                    "回答播放完毕后将提示您继续追问"
+                );
+            } else {
+                char status_message[96];
+                uint64_t follow_up_window_ms = __get_follow_up_window_ms();
+                running = true;
+                waiting_for_speech = true;
+                follow_up_deadline_ms = now_ms + follow_up_window_ms;
+                speech_start_deadline_ms = follow_up_deadline_ms;
+                snprintf(
+                    status_message,
+                    sizeof(status_message),
+                    "回答已打断，%llu秒内可以直接继续说",
+                    (unsigned long long)(follow_up_window_ms / 1000)
+                );
+                __write_dialog_status(
+                    "followup_listening",
+                    status_message
+                );
+            }
+        } else {
+            running = false;
+            __write_dialog_status(
+                status == VOLC_CONV_STATUS_INTERRUPTED ? "interrupted" : "ready",
+                status == VOLC_CONV_STATUS_INTERRUPTED
+                    ? "回答已打断"
+                    : "等待唤醒词“小安小安”"
+            );
+        }
     }
 }
 
@@ -390,7 +1440,7 @@ static void _on_volc_audio_data(volc_engine_t handle, const void* data_ptr, size
     pthread_mutex_lock(&demo->ring_buf_mutex);
     int written = volc_ringbuf_write(demo->ring_buf, (char *)data_ptr, data_len);
     pthread_mutex_unlock(&demo->ring_buf_mutex);
-    if (written != data_len) {
+    if (written < 0 || (size_t)written != data_len) {
         printf("write audio data to ring buf fail!!!!!!!!\n");
     }
 }
@@ -417,6 +1467,77 @@ static void __on_subtitle_message_received(cJSON* root) {
             }
         }
     }
+}
+
+static int __send_dialog_text_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text,
+    const char* content_type,
+    int interrupt_mode
+) {
+    volc_message_info_t msg_info = {0};
+    cJSON* root = cJSON_CreateObject();
+    cJSON* item = cJSON_CreateObject();
+    cJSON* content = cJSON_CreateArray();
+    cJSON* content_item = cJSON_CreateObject();
+    char* json_str = NULL;
+    int ret = -1;
+
+    if (
+        demo == NULL || event_id == NULL || text == NULL ||
+        content_type == NULL ||
+        root == NULL || item == NULL || content == NULL || content_item == NULL
+    ) {
+        cJSON_Delete(root);
+        cJSON_Delete(item);
+        cJSON_Delete(content);
+        cJSON_Delete(content_item);
+        return -1;
+    }
+    cJSON_AddStringToObject(root, "event_id", event_id);
+    cJSON_AddStringToObject(root, "type", "conversation.item.create");
+    cJSON_AddItemToObject(root, "item", item);
+    cJSON_AddStringToObject(item, "type", "message");
+    cJSON_AddStringToObject(item, "role", "user");
+    cJSON_AddNumberToObject(item, "interrupt_mode", interrupt_mode);
+    cJSON_AddItemToObject(item, "content", content);
+    cJSON_AddStringToObject(content_item, "type", content_type);
+    cJSON_AddStringToObject(content_item, "text", text);
+    cJSON_AddItemToArray(content, content_item);
+
+    json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json_str == NULL) {
+        return -1;
+    }
+    msg_info.is_binary = true;
+    ret = volc_send_message(demo->engine, json_str, strlen(json_str), &msg_info);
+    printf(
+        "dialog text item sent, type=%s, event_id=%s, ret=%d\n",
+        content_type,
+        event_id,
+        ret
+    );
+    free(json_str);
+    return ret;
+}
+
+static int __send_text_dialog_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text
+) {
+    return __send_dialog_text_item(demo, event_id, text, "input_text", 1);
+}
+
+static int __send_proactive_speech_item(
+    realtime_ws_demo_t* demo,
+    const char* event_id,
+    const char* text
+) {
+    /* 低优先级在用户已经开始交互时由云端丢弃，不抢占真实对话。 */
+    return __send_dialog_text_item(demo, event_id, text, "input_tts", 3);
 }
 
 static int __send_function_call_output(realtime_ws_demo_t* demo, const char* call_id, const char* output) {
@@ -456,7 +1577,530 @@ static int __send_function_call_output(realtime_ws_demo_t* demo, const char* cal
     return ret;
 }
 
-static int __run_head_shake(void) {
+typedef struct {
+    char* data;
+    size_t size;
+} http_response_t;
+
+static void __initialize_curl(void) {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+static size_t __write_http_response(
+    void* contents,
+    size_t element_size,
+    size_t element_count,
+    void* user_data
+) {
+    size_t incoming_size = element_size * element_count;
+    http_response_t* response = (http_response_t*)user_data;
+    char* resized;
+
+    if (
+        response == NULL ||
+        incoming_size > HTTP_RESPONSE_MAX_BYTES ||
+        response->size > HTTP_RESPONSE_MAX_BYTES - incoming_size
+    ) {
+        return 0;
+    }
+    resized = realloc(response->data, response->size + incoming_size + 1);
+    if (resized == NULL) {
+        return 0;
+    }
+    response->data = resized;
+    memcpy(response->data + response->size, contents, incoming_size);
+    response->size += incoming_size;
+    response->data[response->size] = '\0';
+    return incoming_size;
+}
+
+static cJSON* __http_get_json(const char* url) {
+    http_response_t response = {0};
+    CURL* curl;
+    CURLcode result;
+    long status_code = 0;
+    cJSON* json = NULL;
+
+    pthread_once(&curl_init_once, __initialize_curl);
+    curl = curl_easy_init();
+    if (curl == NULL) {
+        return NULL;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 7000L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ai-cat-controller/0.1");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, __write_http_response);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    result = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
+    curl_easy_cleanup(curl);
+
+    if (result == CURLE_OK && status_code >= 200 && status_code < 300) {
+        json = cJSON_Parse(response.data);
+    } else {
+        fprintf(
+            stderr,
+            "weather HTTP request failed: curl=%d, status=%ld\n",
+            (int)result,
+            status_code
+        );
+    }
+    free(response.data);
+    return json;
+}
+
+static bool __is_weather_function(const char* name) {
+    return name != NULL && (
+        strcmp(name, "get_weather") == 0 ||
+        strcmp(name, "get_current_weather") == 0 ||
+        strcmp(name, "check_weather") == 0
+    );
+}
+
+static bool __is_battery_function(const char* name) {
+    return name != NULL && (
+        strcmp(name, "get_battery_status") == 0 ||
+        strcmp(name, "query_battery_status") == 0 ||
+        strcmp(name, "check_battery") == 0
+    );
+}
+
+static int __read_sysfs_text(const char* path, char* output, size_t output_size) {
+    FILE* file;
+    size_t length;
+
+    if (path == NULL || output == NULL || output_size < 2) {
+        return -1;
+    }
+    file = fopen(path, "r");
+    if (file == NULL) {
+        return -1;
+    }
+    if (fgets(output, (int)output_size, file) == NULL) {
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+    length = strcspn(output, "\r\n");
+    output[length] = '\0';
+    return length == 0 ? -1 : 0;
+}
+
+static int __read_sysfs_int(
+    const char* path,
+    int minimum,
+    int maximum,
+    int* output
+) {
+    char text[64];
+    char* end;
+    long value;
+
+    if (output == NULL || __read_sysfs_text(path, text, sizeof(text)) != 0) {
+        return -1;
+    }
+    errno = 0;
+    value = strtol(text, &end, 10);
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    if (errno != 0 || end == text || *end != '\0' || value < minimum || value > maximum) {
+        return -1;
+    }
+    *output = (int)value;
+    return 0;
+}
+
+static int __query_battery_status(char* output, size_t output_size) {
+    char reported_status[64] = {0};
+    const char* state_text;
+    int capacity;
+    int present;
+    int voltage_uv;
+    int charger_online;
+    bool has_voltage;
+    bool has_charger;
+
+    if (output == NULL || output_size == 0) {
+        return -1;
+    }
+    if (
+        __read_sysfs_int(BATTERY_CAPACITY_PATH, 0, 100, &capacity) != 0 ||
+        __read_sysfs_int(BATTERY_PRESENT_PATH, 0, 1, &present) != 0
+    ) {
+        snprintf(output, output_size, "暂时无法读取设备电量，请稍后再试。");
+        return -1;
+    }
+    if (present == 0) {
+        snprintf(output, output_size, "当前未检测到设备电池。");
+        return -1;
+    }
+
+    has_voltage = __read_sysfs_int(
+        BATTERY_VOLTAGE_PATH,
+        0,
+        20000000,
+        &voltage_uv
+    ) == 0;
+    has_charger = __read_sysfs_int(
+        CHARGER_ONLINE_PATH,
+        0,
+        1,
+        &charger_online
+    ) == 0;
+    if (__read_sysfs_text(BATTERY_STATUS_PATH, reported_status, sizeof(reported_status)) != 0) {
+        reported_status[0] = '\0';
+    }
+
+    if (has_charger && charger_online == 0) {
+        state_text = "正在使用电池，充电器未连接";
+    } else if (has_charger && charger_online == 1) {
+        if (capacity == 100 || strcasecmp(reported_status, "Full") == 0) {
+            state_text = "电池已充满，充电器已连接";
+        } else if (strcasecmp(reported_status, "Charging") == 0) {
+            state_text = "正在充电，充电器已连接";
+        } else {
+            state_text = "充电器已连接，但当前未充电";
+        }
+    } else if (strcasecmp(reported_status, "Charging") == 0) {
+        state_text = "正在充电，充电器状态未知";
+    } else if (strcasecmp(reported_status, "Full") == 0) {
+        state_text = "电池已充满，充电器状态未知";
+    } else {
+        state_text = "正在使用电池，充电器状态未知";
+    }
+
+    if (has_voltage) {
+        snprintf(
+            output,
+            output_size,
+            "当前电量%d%%，%s，电池电压%.2f伏。",
+            capacity,
+            state_text,
+            voltage_uv / 1000000.0
+        );
+    } else {
+        snprintf(output, output_size, "当前电量%d%%，%s。", capacity, state_text);
+    }
+    printf(
+        "battery query capacity=%d, status=%s, charger_online=%d, voltage_uv=%d\n",
+        capacity,
+        reported_status[0] == '\0' ? "unknown" : reported_status,
+        has_charger ? charger_online : -1,
+        has_voltage ? voltage_uv : -1
+    );
+    return 0;
+}
+
+static const char* __weather_description(int code) {
+    if (code == 0) {
+        return "晴";
+    }
+    if (code == 1 || code == 2) {
+        return "少云";
+    }
+    if (code == 3) {
+        return "阴";
+    }
+    if (code == 45 || code == 48) {
+        return "有雾";
+    }
+    if (code >= 51 && code <= 57) {
+        return "毛毛雨";
+    }
+    if (code >= 61 && code <= 67) {
+        return "有雨";
+    }
+    if (code >= 71 && code <= 77) {
+        return "有雪";
+    }
+    if (code >= 80 && code <= 82) {
+        return "有阵雨";
+    }
+    if (code >= 85 && code <= 86) {
+        return "有阵雪";
+    }
+    if (code >= 95 && code <= 99) {
+        return "有雷暴";
+    }
+    return "天气状况未知";
+}
+
+static cJSON* __first_array_item(cJSON* object, const char* name) {
+    cJSON* array = cJSON_GetObjectItemCaseSensitive(object, name);
+
+    if (!cJSON_IsArray(array) || cJSON_GetArraySize(array) == 0) {
+        return NULL;
+    }
+    return cJSON_GetArrayItem(array, 0);
+}
+
+static int __query_weather(
+    const char* requested_location,
+    char* output,
+    size_t output_size
+) {
+    const char* default_location;
+    const char* location = requested_location;
+    char geocoding_url[1024];
+    char forecast_url[1024];
+    char* escaped_location;
+    cJSON* geocoding = NULL;
+    cJSON* forecast = NULL;
+    cJSON* results;
+    cJSON* place;
+    cJSON* place_name;
+    cJSON* latitude;
+    cJSON* longitude;
+    cJSON* current;
+    cJSON* daily;
+    cJSON* temperature;
+    cJSON* apparent_temperature;
+    cJSON* humidity;
+    cJSON* wind_speed;
+    cJSON* weather_code;
+    cJSON* maximum_temperature;
+    cJSON* minimum_temperature;
+    cJSON* precipitation_probability;
+    CURL* curl;
+    char resolved_place_name[WEATHER_LOCATION_MAX_LEN] = {0};
+    double resolved_latitude = 0;
+    double resolved_longitude = 0;
+    bool location_cache_hit = false;
+    int ret = -1;
+
+    if (output == NULL || output_size == 0) {
+        return -1;
+    }
+    output[0] = '\0';
+    if (
+        location == NULL ||
+        location[0] == '\0' ||
+        strstr(location, "当前") != NULL ||
+        strcmp(location, "本地") == 0 ||
+        strcmp(location, "这里") == 0
+    ) {
+        default_location = getenv("AI_CAT_DEFAULT_CITY");
+        if (default_location == NULL || default_location[0] == '\0') {
+            snprintf(
+                output,
+                output_size,
+                "设备尚未设置所在城市，请询问用户要查询哪个城市的天气。"
+            );
+            return 0;
+        }
+        location = default_location;
+    }
+
+    pthread_mutex_lock(&weather_cache_mutex);
+    if (strcmp(cached_weather_location, location) == 0) {
+        snprintf(
+            resolved_place_name,
+            sizeof(resolved_place_name),
+            "%s",
+            cached_weather_place_name
+        );
+        resolved_latitude = cached_weather_latitude;
+        resolved_longitude = cached_weather_longitude;
+        location_cache_hit = true;
+    }
+    pthread_mutex_unlock(&weather_cache_mutex);
+
+    if (!location_cache_hit) {
+        pthread_once(&curl_init_once, __initialize_curl);
+        curl = curl_easy_init();
+        if (curl == NULL) {
+            snprintf(output, output_size, "天气服务暂时不可用，请稍后再试。");
+            return -1;
+        }
+        escaped_location = curl_easy_escape(curl, location, 0);
+        if (escaped_location == NULL) {
+            curl_easy_cleanup(curl);
+            snprintf(output, output_size, "无法解析城市名称，请换一个城市名称再试。");
+            return -1;
+        }
+        snprintf(
+            geocoding_url,
+            sizeof(geocoding_url),
+            "https://geocoding-api.open-meteo.com/v1/search"
+            "?name=%s&count=1&language=zh&format=json",
+            escaped_location
+        );
+        curl_free(escaped_location);
+        curl_easy_cleanup(curl);
+
+        geocoding = __http_get_json(geocoding_url);
+        results = geocoding == NULL
+            ? NULL
+            : cJSON_GetObjectItemCaseSensitive(geocoding, "results");
+        place = cJSON_IsArray(results) ? cJSON_GetArrayItem(results, 0) : NULL;
+        place_name = cJSON_GetObjectItemCaseSensitive(place, "name");
+        latitude = cJSON_GetObjectItemCaseSensitive(place, "latitude");
+        longitude = cJSON_GetObjectItemCaseSensitive(place, "longitude");
+        if (
+            !cJSON_IsString(place_name) ||
+            !cJSON_IsNumber(latitude) ||
+            !cJSON_IsNumber(longitude)
+        ) {
+            snprintf(
+                output,
+                output_size,
+                "没有找到“%s”的天气信息，请确认城市名称。",
+                location
+            );
+            goto cleanup;
+        }
+        snprintf(
+            resolved_place_name,
+            sizeof(resolved_place_name),
+            "%s",
+            place_name->valuestring
+        );
+        resolved_latitude = latitude->valuedouble;
+        resolved_longitude = longitude->valuedouble;
+        pthread_mutex_lock(&weather_cache_mutex);
+        snprintf(
+            cached_weather_location,
+            sizeof(cached_weather_location),
+            "%s",
+            location
+        );
+        snprintf(
+            cached_weather_place_name,
+            sizeof(cached_weather_place_name),
+            "%s",
+            resolved_place_name
+        );
+        cached_weather_latitude = resolved_latitude;
+        cached_weather_longitude = resolved_longitude;
+        pthread_mutex_unlock(&weather_cache_mutex);
+    }
+
+    snprintf(
+        forecast_url,
+        sizeof(forecast_url),
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude=%.6f&longitude=%.6f"
+        "&current=temperature_2m,apparent_temperature,"
+        "relative_humidity_2m,weather_code,wind_speed_10m"
+        "&daily=temperature_2m_max,temperature_2m_min,"
+        "precipitation_probability_max"
+        "&timezone=auto&forecast_days=1",
+        resolved_latitude,
+        resolved_longitude
+    );
+    forecast = __http_get_json(forecast_url);
+    current = forecast == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(forecast, "current");
+    daily = forecast == NULL
+        ? NULL
+        : cJSON_GetObjectItemCaseSensitive(forecast, "daily");
+    temperature = cJSON_GetObjectItemCaseSensitive(current, "temperature_2m");
+    apparent_temperature =
+        cJSON_GetObjectItemCaseSensitive(current, "apparent_temperature");
+    humidity =
+        cJSON_GetObjectItemCaseSensitive(current, "relative_humidity_2m");
+    wind_speed = cJSON_GetObjectItemCaseSensitive(current, "wind_speed_10m");
+    weather_code = cJSON_GetObjectItemCaseSensitive(current, "weather_code");
+    maximum_temperature = __first_array_item(daily, "temperature_2m_max");
+    minimum_temperature = __first_array_item(daily, "temperature_2m_min");
+    precipitation_probability =
+        __first_array_item(daily, "precipitation_probability_max");
+    if (
+        !cJSON_IsNumber(temperature) ||
+        !cJSON_IsNumber(apparent_temperature) ||
+        !cJSON_IsNumber(humidity) ||
+        !cJSON_IsNumber(wind_speed) ||
+        !cJSON_IsNumber(weather_code) ||
+        !cJSON_IsNumber(maximum_temperature) ||
+        !cJSON_IsNumber(minimum_temperature)
+    ) {
+        snprintf(output, output_size, "天气服务返回数据不完整，请稍后再试。");
+        goto cleanup;
+    }
+
+    snprintf(
+        output,
+        output_size,
+        "%s现在%s，%.0f度；今天最低%.0f度、最高%.0f度%s。",
+        resolved_place_name,
+        __weather_description(weather_code->valueint),
+        temperature->valuedouble,
+        minimum_temperature->valuedouble,
+        maximum_temperature->valuedouble,
+        cJSON_IsNumber(precipitation_probability)
+            ? precipitation_probability->valuedouble >= 40
+                ? "，有较高降雨概率"
+                : "，降雨概率较低"
+            : ""
+    );
+    printf(
+        "weather query source=Open-Meteo, location=%s, cache_hit=%d, "
+        "apparent=%.1f, humidity=%.0f, wind=%.1f\n",
+        resolved_place_name,
+        location_cache_hit,
+        apparent_temperature->valuedouble,
+        humidity->valuedouble,
+        wind_speed->valuedouble
+    );
+    ret = 0;
+
+cleanup:
+    cJSON_Delete(geocoding);
+    cJSON_Delete(forecast);
+    return ret;
+}
+
+static bool __tail_motion_enabled(void) {
+    const char* value = getenv("AI_CAT_ENABLE_TAIL_MOTION");
+
+    return value != NULL && (
+        strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0
+    );
+}
+
+static bool __is_motion_function(const char* name) {
+    return name != NULL && (
+        strcmp(name, "shake_head") == 0 ||
+        strcmp(name, "nod_head") == 0 ||
+        strcmp(name, "wag_tail") == 0
+    );
+}
+
+static bool __personality_allows_motion(
+    const char* name,
+    char* personality_name,
+    size_t personality_name_size
+) {
+    bool allowed = false;
+
+    pthread_mutex_lock(&personality_config_mutex);
+    if (strcmp(name, "shake_head") == 0) {
+        allowed = personality_allow_shake;
+    } else if (strcmp(name, "nod_head") == 0) {
+        allowed = personality_allow_nod;
+    } else if (strcmp(name, "wag_tail") == 0) {
+        allowed = personality_allow_tail;
+    }
+    if (personality_name != NULL && personality_name_size > 0) {
+        snprintf(
+            personality_name,
+            personality_name_size,
+            "%s",
+            active_personality_name[0] == '\0'
+                ? "当前性格"
+                : active_personality_name
+        );
+    }
+    pthread_mutex_unlock(&personality_config_mutex);
+    return allowed;
+}
+
+static int __run_motor_motion(const char* actuator, const char* speed) {
     /*
      * 使用固定可执行文件和固定参数，不经 shell 拼接用户输入，
      * 避免命令注入，并通过退出码判断电机动作是否成功。
@@ -465,14 +2109,24 @@ static int __run_head_shake(void) {
     char* const argv[] = {
         (char*)executable,
         "motor",
-        "head_lr",
-        "2",
+        (char*)actuator,
+        (char*)speed,
         NULL,
     };
     pid_t pid;
     int status;
     int ret;
 
+    if (
+        actuator == NULL || speed == NULL ||
+        (
+            (strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0) &&
+            (strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0) &&
+            (strcmp(actuator, "tail_lr") != 0 || strcmp(speed, "1") != 0)
+        )
+    ) {
+        return -1;
+    }
     ret = posix_spawn(&pid, executable, NULL, NULL, argv, environ);
     if (ret != 0) {
         fprintf(stderr, "failed to start head motor command: %s\n", strerror(ret));
@@ -490,19 +2144,145 @@ static int __run_head_shake(void) {
 }
 
 static void* __run_function_call(void* arg) {
-    /* 电机动作可能持续数秒，必须放到工作线程，不能阻塞 SDK 消息回调。 */
+    /* 电机、网络和 sysfs 查询均放在工具线程，避免阻塞 SDK 消息回调。 */
     function_call_task_t* task = (function_call_task_t*)arg;
-    int ret;
+    char output[768];
+    cJSON* arguments;
+    cJSON* location_obj;
+    const char* location = NULL;
+    int ret = -1;
 
     if (task == NULL) {
         return NULL;
     }
-    printf("executing shake_head, call_id=%s\n", task->call_id);
-    ret = __run_head_shake();
+    if (
+        __is_motion_function(task->name)
+    ) {
+        bool is_nod = strcmp(task->name, "nod_head") == 0;
+        bool is_tail = strcmp(task->name, "wag_tail") == 0;
+        const char* action_name = is_tail ? "摇尾" : (is_nod ? "点头" : "摇头");
+        const char* actuator = is_tail ? "tail_lr" : (is_nod ? "head_ud" : "head_lr");
+        const char* speed = (is_tail || !is_nod) ? "1" : "2";
+        char personality_name[PERSONALITY_NAME_MAX_LEN + 1];
+        uint64_t now_ms;
+        if (!__personality_allows_motion(
+            task->name,
+            personality_name,
+            sizeof(personality_name)
+        )) {
+            ret = 0;
+            snprintf(
+                output,
+                sizeof(output),
+                "%s不执行%s动作",
+                personality_name,
+                action_name
+            );
+            printf(
+                "%s rejected by personality action rules, call_id=%s\n",
+                task->name,
+                task->call_id
+            );
+        } else if (is_tail && !__tail_motion_enabled()) {
+            ret = 0;
+            snprintf(
+                output,
+                sizeof(output),
+                "尾部动作尚未通过维修后验收，当前保持禁用"
+            );
+            printf("wag_tail rejected: AI_CAT_ENABLE_TAIL_MOTION is false\n");
+        } else if (pthread_mutex_trylock(&motion_motor_mutex) != 0) {
+            ret = 0;
+            snprintf(
+                output,
+                sizeof(output),
+                "电机动作正在执行，本次重复请求已忽略"
+            );
+            printf(
+                "duplicate %s ignored while motor is busy, call_id=%s\n",
+                task->name,
+                task->call_id
+            );
+        } else {
+            now_ms = __get_time_ms();
+            if (
+                motion_last_started_ms != 0 &&
+                now_ms - motion_last_started_ms < MOTOR_MOTION_COOLDOWN_MS
+            ) {
+                ret = 0;
+                snprintf(
+                    output,
+                    sizeof(output),
+                    "刚刚已经完成电机动作，本次重复请求已忽略"
+                );
+                printf(
+                    "duplicate %s ignored during cooldown, call_id=%s\n",
+                    task->name,
+                    task->call_id
+                );
+            } else {
+                motion_last_started_ms = now_ms;
+                printf("executing %s, call_id=%s\n", task->name, task->call_id);
+                ret = __run_motor_motion(actuator, speed);
+                snprintf(
+                    output,
+                    sizeof(output),
+                    "%s动作%s",
+                    action_name,
+                    ret == 0 ? "已完成" : "执行失败"
+                );
+            }
+            pthread_mutex_unlock(&motion_motor_mutex);
+        }
+    } else if (__is_battery_function(task->name)) {
+        printf("executing %s, call_id=%s\n", task->name, task->call_id);
+        __write_dialog_status("thinking", "正在读取设备电量");
+        ret = __query_battery_status(output, sizeof(output));
+    } else if (__is_weather_function(task->name)) {
+        arguments = cJSON_Parse(task->arguments);
+        location_obj = arguments == NULL
+            ? NULL
+            : cJSON_GetObjectItemCaseSensitive(arguments, "location");
+        if (!cJSON_IsString(location_obj) && arguments != NULL) {
+            location_obj = cJSON_GetObjectItemCaseSensitive(arguments, "city");
+        }
+        if (cJSON_IsString(location_obj)) {
+            location = location_obj->valuestring;
+        }
+        printf(
+            "executing %s, location=%s, call_id=%s\n",
+            task->name,
+            location == NULL ? "(not provided)" : location,
+            task->call_id
+        );
+        if (location != NULL && strstr(location, "当前") == NULL) {
+            char status_message[WEATHER_LOCATION_MAX_LEN + 32];
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "正在查询%s天气",
+                location
+            );
+            __write_dialog_status("thinking", status_message);
+        } else {
+            __write_dialog_status("thinking", "正在确认天气查询城市");
+        }
+        ret = __query_weather(location, output, sizeof(output));
+        cJSON_Delete(arguments);
+    } else {
+        snprintf(output, sizeof(output), "设备端未配置此工具，无法执行。");
+    }
     __send_function_call_output(
         task->demo,
         task->call_id,
-        ret == 0 ? "摇头动作已完成" : "摇头动作执行失败");
+        output
+    );
+    printf(
+        "function call completed: name=%s, call_id=%s, ret=%d\n",
+        task->name,
+        task->call_id,
+        ret
+    );
     free(task);
     return NULL;
 }
@@ -537,7 +2317,11 @@ static void __handle_ws_conversation_item_created_call(realtime_ws_demo_t* demo,
     }
     name = name_obj->valuestring;
     call_id = call_id_obj->valuestring;
-    if (strcmp(name, "shake_head") != 0) {
+    if (
+        !__is_motion_function(name) &&
+        !__is_weather_function(name) &&
+        !__is_battery_function(name)
+    ) {
         printf("unknown function call name: %s\n", name);
         return;
     }
@@ -546,7 +2330,7 @@ static void __handle_ws_conversation_item_created_call(realtime_ws_demo_t* demo,
     snprintf(pending_function_call.name, sizeof(pending_function_call.name), "%s", name);
     snprintf(pending_function_call.call_id, sizeof(pending_function_call.call_id), "%s", call_id);
     pthread_mutex_unlock(&function_call_mutex);
-    printf("shake_head function call received, call_id=%s\n", call_id);
+    printf("%s function call received, call_id=%s\n", name, call_id);
 }
 
 static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSON* root) {
@@ -556,7 +2340,11 @@ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSO
      */
     pthread_t msg_thread;
     cJSON* call_id_obj;
+    cJSON* name_obj;
+    cJSON* arguments_obj;
     function_call_task_t* task;
+    const char* name;
+    const char* arguments;
     int ret;
 
     if (root == NULL) {
@@ -567,31 +2355,76 @@ static void __handle_function_call_arguments_done(realtime_ws_demo_t* demo, cJSO
         printf("function call arguments missing call_id\n");
         return;
     }
+    name_obj = cJSON_GetObjectItem(root, "name");
+    name = cJSON_IsString(name_obj) ? name_obj->valuestring : NULL;
+    if (
+        name != NULL &&
+        !__is_motion_function(name) &&
+        !__is_weather_function(name) &&
+        !__is_battery_function(name)
+    ) {
+        tool_capture_guard = true;
+        ret = __send_function_call_output(
+            demo,
+            call_id_obj->valuestring,
+            "设备端未配置此工具，无法提供可靠的实时结果。请直接向用户说明当前无法完成该查询。"
+        );
+        printf(
+            "unsupported function call completed: name=%s, call_id=%s, ret=%d\n",
+            name,
+            call_id_obj->valuestring,
+            ret
+        );
+        if (ret >= 0) {
+            thinking_deadline_ms = __get_time_ms() + THINKING_TIMEOUT_MS;
+            __write_dialog_status(
+                "thinking",
+                "设备工具不可用，正在生成说明"
+            );
+        }
+        return;
+    }
+    arguments_obj = cJSON_GetObjectItem(root, "arguments");
+    arguments = cJSON_IsString(arguments_obj) ? arguments_obj->valuestring : "{}";
 
     task = calloc(1, sizeof(*task));
     if (task == NULL) {
-        __send_function_call_output(demo, call_id_obj->valuestring, "摇头动作执行失败");
+        __send_function_call_output(
+            demo,
+            call_id_obj->valuestring,
+            "设备暂时无法执行工具，请稍后再试。"
+        );
         return;
     }
 
     pthread_mutex_lock(&function_call_mutex);
-    if (strcmp(pending_function_call.name, "shake_head") != 0 ||
+    if (
+        pending_function_call.name[0] == '\0' ||
         strcmp(pending_function_call.call_id, call_id_obj->valuestring) != 0) {
         pthread_mutex_unlock(&function_call_mutex);
         free(task);
         printf("no matching function call for call_id=%s\n", call_id_obj->valuestring);
+        __send_function_call_output(
+            demo,
+            call_id_obj->valuestring,
+            "设备端未找到匹配的工具调用，无法执行。请直接向用户说明操作失败。"
+        );
         return;
     }
     task->demo = demo;
     snprintf(task->call_id, sizeof(task->call_id), "%s", pending_function_call.call_id);
+    snprintf(task->name, sizeof(task->name), "%s", pending_function_call.name);
+    snprintf(task->arguments, sizeof(task->arguments), "%s", arguments);
     pending_function_call.name[0] = '\0';
     pending_function_call.call_id[0] = '\0';
+    tool_capture_guard = true;
     pthread_mutex_unlock(&function_call_mutex);
 
     ret = pthread_create(&msg_thread, NULL, __run_function_call, task);
     if (ret != 0) {
+        tool_capture_guard = false;
         fprintf(stderr, "failed to create function call thread: %s\n", strerror(ret));
-        __send_function_call_output(demo, task->call_id, "摇头动作执行失败");
+        __send_function_call_output(demo, task->call_id, "设备工具执行失败");
         free(task);
         return;
     }
@@ -602,6 +2435,9 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
     /* WS JSON 消息路由：工具调用单独处理，其余事件原样打印便于调试。 */
     cJSON* root = NULL;
     cJSON* type_obj = NULL;
+    cJSON* transcript_obj = NULL;
+    cJSON* event_id_obj = NULL;
+    const char* type = NULL;
     root = cJSON_Parse((const char*)message);
     if (NULL == root) {
         printf("parse json buffer failed\n");
@@ -609,9 +2445,81 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
     }
     printf("ws message size:%zu data:%s\n", size, (char*)message);
     type_obj = cJSON_GetObjectItem(root, "type");
-    if (type_obj != NULL && strcmp("conversation.item.created", cJSON_GetStringValue(type_obj)) == 0) {
+    type = cJSON_GetStringValue(type_obj);
+    if (
+        type != NULL &&
+        strcmp(type, "conversation.item.input_audio_transcription.completed") == 0
+    ) {
+        transcript_obj = cJSON_GetObjectItem(root, "transcript");
+        event_id_obj = cJSON_GetObjectItem(root, "event_id");
+        if (cJSON_IsString(transcript_obj)) {
+            if (__has_non_whitespace_text(transcript_obj->valuestring)) {
+                __write_dialog_event(
+                    "user",
+                    transcript_obj->valuestring,
+                    cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
+                );
+                if (input_transcript_pending) {
+                    input_transcript_pending = false;
+                    client_transcript_deadline_ms = 0;
+                }
+            } else if (input_transcript_pending) {
+                input_transcript_pending = false;
+                response_cancel_request = true;
+                client_transcript_deadline_ms = 0;
+                printf("empty final transcript; queueing response.cancel\n");
+            }
+        }
+    } else if (
+        type != NULL &&
+        strcmp(type, "input_audio_buffer.committed") == 0
+    ) {
+        if (client_turn_pending && session_active) {
+            client_turn_pending = false;
+            client_commit_ack_deadline_ms = 0;
+            response_create_request = true;
+            printf("client audio commit acknowledged\n");
+        } else {
+            printf("audio commit acknowledged without pending client turn\n");
+        }
+    } else if (
+        type != NULL &&
+        strcmp(type, "response.audio_transcript.delta") == 0 &&
+        (proactive_speech_pending || proactive_speech_active)
+    ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = true;
+        proactive_speech_deadline_ms = 0;
+        ai_playing = true;
+        __write_dialog_status("answering", "正在自主播报");
+        printf("proactive input_tts playback started\n");
+    } else if (
+        type != NULL &&
+        strcmp(type, "response.audio.done") == 0 &&
+        (proactive_speech_pending || proactive_speech_active)
+    ) {
+        proactive_speech_pending = false;
+        proactive_speech_active = false;
+        proactive_speech_finish_request = true;
+        proactive_speech_deadline_ms = 0;
+        __write_dialog_status("proactive_finishing", "自主短语正在播放完毕");
+        printf("proactive input_tts audio completed\n");
+    } else if (
+        type != NULL &&
+        strcmp(type, "response.audio_transcript.done") == 0
+    ) {
+        transcript_obj = cJSON_GetObjectItem(root, "transcript");
+        event_id_obj = cJSON_GetObjectItem(root, "event_id");
+        if (cJSON_IsString(transcript_obj)) {
+            __write_dialog_event(
+                "assistant",
+                transcript_obj->valuestring,
+                cJSON_IsString(event_id_obj) ? event_id_obj->valuestring : NULL
+            );
+        }
+    } else if (type != NULL && strcmp("conversation.item.created", type) == 0) {
         __handle_ws_conversation_item_created_call(demo, root);
-    } else if(type_obj != NULL && strcmp("response.function_call_arguments.done", cJSON_GetStringValue(type_obj)) == 0) {
+    } else if(type != NULL && strcmp("response.function_call_arguments.done", type) == 0) {
         __handle_function_call_arguments_done(demo, root);
     } else {
         printf("%s\n", (char*)message);
@@ -720,7 +2628,6 @@ static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
     /* 清除云端尚未提交的输入音频，供交互调试按键使用。 */
     uint8_t* clear = NULL;
     size_t clear_len = 0;
-    volc_message_info_t msg_info = {0};
     int ret = _build_ws_message(WS_BUFFER_CLEAR, &clear, &clear_len);
     if (ret != 0) {
         printf("build clear message failed");
@@ -733,6 +2640,41 @@ static int _ws_clear_buffer(realtime_ws_demo_t* demo) {
     return ret;
 }
 
+static int _ws_response_create(realtime_ws_demo_t* demo) {
+    /* 客户端判停模式下，收到 commit 确认后显式请求回答。 */
+    uint8_t* message = NULL;
+    size_t message_len = 0;
+    int ret = _build_ws_message(
+        WS_RESPONSE_CREATE,
+        &message,
+        &message_len
+    );
+    if (ret != 0) {
+        printf("build response.create message failed\n");
+        return ret;
+    }
+    ret = volc_send_message(demo->engine, message, message_len, NULL);
+    free(message);
+    return ret;
+}
+
+static int _ws_response_cancel(realtime_ws_demo_t* demo) {
+    uint8_t* message = NULL;
+    size_t message_len = 0;
+    int ret = _build_ws_message(
+        WS_RESPONSE_CANCEL,
+        &message,
+        &message_len
+    );
+    if (ret != 0) {
+        printf("build response.cancel message failed\n");
+        return ret;
+    }
+    ret = volc_send_message(demo->engine, message, message_len, NULL);
+    free(message);
+    return ret;
+}
+
 int main(int argc, const char* argv[]){
 	char* config_data = NULL;
     int error = 0;
@@ -742,6 +2684,12 @@ int main(int argc, const char* argv[]){
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    dialog_runtime_started_ms = __get_time_ms();
+    __load_device_serial();
+    session_active = false;
+    unlink(DIALOG_SESSION_MARKER);
+    unlink(DIALOG_TEXT_REQUEST_PATH);
+    __write_dialog_status("starting", "语音服务正在启动");
 
     /* 阶段 1：读取配置并根据传输模式确定音频采样率和帧大小。 */
 	if ((config_data = __load_config_from_file("conv_ai_config.json")) == NULL) {
@@ -759,7 +2707,6 @@ int main(int argc, const char* argv[]){
         return -1;
     }
 
-    demo.commit = false;
 	demo.audio_rec_buf = (uint8_t*)malloc(demo.frame_len);
 	if (demo.audio_rec_buf == NULL) {
 		printf("malloc audio rec buf fail\n");
@@ -771,6 +2718,7 @@ int main(int argc, const char* argv[]){
         goto err_out_label;
     }
     pthread_mutex_init(&demo.ring_buf_mutex, NULL);
+    pthread_mutex_init(&demo.playback_mutex, NULL);
 
     /*
      * 阶段 2：创建一条单声道 PulseAudio 录音流和一条播放流。
@@ -844,6 +2792,7 @@ int main(int argc, const char* argv[]){
 
 
     opt.bot_id = demo.bot_id;
+    __write_dialog_status("connecting", "正在连接火山引擎");
     volc_start(demo.engine, &opt);
 
     /* 阶段 3：等待云端 session 就绪后再接受唤醒，避免丢失首轮音频。 */
@@ -856,9 +2805,19 @@ int main(int argc, const char* argv[]){
         goto err_out_label;
     }
     printf("volc realtime is ready.\n");
-
-
+    error = volc_update(
+        demo.engine,
+        WS_SESSION_UPDATE,
+        strlen(WS_SESSION_UPDATE)
+    );
+    printf("session update result: %d\n", error);
+    error = __apply_personality_runtime(&demo, true);
+    if (error < 0) {
+        fprintf(stderr, "personality runtime was not applied at startup\n");
+    }
     __setup_async_io();
+    __schedule_cloud_idle_shutdown();
+    __write_dialog_status("ready", "等待唤醒词“小安小安”");
     printf("键盘监听程序已启动\n");
     printf("按空格键开始/停止, 按i键打断, 按c键清除, 按v键开启视频上传, 按s键stop/start, 按d键 按Ctrl+C退出\n");
     printf("当前状态: 已停止\n");
@@ -870,60 +2829,535 @@ int main(int argc, const char* argv[]){
 
     /*
      * 阶段 4：主状态机。
-     * running=true 时阻塞读取一帧麦克风 PCM 并上传；running=false 时，
-     * 若 demo.commit=true，则发送最后一帧并携带 commit 结束本轮输入。
+     * running=true 时阻塞读取一帧麦克风 PCM 并持续上传。本地能量 VAD
+     * 判定句尾并提交缓冲区；收到云端 commit 确认后才请求模型回答。
      */
     while (!exit_request) {
+        uint64_t now_ms;
+
         __poll_keyboard();
 
+        now_ms = __get_time_ms();
+        if (
+            now_ms - personality_last_poll_ms >=
+                PERSONALITY_POLL_INTERVAL_MS
+        ) {
+            personality_last_poll_ms = now_ms;
+            if (
+                !session_active && !running && !ai_playing &&
+                !wake_request && !text_dialog_request &&
+                !proactive_speech_pending && !proactive_speech_active &&
+                !tool_capture_guard && !client_turn_pending
+            ) {
+                int personality_result =
+                    __apply_personality_runtime(&demo, false);
+                if (personality_result > 0) {
+                    __write_dialog_status(
+                        "ready",
+                        "性格配置已同步，等待唤醒词“小安小安”"
+                    );
+                }
+            }
+        }
+
+        if (
+            cloud_idle_deadline_ms != 0 &&
+            now_ms >= cloud_idle_deadline_ms &&
+            !session_active && !running && !ai_playing &&
+            !wake_request && !text_dialog_request &&
+            !interrupt_only_request && !follow_up_prepare_request &&
+            !proactive_speech_pending && !proactive_speech_active &&
+            !proactive_speech_finish_request &&
+            !tool_capture_guard && !client_turn_pending &&
+            !playback_write_active
+        ) {
+            clean_exit_requested = true;
+            __write_dialog_status("stopping", "云端会话空闲，正在主动断开");
+            printf("cloud idle timeout reached; disconnecting normally\n");
+            exit_request = true;
+            continue;
+        }
+
+        if (text_dialog_request) {
+            char text_request_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 1];
+            char text_content[DIALOG_TEXT_MAX_BYTES + 1];
+            char text_request_kind[DIALOG_REQUEST_KIND_MAX_LEN + 1];
+            char text_event_id[DIALOG_TEXT_REQUEST_ID_MAX_LEN + 16];
+            int text_result;
+
+            text_dialog_request = false;
+            text_result = __read_text_dialog_request(
+                text_request_id,
+                sizeof(text_request_id),
+                text_content,
+                sizeof(text_content),
+                text_request_kind,
+                sizeof(text_request_kind)
+            );
+            if (text_result != 0) {
+                __write_dialog_status("ready", "文字或播报请求无效，请重新提交");
+                printf("invalid dialog text request\n");
+            } else if (strcmp(text_request_kind, "speak") == 0) {
+                /*
+                 * 主动短语不建立连续会话、不清录音缓冲，也不覆盖待处理的
+                 * 唤醒信号。若用户同时开始交互，本地跳过；云端低优先级仍
+                 * 提供第二层竞争保护。
+                 */
+                if (
+                    wake_request || session_active || running || ai_playing ||
+                    proactive_speech_pending || proactive_speech_active ||
+                    proactive_speech_finish_request
+                ) {
+                    printf(
+                        "proactive speech dropped because dialog is busy, "
+                        "event_id=%s\n",
+                        text_request_id
+                    );
+                } else {
+                    __cancel_cloud_idle_shutdown();
+                    snprintf(
+                        text_event_id,
+                        sizeof(text_event_id),
+                        "event_%s",
+                        text_request_id
+                    );
+                    __write_dialog_status(
+                        "proactive_queued",
+                        "自主短语已提交，等待播报"
+                    );
+                    proactive_speech_pending = true;
+                    proactive_speech_active = false;
+                    proactive_speech_finish_request = false;
+                    proactive_speech_deadline_ms =
+                        __get_time_ms() + PROACTIVE_SPEECH_ACK_TIMEOUT_MS;
+                    ai_playing = true;
+                    text_result = __send_proactive_speech_item(
+                        &demo,
+                        text_event_id,
+                        text_content
+                    );
+                    if (text_result < 0) {
+                        proactive_speech_pending = false;
+                        proactive_speech_deadline_ms = 0;
+                        ai_playing = false;
+                        __write_dialog_status("ready", "自主短语发送失败，等待唤醒");
+                    } else {
+                        printf("proactive input_tts item sent\n");
+                    }
+                }
+            } else {
+                __cancel_cloud_idle_shutdown();
+                wake_request = false;
+                interrupt_only_request = false;
+                follow_up_prepare_request = false;
+                echo_guard_active = false;
+                echo_guard_request = false;
+                session_active = true;
+                waiting_for_speech = false;
+                running = false;
+                ai_playing = false;
+                speech_start_deadline_ms = 0;
+                follow_up_deadline_ms = 0;
+                thinking_deadline_ms = 0;
+                tool_capture_guard = false;
+                __reset_client_turn_state();
+                __reset_local_vad();
+                __reset_barge_in_guard();
+                _ws_clear_buffer(&demo);
+                snprintf(
+                    text_event_id,
+                    sizeof(text_event_id),
+                    "event_%s",
+                    text_request_id
+                );
+                __write_dialog_status("submitting_text", "正在提交文字问题");
+                __write_dialog_event("user", text_content, text_event_id);
+                text_result = __send_text_dialog_item(
+                    &demo,
+                    text_event_id,
+                    text_content
+                );
+                if (text_result >= 0) {
+                    text_result = _ws_response_create(&demo);
+                }
+                if (text_result < 0) {
+                    session_active = false;
+                    ai_playing = false;
+                    __write_dialog_status(
+                        "recovering",
+                        "文字问题发送失败，正在重新连接"
+                    );
+                    printf("text dialog request failed; restarting cloud session\n");
+                    exit_request = true;
+                } else {
+                    ai_playing = true;
+                    thinking_deadline_ms =
+                        __get_time_ms() + THINKING_TIMEOUT_MS;
+                    __write_dialog_status("thinking", "文字问题已收到，正在思考");
+                    printf("text dialog response.create sent\n");
+                }
+            }
+        }
+
+        if (
+            proactive_speech_pending && proactive_speech_deadline_ms > 0 &&
+            __get_time_ms() >= proactive_speech_deadline_ms
+        ) {
+            proactive_speech_pending = false;
+            proactive_speech_deadline_ms = 0;
+            if (!proactive_speech_active && !proactive_speech_finish_request) {
+                ai_playing = false;
+                __schedule_cloud_idle_shutdown();
+                __write_dialog_status(
+                    "ready",
+                    "自主短语未播放或已被用户交互抢占"
+                );
+                printf("proactive input_tts acknowledgement timeout\n");
+            }
+        }
+
         /*
-         * 唤醒服务通过 SIGUSR1 进入这里。普通空闲状态直接开始收音；
-         * AI 正在回答时先安排 interrupt，再开始下一轮。6 秒截止时间用于
-         * 防止背景人声让云端 VAD 长时间无法判定句尾。
+         * SIGUSR1 启动连续会话。本地 VAD 负责判停；长回答仍可再次说
+         * 唤醒词，由独立唤醒进程发送 SIGUSR1 来打断并开始下一轮。
          */
         if (wake_request) {
             wake_request = false;
-            wake_capture_deadline_ms = __get_time_ms() + 6000;
-            if (ai_playing && !running) {
+            __cancel_cloud_idle_shutdown();
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
+            follow_up_prepare_request = false;
+            echo_guard_active = false;
+            echo_guard_request = false;
+            __reset_barge_in_guard();
+            session_active = true;
+            waiting_for_speech = true;
+            speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
+            follow_up_deadline_ms = 0;
+            thinking_deadline_ms = 0;
+            __reset_client_turn_state();
+            tool_capture_guard = false;
+            __reset_local_vad();
+            __write_dialog_status("wake_detected", "已唤醒，请在提示音后说话");
+            if (ai_playing) {
                 interrupt = true;
                 start_after_interrupt = true;
+                wake_tone_after_interrupt = true;
                 ai_playing = false;
                 printf("wakeup signal: interrupting current response\n");
             } else {
+                running = false;
+                _ws_clear_buffer(&demo);
+                __play_ready_tone(
+                    &demo,
+                    WAKE_TONE_DURATION_MS,
+                    "wake confirmation tone"
+                );
+                __reopen_capture_stream(&demo);
+                speech_start_deadline_ms =
+                    __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
                 running = true;
                 printf("wakeup signal: listening\n");
             }
         }
+        if (interrupt_only_request) {
+            interrupt_only_request = false;
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
+            follow_up_prepare_request = false;
+            echo_guard_active = false;
+            echo_guard_request = false;
+            __reset_barge_in_guard();
+            session_active = false;
+            waiting_for_speech = false;
+            speech_start_deadline_ms = 0;
+            follow_up_deadline_ms = 0;
+            thinking_deadline_ms = 0;
+            __reset_client_turn_state();
+            tool_capture_guard = false;
+            __reset_local_vad();
+            running = false;
+            ai_playing = false;
+            start_after_interrupt = false;
+            interrupt = true;
+            __schedule_cloud_idle_shutdown();
+            __write_dialog_status("interrupted", "已请求打断当前回答");
+        }
+        if (echo_guard_request) {
+            echo_guard_request = false;
+            proactive_speech_pending = false;
+            proactive_speech_active = false;
+            proactive_speech_finish_request = false;
+            proactive_speech_deadline_ms = 0;
+            follow_up_prepare_request = false;
+            echo_guard_active = true;
+            session_active = false;
+            waiting_for_speech = false;
+            speech_start_deadline_ms = 0;
+            follow_up_deadline_ms = 0;
+            thinking_deadline_ms = 0;
+            __reset_client_turn_state();
+            tool_capture_guard = false;
+            __reset_local_vad();
+            running = false;
+            ai_playing = false;
+            start_after_interrupt = false;
+            interrupt = true;
+            __schedule_cloud_idle_shutdown();
+            __write_dialog_status(
+                "echo_guard",
+                "检测到扬声器回声，已停止本次对话，请重新唤醒"
+            );
+            printf("echo guard: repeated barge-in loop stopped\n");
+        }
+        if (follow_up_prepare_request && session_active) {
+            int playback_pending = 0;
+
+            pthread_mutex_lock(&demo.ring_buf_mutex);
+            playback_pending =
+                volc_ringbuf_getdatasize(demo.ring_buf) > 0 ||
+                playback_write_active;
+            pthread_mutex_unlock(&demo.ring_buf_mutex);
+            if (!playback_pending) {
+                char status_message[96];
+                uint64_t follow_up_window_ms = __get_follow_up_window_ms();
+                /*
+                 * 短提示音前先 drain，确保 PulseAudio 中排队的 TTS 已真正
+                 * 播放完。提示音结束后同时复位云端和本地录音缓冲。
+                 */
+                __play_ready_tone(
+                    &demo,
+                    FOLLOW_UP_TONE_DURATION_MS,
+                    "follow-up ready tone"
+                );
+                _ws_clear_buffer(&demo);
+                __reopen_capture_stream(&demo);
+                __reset_local_vad();
+                follow_up_prepare_request = false;
+                playback_capture_guard = false;
+                waiting_for_speech = true;
+                follow_up_deadline_ms =
+                    __get_time_ms() + follow_up_window_ms;
+                speech_start_deadline_ms = follow_up_deadline_ms;
+                running = true;
+                snprintf(
+                    status_message,
+                    sizeof(status_message),
+                    "提示音后 %llu 秒内可以直接追问",
+                    (unsigned long long)(follow_up_window_ms / 1000)
+                );
+                __write_dialog_status(
+                    "followup_listening",
+                    status_message
+                );
+                printf("follow-up capture ready\n");
+            }
+        }
+        if (proactive_speech_finish_request && !session_active) {
+            int playback_pending = 0;
+            int drain_error = 0;
+
+            pthread_mutex_lock(&demo.ring_buf_mutex);
+            playback_pending =
+                volc_ringbuf_getdatasize(demo.ring_buf) > 0 ||
+                playback_write_active;
+            pthread_mutex_unlock(&demo.ring_buf_mutex);
+            if (!playback_pending) {
+                pthread_mutex_lock(&demo.playback_mutex);
+                if (pa_simple_drain(demo.p_playback, &drain_error) < 0) {
+                    printf(
+                        "proactive playback drain failed: %s\n",
+                        pa_strerror(drain_error)
+                    );
+                }
+                pthread_mutex_unlock(&demo.playback_mutex);
+                proactive_speech_finish_request = false;
+                ai_playing = false;
+                playback_capture_guard = false;
+                __schedule_cloud_idle_shutdown();
+                __write_dialog_status("ready", "自主动作完成，等待唤醒词“小安小安”");
+                printf("proactive input_tts playback drained\n");
+            }
+        }
         // printf("volc....................\n");
         if (running) {
+            bool local_speech_started_now = false;
+            bool local_endpoint_detected = false;
+            bool suppress_capture = false;
+            int send_result = 0;
+
             last_time_ms = __get_time_ms();
             // __get_fps();
             if (pa_simple_read(demo.p_capture, demo.audio_rec_buf, demo.frame_len, &error) < 0) {
                 fprintf(stderr, "录音失败: %s\n", pa_strerror(error));
                 break;
             }
-            info.commit = false;
-            volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
-            if (wake_capture_deadline_ms != 0 &&
-                __get_time_ms() >= wake_capture_deadline_ms) {
-                running = false;
-                wake_capture_deadline_ms = 0;
-                printf("wake capture timeout: scheduling audio commit\n");
+            suppress_capture =
+                tool_capture_guard ||
+                (
+                    playback_capture_guard &&
+                    __get_time_ms() < playback_capture_guard_until_ms
+                );
+            if (suppress_capture) {
+                __reset_local_vad();
+            } else if (waiting_for_speech) {
+                local_endpoint_detected = __local_vad_should_commit(
+                    demo.audio_rec_buf,
+                    demo.frame_len,
+                    &local_speech_started_now
+                );
+                if (local_speech_started_now) {
+                    speech_start_deadline_ms = 0;
+                    __write_dialog_status(
+                        "listening",
+                        "已检测到语音，等待说完"
+                    );
+                }
+            }
+            if (!suppress_capture) {
+                bool should_commit =
+                    local_endpoint_detected && waiting_for_speech;
+
+                /*
+                 * TurnDetectionMode=1 由端侧决定句尾。SDK 补丁只发送
+                 * append+commit；response.create 在 commit 确认后发送。
+                 */
+                info.commit = should_commit;
+                if (should_commit) {
+                    client_turn_pending = true;
+                    client_commit_ack_deadline_ms =
+                        __get_time_ms() + CLIENT_COMMIT_ACK_TIMEOUT_MS;
+                    running = false;
+                }
+                send_result = volc_send_audio_data(
+                    demo.engine,
+                    demo.audio_rec_buf,
+                    demo.frame_len,
+                    &info
+                );
+                if (send_result < 0) {
+                    __reset_client_turn_state();
+                    running = true;
+                    fprintf(stderr, "audio upload failed, ret=%d\n", send_result);
+                } else if (should_commit) {
+                    __reset_local_vad();
+                    waiting_for_speech = false;
+                    speech_start_deadline_ms = 0;
+                    follow_up_deadline_ms = 0;
+                    __write_dialog_status(
+                        "processing_audio",
+                        "问题已发送，等待云端确认"
+                    );
+                    printf("local VAD: utterance committed; waiting for acknowledgement\n");
+                }
+            }
+            if (
+                waiting_for_speech &&
+                speech_start_deadline_ms != 0 &&
+                __get_time_ms() >= speech_start_deadline_ms
+            ) {
+                _ws_clear_buffer(&demo);
+                __end_continuous_session(
+                    follow_up_deadline_ms != 0
+                        ? "连续对话已结束，请重新说“小安小安”"
+                        : "没有听到问题，请重新说“小安小安”"
+                );
             }
             diff_time_ms = __get_time_ms() - last_time_ms;
-            if (diff_time_ms < demo.audio_frame_ms) {
-                usleep(demo.audio_frame_ms - diff_time_ms);
+            if (diff_time_ms < (uint64_t)demo.audio_frame_ms) {
+                usleep(
+                    (useconds_t)(
+                        ((uint64_t)demo.audio_frame_ms - diff_time_ms) * 1000
+                    )
+                );
             }
-            demo.commit = true;
         } else {
-            /* 每轮只提交一次，提交后等待云端 THINKING/ANSWERING 回调。 */
-            if (demo.commit) {
-                info.commit = true;
-                volc_send_audio_data(demo.engine, demo.audio_rec_buf, demo.frame_len, &info);
-                demo.commit = false;
-                printf("stop send audio data\n");
-            }
             usleep(100000);
+        }
+        if (response_cancel_request) {
+            response_cancel_request = false;
+            _ws_response_cancel(&demo);
+            _ws_clear_buffer(&demo);
+            __end_continuous_session(
+                "没有识别到有效问题，请重新说“小安小安”"
+            );
+        }
+        if (response_create_request) {
+            int response_result = 0;
+
+            response_create_request = false;
+            input_transcript_pending = true;
+            client_transcript_deadline_ms =
+                __get_time_ms() + CLIENT_TRANSCRIPT_TIMEOUT_MS;
+            response_result = _ws_response_create(&demo);
+            if (response_result < 0) {
+                __reset_client_turn_state();
+                __write_dialog_status(
+                    "recovering",
+                    "请求回答失败，正在重新连接"
+                );
+                printf("response.create failed: restarting cloud session\n");
+                exit_request = true;
+            } else {
+                ai_playing = true;
+                running = false;
+                thinking_deadline_ms = __get_time_ms() + THINKING_TIMEOUT_MS;
+                __write_dialog_status("thinking", "问题已收到，正在思考");
+                printf("response.create sent after commit acknowledgement\n");
+            }
+        }
+        if (
+            client_commit_ack_deadline_ms != 0 &&
+            __get_time_ms() >= client_commit_ack_deadline_ms
+        ) {
+            client_commit_ack_deadline_ms = 0;
+            __reset_client_turn_state();
+            session_active = false;
+            waiting_for_speech = false;
+            running = false;
+            ai_playing = false;
+            __write_dialog_status(
+                "recovering",
+                "本轮语音未确认，正在清理并重连"
+            );
+            printf("client audio commit timeout: restarting cloud session\n");
+            exit_request = true;
+        }
+        if (
+            input_transcript_pending &&
+            client_transcript_deadline_ms != 0 &&
+            __get_time_ms() >= client_transcript_deadline_ms
+        ) {
+            input_transcript_pending = false;
+            client_transcript_deadline_ms = 0;
+            printf("final transcript timeout: cancelling response\n");
+            _ws_response_cancel(&demo);
+            _ws_clear_buffer(&demo);
+            __end_continuous_session(
+                "没有识别到有效问题，请重新说“小安小安”"
+            );
+        }
+        if (
+            thinking_deadline_ms != 0 &&
+            __get_time_ms() >= thinking_deadline_ms
+        ) {
+            session_active = false;
+            waiting_for_speech = false;
+            speech_start_deadline_ms = 0;
+            follow_up_deadline_ms = 0;
+            thinking_deadline_ms = 0;
+            __reset_local_vad();
+            running = false;
+            ai_playing = false;
+            __write_dialog_status(
+                "recovering",
+                "云端响应超时，正在重新连接"
+            );
+            printf("thinking timeout: restarting cloud session\n");
+            exit_request = true;
         }
         if (video_upload) {
             /* 视频为可选调试路径，当前 K1 默认没有加载 send_video.h264。 */
@@ -941,8 +3375,22 @@ int main(int argc, const char* argv[]){
             volc_interrupt(demo.engine);
             if (start_after_interrupt) {
                 start_after_interrupt = false;
+                session_active = true;
+                waiting_for_speech = true;
+                _ws_clear_buffer(&demo);
+                if (wake_tone_after_interrupt) {
+                    wake_tone_after_interrupt = false;
+                    __play_ready_tone(
+                        &demo,
+                        WAKE_TONE_DURATION_MS,
+                        "wake confirmation tone"
+                    );
+                }
+                __reopen_capture_stream(&demo);
+                speech_start_deadline_ms = __get_time_ms() + WAKE_SPEECH_TIMEOUT_MS;
                 running = true;
-                printf("状态: 运行中\n");
+                __write_dialog_status("listening", "回答已打断，请继续说话");
+                printf("状态: 打断后继续聆听\n");
             }
         }
         if (clear) {
@@ -972,11 +3420,20 @@ int main(int argc, const char* argv[]){
     pthread_join(demo.audio_playback_task, NULL);
 
 err_out_label:
+    session_active = false;
+    unlink(DIALOG_SESSION_MARKER);
+    __write_dialog_status("offline", "语音服务已停止");
+	if (demo.engine) {
+		volc_stop(demo.engine);
+		volc_destroy(demo.engine);
+		demo.engine = NULL;
+	}
 	if (demo.audio_rec_buf) {
 		free(demo.audio_rec_buf);
 	}
 	if (demo.ring_buf) {
         pthread_mutex_destroy(&demo.ring_buf_mutex);
+        pthread_mutex_destroy(&demo.playback_mutex);
         volc_ringbuf_destroy(demo.ring_buf);
     }
 	if (demo.p_capture) {
@@ -986,6 +3443,5 @@ err_out_label:
 		pa_simple_drain(demo.p_playback, &error);
 		pa_simple_free(demo.p_playback);
 	}
-	getchar();
-	return 0;
+	return clean_exit_requested ? EXIT_SUCCESS : EXIT_FAILURE;
 }

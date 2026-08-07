@@ -6,12 +6,17 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <light_sensor.h>
@@ -22,6 +27,11 @@
 #include <wifi.h>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define MOTOR_RUNTIME_DIR "/run/ai-cat"
+#define MOTOR_LOCK_PATH MOTOR_RUNTIME_DIR "/motor.lock"
+#define MOTOR_PID_PATH MOTOR_RUNTIME_DIR "/motor.pid"
+
+static volatile sig_atomic_t motor_stop_requested;
 
 struct rohs_motor_info {
     uint8_t motor_index;
@@ -84,24 +94,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
             .enable_gpio = 42,
             .stop_gpio = 83,
             .current_position = -1,
-            .constant_range = 60,
-            .gpio_max_steps = -1,
-            .enable_gpio_level = false,
-            .dir_gpio_left_level = false,
-            .stop_gpio_active_level = false,
-            .range_steps = 0,
-        },
-    },
-    {
-        "tail_lr",
-        {
-            .motor_index = 2,
-            .step_gpio = 34,
-            .dir_gpio = 35,
-            .enable_gpio = 36,
-            .stop_gpio = 82,
-            .current_position = -1,
-            .constant_range = 60,
+            .constant_range = 30,
             .gpio_max_steps = -1,
             .enable_gpio_level = false,
             .dir_gpio_left_level = false,
@@ -113,12 +106,30 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
         "head_ud",
         {
             .motor_index = 3,
+            .step_gpio = 34,
+            .dir_gpio = 35,
+            .enable_gpio = 36,
+            .stop_gpio = 82,
+            .current_position = -1,
+            .constant_range = 20,
+            .gpio_max_steps = -1,
+            .enable_gpio_level = false,
+            .dir_gpio_left_level = false,
+            .stop_gpio_active_level = false,
+            .range_steps = 0,
+        },
+    },
+    /* Provisional tail profile: keep remote access disabled until board validation. */
+    {
+        "tail_lr",
+        {
+            .motor_index = 2,
             .step_gpio = 37,
             .dir_gpio = 38,
             .enable_gpio = 39,
             .stop_gpio = 61,
             .current_position = -1,
-            .constant_range = 60,
+            .constant_range = 50,
             .gpio_max_steps = -1,
             .enable_gpio_level = false,
             .dir_gpio_left_level = false,
@@ -135,7 +146,8 @@ static void print_usage(const char *prog)
     printf("  %s pm [count]\n", prog);
     printf("  %s wifi <scan|state|info|list|on|off|connect|disconnect|remove|mac> [args...]\n", prog);
     printf("  %s nfc [count]\n", prog);
-    printf("  %s motor [all|head_lr|tail_lr|head_ud] [speed]\n", prog);
+    printf("  %s motor [all|head_lr|head_ud|tail_lr] [speed]\n", prog);
+    printf("  %s motor stop\n", prog);
     printf("  %s fan [speed_percent] [seconds]\n", prog);
     printf("  %s light_sensor [count]\n", prog);
 }
@@ -500,7 +512,8 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         .vel_des = speed,
     };
     struct motor_state state;
-    const float positions[] = {0.0f, 180.0f, 90.0f, 75.0f, 105.0f, 90.0f};
+    /* Match the board service's accepted right-left-center gesture. */
+    const float positions[] = {180.0f, 0.0f, 90.0f};
 
     if (!fixed)
         return 1;
@@ -524,7 +537,9 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         return 1;
     }
 
-    for (size_t i = 0; i < ARRAY_SIZE(positions); ++i) {
+    for (size_t i = 0;
+         i < ARRAY_SIZE(positions) && !motor_stop_requested;
+         ++i) {
         cmd.pos_des = positions[i];
         motor_set_cmd_one(motor, &cmd);
         motor_get_state_one(motor, &state);
@@ -539,31 +554,192 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
     return 0;
 }
 
+static void motor_signal_handler(int signal_number)
+{
+    (void)signal_number;
+    motor_stop_requested = 1;
+}
+
+static bool known_motor_name(const char *name)
+{
+    if (strcmp(name, "all") == 0)
+        return true;
+    for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
+        if (strcmp(name, k_rohs_motors[i].name) == 0)
+            return true;
+    }
+    return false;
+}
+
+static int ensure_motor_runtime_directory(void)
+{
+    struct stat info;
+
+    if (mkdir(MOTOR_RUNTIME_DIR, 0750) != 0 && errno != EEXIST) {
+        perror("create motor runtime directory");
+        return -1;
+    }
+    if (lstat(MOTOR_RUNTIME_DIR, &info) != 0 || !S_ISDIR(info.st_mode)) {
+        fprintf(stderr, "motor runtime path is not a directory\n");
+        return -1;
+    }
+    return 0;
+}
+
+static int parse_motor_speed(const char *text, float *speed)
+{
+    char *end = NULL;
+    long value = 2;
+
+    if (text) {
+        errno = 0;
+        value = strtol(text, &end, 10);
+        if (errno || end == text || *end != '\0')
+            return -1;
+    }
+    if (value < 1 || value > 2)
+        return -1;
+    *speed = (float)value;
+    return 0;
+}
+
+static bool pid_is_motor_process(pid_t pid)
+{
+    char path[64];
+    char command[256];
+    char *cursor;
+    char *end;
+    int fd;
+    ssize_t bytes_read;
+
+    snprintf(path, sizeof(path), "/proc/%ld/cmdline", (long)pid);
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+    bytes_read = read(fd, command, sizeof(command) - 1);
+    close(fd);
+    if (bytes_read <= 0)
+        return false;
+    command[bytes_read] = '\0';
+    end = command + bytes_read;
+
+    cursor = command + strlen(command) + 1;
+    if (cursor >= end || strcmp(cursor, "motor") != 0)
+        return false;
+    cursor += strlen(cursor) + 1;
+    return cursor < end && known_motor_name(cursor);
+}
+
+static int request_motor_stop(void)
+{
+    FILE *file = fopen(MOTOR_PID_PATH, "r");
+    long pid_value;
+    pid_t pid;
+
+    if (!file) {
+        if (errno == ENOENT) {
+            printf("[motor] no active motor process\n");
+            return 0;
+        }
+        perror("open motor pid file");
+        return 1;
+    }
+    if (fscanf(file, "%ld", &pid_value) != 1 || pid_value <= 1) {
+        fclose(file);
+        unlink(MOTOR_PID_PATH);
+        fprintf(stderr, "invalid motor pid file\n");
+        return 1;
+    }
+    fclose(file);
+    pid = (pid_t)pid_value;
+
+    if (!pid_is_motor_process(pid)) {
+        unlink(MOTOR_PID_PATH);
+        printf("[motor] no active motor process\n");
+        return 0;
+    }
+    if (kill(pid, SIGTERM) != 0) {
+        if (errno == ESRCH) {
+            unlink(MOTOR_PID_PATH);
+            printf("[motor] no active motor process\n");
+            return 0;
+        }
+        perror("signal motor process");
+        return 1;
+    }
+    printf("[motor] stop requested for pid %ld\n", (long)pid);
+    return 0;
+}
+
 static int run_motor(int argc, char **argv)
 {
     const char *which = argc > 0 ? argv[0] : "all";
-    float speed = (float)parse_int(argc > 1 ? argv[1] : NULL, 2);
+    float speed;
+    int lock_fd;
+    FILE *pid_file;
+    struct sigaction action;
     int ret = 0;
 
+    if (ensure_motor_runtime_directory() != 0)
+        return 1;
+    if (strcmp(which, "stop") == 0) {
+        if (argc != 1) {
+            fprintf(stderr, "motor stop does not accept extra arguments\n");
+            return 1;
+        }
+        return request_motor_stop();
+    }
+    if (!known_motor_name(which)) {
+        fprintf(stderr, "unknown motor: %s\n", which);
+        return 1;
+    }
+    if (argc > 2 || parse_motor_speed(argc > 1 ? argv[1] : NULL, &speed) != 0) {
+        fprintf(stderr, "motor speed must be 1 or 2\n");
+        return 1;
+    }
+
+    lock_fd = open(MOTOR_LOCK_PATH, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (lock_fd < 0) {
+        perror("open motor lock");
+        return 1;
+    }
+    if (flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        fprintf(stderr, "motor controller is busy\n");
+        close(lock_fd);
+        return 2;
+    }
+
+    motor_stop_requested = 0;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = motor_signal_handler;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
+
+    pid_file = fopen(MOTOR_PID_PATH, "w");
+    if (!pid_file) {
+        perror("open motor pid file");
+        flock(lock_fd, LOCK_UN);
+        close(lock_fd);
+        return 1;
+    }
+    fprintf(pid_file, "%ld\n", (long)getpid());
+    fflush(pid_file);
+    fsync(fileno(pid_file));
+    fclose(pid_file);
+
     for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
+        if (motor_stop_requested)
+            break;
         if (strcmp(which, "all") != 0 && strcmp(which, k_rohs_motors[i].name) != 0)
             continue;
         if (run_one_rohs_motor(&k_rohs_motors[i], speed) != 0)
             ret = 1;
     }
 
-    if (ret == 0 && strcmp(which, "all") != 0) {
-        bool found = false;
-        for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
-            if (strcmp(which, k_rohs_motors[i].name) == 0)
-                found = true;
-        }
-        if (!found) {
-            fprintf(stderr, "unknown motor: %s\n", which);
-            return 1;
-        }
-    }
-
+    unlink(MOTOR_PID_PATH);
+    flock(lock_fd, LOCK_UN);
+    close(lock_fd);
     return ret;
 }
 

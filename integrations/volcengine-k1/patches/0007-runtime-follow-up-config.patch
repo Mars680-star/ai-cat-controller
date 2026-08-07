@@ -1,0 +1,124 @@
+--- a/examples/low_load_solution/macos/volc_conv_ai_demo.c
++++ b/examples/low_load_solution/macos/volc_conv_ai_demo.c
+@@ -51,7 +51,9 @@
+ #define WEATHER_LOCATION_MAX_LEN 128
+ #define HTTP_RESPONSE_MAX_BYTES (128 * 1024)
+ #define WAKE_SPEECH_TIMEOUT_MS 30000
+-#define FOLLOW_UP_WINDOW_MS 30000
++#define DEFAULT_FOLLOW_UP_WINDOW_MS 30000
++#define MIN_FOLLOW_UP_SECONDS 5
++#define MAX_FOLLOW_UP_SECONDS 120
+ #define THINKING_TIMEOUT_MS 30000
+ #define LOCAL_VAD_SPEECH_RMS 250
+ #define LOCAL_VAD_START_FRAMES 2
+@@ -70,6 +72,8 @@
+ #define DIALOG_SESSION_MARKER DIALOG_STATUS_DIR "/dialog-session-active"
+ #define DIALOG_EVENT_DIR "/var/lib/ai-cat-controller"
+ #define DIALOG_EVENT_PATH DIALOG_EVENT_DIR "/dialog-events.jsonl"
++#define DIALOG_CONFIG_PATH DIALOG_EVENT_DIR "/dialog-runtime-config.json"
++#define DIALOG_CONFIG_MAX_BYTES 4096
+ #define DEVICE_SERIAL_PATH "/proc/device-tree/serial-number"
+ #define DEVICE_SERIAL_MAX_LEN 64
+ #define BATTERY_CAPACITY_PATH "/sys/class/power_supply/cw-bat/capacity"
+@@ -193,6 +197,47 @@
+     return now_time.tv_sec * 1000 + now_time.tv_nsec / 1000000;
+ }
+ 
++static uint64_t __get_follow_up_window_ms(void) {
++    char buffer[DIALOG_CONFIG_MAX_BYTES + 1];
++    FILE* file;
++    size_t bytes_read;
++    cJSON* root;
++    cJSON* seconds_obj;
++    int seconds;
++
++    file = fopen(DIALOG_CONFIG_PATH, "r");
++    if (file == NULL) {
++        return DEFAULT_FOLLOW_UP_WINDOW_MS;
++    }
++    bytes_read = fread(buffer, 1, DIALOG_CONFIG_MAX_BYTES, file);
++    if (ferror(file) || (bytes_read == DIALOG_CONFIG_MAX_BYTES && !feof(file))) {
++        fclose(file);
++        fprintf(stderr, "dialog config is unreadable or too large\n");
++        return DEFAULT_FOLLOW_UP_WINDOW_MS;
++    }
++    fclose(file);
++    buffer[bytes_read] = '\0';
++
++    root = cJSON_Parse(buffer);
++    seconds_obj = root == NULL
++        ? NULL
++        : cJSON_GetObjectItemCaseSensitive(root, "follow_up_seconds");
++    if (
++        !cJSON_IsNumber(seconds_obj) ||
++        seconds_obj->valuedouble != seconds_obj->valueint ||
++        seconds_obj->valueint < MIN_FOLLOW_UP_SECONDS ||
++        seconds_obj->valueint > MAX_FOLLOW_UP_SECONDS
++    ) {
++        cJSON_Delete(root);
++        fprintf(stderr, "dialog config has invalid follow_up_seconds\n");
++        return DEFAULT_FOLLOW_UP_WINDOW_MS;
++    }
++    seconds = seconds_obj->valueint;
++    cJSON_Delete(root);
++    printf("follow-up window configured: %d seconds\n", seconds);
++    return (uint64_t)seconds * 1000;
++}
++
+ static void __reset_barge_in_guard(void) {
+     pthread_mutex_lock(&barge_in_guard_mutex);
+     barge_in_window_started_ms = 0;
+@@ -891,13 +936,21 @@
+                     "回答播放完毕后将提示您继续追问"
+                 );
+             } else {
++                char status_message[96];
++                uint64_t follow_up_window_ms = __get_follow_up_window_ms();
+                 running = true;
+                 waiting_for_speech = true;
+-                follow_up_deadline_ms = now_ms + FOLLOW_UP_WINDOW_MS;
++                follow_up_deadline_ms = now_ms + follow_up_window_ms;
+                 speech_start_deadline_ms = follow_up_deadline_ms;
++                snprintf(
++                    status_message,
++                    sizeof(status_message),
++                    "回答已打断，%llu秒内可以直接继续说",
++                    (unsigned long long)(follow_up_window_ms / 1000)
++                );
+                 __write_dialog_status(
+                     "followup_listening",
+-                    "回答已打断，可以直接继续说"
++                    status_message
+                 );
+             }
+         } else {
+@@ -2157,6 +2210,8 @@
+                 playback_write_active;
+             pthread_mutex_unlock(&demo.ring_buf_mutex);
+             if (!playback_pending) {
++                char status_message[96];
++                uint64_t follow_up_window_ms = __get_follow_up_window_ms();
+                 /*
+                  * 短提示音前先 drain，确保 PulseAudio 中排队的 TTS 已真正
+                  * 播放完。提示音结束后同时复位云端和本地录音缓冲。
+@@ -2173,12 +2228,18 @@
+                 playback_capture_guard = false;
+                 waiting_for_speech = true;
+                 follow_up_deadline_ms =
+-                    __get_time_ms() + FOLLOW_UP_WINDOW_MS;
++                    __get_time_ms() + follow_up_window_ms;
+                 speech_start_deadline_ms = follow_up_deadline_ms;
+                 running = true;
++                snprintf(
++                    status_message,
++                    sizeof(status_message),
++                    "提示音后 %llu 秒内可以直接追问",
++                    (unsigned long long)(follow_up_window_ms / 1000)
++                );
+                 __write_dialog_status(
+                     "followup_listening",
+-                    "提示音后 30 秒内可以直接追问"
++                    status_message
+                 );
+                 printf("follow-up capture ready\n");
+             }

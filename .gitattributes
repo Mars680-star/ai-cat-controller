@@ -1,0 +1,2 @@
+# Patch payloads preserve the vendor source's original whitespace verbatim.
+integrations/volcengine-k1/patches/*.patch -whitespace

@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INTEGRATION_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+REPO_DIR=$(CDPATH= cd -- "$INTEGRATION_DIR/../.." && pwd)
 
 # shellcheck disable=SC1091
 . "$INTEGRATION_DIR/upstream.lock"
@@ -31,13 +32,14 @@ git -C "$SDK_DIR" checkout --detach "$UPSTREAM_COMMIT"
 
 for patch in "$INTEGRATION_DIR"/patches/*.patch; do
     git -C "$SDK_DIR" apply --check "$patch"
-done
-
-for patch in "$INTEGRATION_DIR"/patches/*.patch; do
     git -C "$SDK_DIR" apply "$patch"
 done
 
 cp -a "$INTEGRATION_DIR/overlay/." "$SDK_DIR/"
+cp "$REPO_DIR/native/dialog/volc_conv_ai_demo.c" \
+    "$SDK_DIR/examples/low_load_solution/macos/volc_conv_ai_demo.c"
+cp "$REPO_DIR/native/wake-word/main.cpp" \
+    "$SDK_DIR/examples/low_load_solution/linux_k1/wake_word/main.cpp"
 
 echo "Prepared SDK at: $SDK_DIR"
 echo "Next: cd $SDK_DIR/examples/low_load_solution/linux_k1"

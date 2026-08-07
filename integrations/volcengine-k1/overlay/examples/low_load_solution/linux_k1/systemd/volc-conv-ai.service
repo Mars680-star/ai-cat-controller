@@ -4,21 +4,24 @@ After=network-online.target toy_init.service volc-pulseaudio.service
 Wants=network-online.target
 Requires=toy_init.service volc-pulseaudio.service
 Conflicts=toy_voice.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
 User=root
 Group=pulse-access
 SupplementaryGroups=root
+RuntimeDirectory=ai-cat
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
 Environment=HOME=/root
 Environment=PULSE_SERVER=unix:/var/run/pulse/native
+EnvironmentFile=-/etc/ai-cat-controller.env
 WorkingDirectory=/root/ConversationalAI-Embedded-Kit-2.0/examples/low_load_solution/linux_k1/build
 ExecStartPre=/bin/sh -c 'i=0; until ip route get 1.1.1.1 >/dev/null 2>&1 && getent ahostsv4 ai-gateway.vei.volces.com >/dev/null 2>&1; do i=$$((i + 1)); [ "$$i" -ge 60 ] && exit 1; sleep 1; done'
 ExecStartPre=/bin/sh -c 'i=0; until pactl info >/dev/null 2>&1; do i=$$((i + 1)); [ "$$i" -ge 30 ] && exit 1; sleep 1; done'
 ExecStart=/root/ConversationalAI-Embedded-Kit-2.0/examples/low_load_solution/linux_k1/build/volc_conv_ai_k1_demo
-Restart=always
+Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10
-
-[Install]
-WantedBy=multi-user.target

@@ -1,0 +1,116 @@
+diff --git a/volc_conv_ai/src/transports/low_load/src/volc_ws.c b/volc_conv_ai/src/transports/low_load/src/volc_ws.c
+--- a/volc_conv_ai/src/transports/low_load/src/volc_ws.c
++++ b/volc_conv_ai/src/transports/low_load/src/volc_ws.c
+@@ -60,10 +60,8 @@ static int __ws_init(ws_impl_t* ws, cJSON* p_config)
+ }
+ 
+ static bool __ws_wait_for_session_update(ws_impl_t* ws) {
+-    if (ws->params.audio_codec_type != VOLC_AUDIO_CODEC_TYPE_PCM) {
+-        return true;
+-    }
+-    return false;
++    (void)ws;
++    return true;
+ }
+ 
+ static int __build_ws_message(const char* msg, uint8_t** out_buf, size_t* out_len) {
+@@ -219,7 +217,7 @@ static int __ws_generate_event_id(ws_impl_t* ws) {
+         return -1;
+     }
+     memset(ws->event_id, 0, sizeof(ws->event_id));
+-    snprintf(ws->event_id, sizeof(ws->event_id), "event_id_%llu", ws->event_id_index++);
++    snprintf(ws->event_id, sizeof(ws->event_id), "event_id_%d", ws->event_id_index++);
+     return 0;
+ }
+ 
+@@ -242,6 +240,12 @@ static char* __ws_generate_session_update(ws_impl_t* ws) {
+     char* json = NULL;
+     cJSON* root = NULL;
+     cJSON* session = NULL;
++    cJSON* config = NULL;
++    cJSON* asr_config = NULL;
++    cJSON* vad_config = NULL;
++    cJSON* interrupt_config = NULL;
++    cJSON* subtitle_config = NULL;
++    cJSON* agent_config = NULL;
+     if (!ws) {
+         LOGE("ws instance is NULL");
+         return NULL;
+@@ -255,6 +259,26 @@ static char* __ws_generate_session_update(ws_impl_t* ws) {
+     cJSON_AddStringToObject(session, "object", "realtime.session");
+     cJSON_AddStringToObject(session, "model", "");
+     cJSON_AddStringToObject(session, "input_audio_format", __ws_audio_codec_to_string(ws));
++    config = cJSON_CreateObject();
++    asr_config = cJSON_CreateObject();
++    vad_config = cJSON_CreateObject();
++    interrupt_config = cJSON_CreateObject();
++    subtitle_config = cJSON_CreateObject();
++    agent_config = cJSON_CreateObject();
++    cJSON_AddItemToObject(session, "config", config);
++    cJSON_AddItemToObject(config, "ASRConfig", asr_config);
++    cJSON_AddNumberToObject(asr_config, "TurnDetectionMode", 1);
++    cJSON_AddItemToObject(asr_config, "VADConfig", vad_config);
++    cJSON_AddNumberToObject(vad_config, "SilenceTime", 800);
++    cJSON_AddBoolToObject(vad_config, "AIVAD", false);
++    cJSON_AddNumberToObject(vad_config, "ExpireTime", 1200);
++    cJSON_AddItemToObject(asr_config, "InterruptConfig", interrupt_config);
++    cJSON_AddNumberToObject(interrupt_config, "InterruptSpeechDuration", 600);
++    cJSON_AddItemToObject(config, "SubtitleConfig", subtitle_config);
++    cJSON_AddBoolToObject(subtitle_config, "DisableRTSSubtitle", false);
++    cJSON_AddNumberToObject(subtitle_config, "SubtitleMode", 1);
++    cJSON_AddItemToObject(session, "agent_config", agent_config);
++    cJSON_AddStringToObject(agent_config, "WelcomeMessage", "");
+     json = cJSON_PrintUnformatted(root);
+     cJSON_Delete(root);
+     return json;
+@@ -362,7 +386,7 @@ static int __ws_start(ws_impl_t* ws, volc_iot_info_t* iot_info)
+ 
+     volc_osal_get_platform_info(platform_info, sizeof(platform_info));
+     snprintf(user_agent, sizeof(user_agent), "%s(%s)", volc_get_version(), platform_info);
+-    snprintf(time_str, sizeof(time_str), "%llu", current_time);
++    snprintf(time_str, sizeof(time_str), "%llu", (unsigned long long)current_time);
+     snprintf(num_str, sizeof(num_str), "%d", random_num);
+     char* signature = volc_generate_signature_ws(iot_info->device_secret, iot_info->product_key, iot_info->device_name, iot_info->instance_id, random_num, current_time, 1);
+     volc_ws_config_t ws_cfg = { 0 };
+@@ -461,33 +485,6 @@ static int __ws_input_audio_buffer_commit(ws_impl_t* ws) {
+     return ret;
+ }
+ 
+-static int __ws_response_create(ws_impl_t* ws) {
+-    int ret = 0;
+-    cJSON* root = NULL;
+-    if (!ws) {
+-        LOGE("ws instance is NULL");
+-        return -1;
+-    }
+-    root = cJSON_CreateObject();
+-    cJSON_AddStringToObject(root, "type", "response.create");
+-    // 创建 "response" 对象
+-    cJSON* response_obj = cJSON_CreateObject();
+-    cJSON_AddItemToObject(root, "response", response_obj);
+-    // 添加 “modalities” 字段
+-    cJSON* modalities_array = cJSON_CreateArray();
+-    cJSON_AddItemToArray(modalities_array, cJSON_CreateString("text"));
+-    cJSON_AddItemToArray(modalities_array, cJSON_CreateString("audio"));
+-    cJSON_AddItemToObject(response_obj, "modalities", modalities_array);
+-    // 生成 JSON 字符串
+-    const char* json = cJSON_PrintUnformatted(root);
+-    LOGD("json: %s", json);
+-    // 释放内存
+-    cJSON_Delete(root);
+-    ret = volc_ws_client_send_text(ws->client, json, strlen(json), 1000);
+-    HAL_SAFE_FREE(json);
+-    return ret;
+-}
+-
+ static int __ws_send_audio(ws_impl_t* ws, const void* data_ptr, size_t data_len, bool commit) {
+     int ret = 0;
+     size_t len = 0;
+@@ -522,7 +519,6 @@ static int __ws_send_audio(ws_impl_t* ws, const void* data_ptr, size_t data_len,
+             LOGE("failed to commit audio buffer");
+             return -1;
+         }
+-        ret = __ws_response_create(ws);
+     }
+     return ret;
+ }
