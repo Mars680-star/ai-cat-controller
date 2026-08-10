@@ -147,6 +147,61 @@ class SQLiteRepository:
                 """
             )
 
+    def backup_product_data(self) -> dict[str, Any]:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_id = f"product-data-reset-{timestamp}"
+        backup_root = self._path.parent / "backups"
+        backup_directory = backup_root / backup_id
+        backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup_root.chmod(0o700)
+        backup_directory.mkdir(mode=0o700)
+        backup_path = backup_directory / "product-data.db"
+
+        try:
+            with self._connect() as source:
+                with sqlite3.connect(backup_path) as target:
+                    source.backup(target)
+            backup_path.chmod(0o600)
+        except Exception:
+            backup_path.unlink(missing_ok=True)
+            try:
+                backup_directory.rmdir()
+            except OSError:
+                pass
+            raise
+
+        return {
+            "backup_id": backup_id,
+            "backup_directory": backup_directory,
+            "database_path": backup_path,
+        }
+
+    def clear_product_data(self) -> dict[str, int]:
+        tables = (
+            "feedback",
+            "action_executions",
+            "dialog_history",
+            "interaction_events",
+            "pets",
+            "devices",
+            "users",
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            counts = {
+                table: int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
+                )
+                for table in tables
+            }
+            for table in tables:
+                connection.execute(f"DELETE FROM {table}")
+            connection.commit()
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return counts
+
     def login_user(self, login_code: str, nickname: str) -> dict[str, Any]:
         now = _utc_now()
         user_id = _stable_id("usr", login_code)

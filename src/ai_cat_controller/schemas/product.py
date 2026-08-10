@@ -65,3 +65,7 @@ class MockDeviceStatusRequest(BaseModel):
     battery_percent: int = Field(ge=0, le=100)
     charging: bool
     network_status: Literal["online", "weak", "offline"]
+
+
+class ProductDataResetRequest(BaseModel):
+    confirmation: Literal["RESET_PRODUCT_DATA"]

@@ -103,6 +103,7 @@
     feedbackCategory: $("#feedback-category"),
     feedbackContent: $("#feedback-content"),
     unbind: $("#unbind-button"),
+    resetData: $("#reset-data-button"),
     personalityDialog: $("#personality-dialog"),
     revealName: $("#reveal-name"),
     revealDescription: $("#reveal-description"),
@@ -1070,6 +1071,29 @@
     showToast("设备已解绑");
   }
 
+  async function resetProductData() {
+    const confirmed = window.confirm(
+      "确认格式化全部体验数据？系统会先自动备份，然后清除账号、绑定、性格、亲密度、动作、对话和反馈记录。此操作不能在网页中撤销。",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    ui.resetData.disabled = true;
+    try {
+      const payload = await apiRequest("/api/v1/admin/reset-product-data", {
+        method: "POST",
+        body: JSON.stringify({confirmation: "RESET_PRODUCT_DATA"}),
+      });
+      const backupId = payload.data.backup_id;
+      logout();
+      setTopStatus("体验数据已格式化", false);
+      window.alert(`格式化完成。备份编号：${backupId}\n请重新登录并从性格盲盒开始测试。`);
+    } finally {
+      ui.resetData.disabled = false;
+    }
+  }
+
   function logout() {
     state.sessionToken = "";
     state.user = null;
@@ -1162,6 +1186,9 @@
   });
   ui.unbind.addEventListener("click", () => {
     unbindPet().catch(reportError);
+  });
+  ui.resetData.addEventListener("click", () => {
+    resetProductData().catch(reportError);
   });
 
   async function boot() {

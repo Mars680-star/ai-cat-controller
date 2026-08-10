@@ -1064,6 +1064,14 @@ textarea:focus-visible {
   border-bottom: 1px solid #e5b9b3;
 }
 
+.danger-zone + .danger-zone {
+  margin-top: 18px;
+}
+
+.danger-zone.critical {
+  border-color: #d99b93;
+}
+
 .bottom-nav {
   display: none;
 }

@@ -6,9 +6,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import secrets
+import stat
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.adapters.base import AiCatAdapter, Capability
@@ -19,6 +22,7 @@ from ai_cat_controller.core.errors import (
     AdapterNotImplementedError,
     AuthenticationError,
     DeviceUnavailableError,
+    OperationDisabledError,
     ResourceNotFoundError,
 )
 from ai_cat_controller.domain.actions import ACTIONS, ACTION_BY_ID, action_is_unlocked
@@ -45,6 +49,7 @@ TOUCH_ACTION_BY_SENSOR = {
     "right_foot": "head_shake",
 }
 TOUCH_MOTION_READY_STATES = {"offline", "ready", "interrupted"}
+PRODUCT_DATA_RESET_READY_STATES = {"offline", "ready", "interrupted", "unavailable"}
 
 
 class ProductMockService:
@@ -72,6 +77,7 @@ class ProductMockService:
         self._finalizers: set[asyncio.Task[None]] = set()
         self._dialog_sync_lock = asyncio.Lock()
         self._touch_motion_lock = asyncio.Lock()
+        self._product_data_reset_lock = asyncio.Lock()
         self._last_touch_motion_at = 0.0
         self._dialog_source_signatures: dict[
             tuple[str, str], tuple[int, int]
@@ -925,6 +931,110 @@ class ProductMockService:
             network_status=network_status,
         )
         return self._pet_summary(pet)
+
+    def _runtime_data_paths(self) -> tuple[tuple[str, Path], ...]:
+        return (
+            ("personality-runtime.json", self._settings.personality_runtime_path),
+            ("dialog-events.jsonl", self._settings.dialog_event_path),
+            ("dialog-text-request.json", self._settings.dialog_text_request_path),
+            ("dialog-runtime-config.json", self._settings.dialog_config_path),
+        )
+
+    def _archive_runtime_data(
+        self, backup_directory: Path
+    ) -> list[tuple[Path, Path]]:
+        archived: list[tuple[Path, Path]] = []
+        database_path = self._repository.path.absolute()
+        try:
+            for archive_name, source_path in self._runtime_data_paths():
+                source_path = source_path.absolute()
+                try:
+                    source_stat = source_path.lstat()
+                except FileNotFoundError:
+                    continue
+                if source_path == database_path:
+                    raise ActionConflictError("运行时数据路径不能与产品数据库相同")
+                if stat.S_ISLNK(source_stat.st_mode) or not stat.S_ISREG(
+                    source_stat.st_mode
+                ):
+                    raise ActionConflictError(
+                        "运行时数据文件类型异常，已取消格式化",
+                        details={"file": archive_name},
+                    )
+                destination_path = backup_directory / archive_name
+                os.replace(source_path, destination_path)
+                destination_path.chmod(0o600)
+                archived.append((source_path, destination_path))
+        except Exception:
+            self._restore_runtime_data(archived)
+            raise
+        return archived
+
+    @staticmethod
+    def _restore_runtime_data(archived: list[tuple[Path, Path]]) -> None:
+        for source_path, destination_path in reversed(archived):
+            try:
+                source_path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(destination_path, source_path)
+            except OSError:
+                LOGGER.exception("failed to restore runtime data %s", source_path)
+
+    async def reset_product_data(self, *, user_id: str) -> dict[str, Any]:
+        if not self._settings.enable_product_data_reset:
+            raise OperationDisabledError("当前部署未启用体验数据格式化功能")
+
+        async with self._product_data_reset_lock:
+            dialog_status = await self._adapter.get_dialog_status()
+            dialog_state = str(dialog_status.get("state", "unavailable"))
+            stale_active_state = bool(
+                dialog_status.get("stale")
+            ) and dialog_state not in {"offline", "unavailable"}
+            if (
+                dialog_status.get("session_active")
+                or stale_active_state
+                or dialog_state not in PRODUCT_DATA_RESET_READY_STATES
+            ):
+                raise ActionConflictError(
+                    "语音对话正在进行，请先打断并结束后再格式化",
+                    details={"dialog_state": dialog_state},
+                )
+
+            if self._adapter.supports(Capability.STOP_MOTION):
+                await self._motion.stop()
+            if self._finalizers:
+                await asyncio.gather(
+                    *tuple(self._finalizers),
+                    return_exceptions=True,
+                )
+
+            backup = await asyncio.to_thread(self._repository.backup_product_data)
+            archived = await asyncio.to_thread(
+                self._archive_runtime_data,
+                backup["backup_directory"],
+            )
+            try:
+                deleted = await asyncio.to_thread(
+                    self._repository.clear_product_data
+                )
+            except Exception:
+                await asyncio.to_thread(self._restore_runtime_data, archived)
+                raise
+
+            await self._personality.clear_runtime()
+            self._sessions.clear()
+            self._dialog_source_signatures.clear()
+            self._last_touch_motion_at = 0.0
+            LOGGER.warning(
+                "product experience data reset by %s; backup=%s",
+                user_id,
+                backup["backup_id"],
+            )
+            return {
+                "reset": True,
+                "backup_id": backup["backup_id"],
+                "deleted": deleted,
+                "archived_files": [path.name for _, path in archived],
+            }
 
     async def shutdown(self) -> None:
         if self._finalizers:

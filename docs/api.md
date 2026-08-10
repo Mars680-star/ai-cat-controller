@@ -59,6 +59,7 @@ Error:
 | POST | `/api/v1/pets/{pet_id}/mock-device-status` | 模拟电量和网络状态。 |
 | POST | `/api/v1/pets/{pet_id}/feedback` | 记录异常反馈。 |
 | POST | `/api/v1/pets/{pet_id}/unbind` | 解除用户与设备绑定。 |
+| POST | `/api/v1/admin/reset-product-data` | 备份并清除全部产品体验数据；默认禁用。 |
 
 Motion body:
 
@@ -103,6 +104,18 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+格式化接口还要求 `AI_CAT_ENABLE_PRODUCT_DATA_RESET=true`，请求体必须为：
+
+```json
+{
+  "confirmation": "RESET_PRODUCT_DATA"
+}
+```
+
+接口会先备份 SQLite 和固定运行时文件，再清除账号、绑定、性格、亲密度、动作、
+对话和反馈数据。火山鉴权、License、SDK 和系统配置不在清理范围内。响应只返回
+备份编号；正在语音对话时返回 `409`，完成后原 `X-Mock-Session` 立即失效。
 
 性格运行时接口返回当前 `personality_id`、`voice_type`、亲密度称呼、语音动作
 白名单和自主行为配置。`native_applied=true` 表示原生进程上报的 revision 与

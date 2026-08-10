@@ -261,6 +261,15 @@ class PersonalityService:
             **self._public_profile(profile),
         }
 
+    async def clear_runtime(self) -> None:
+        async with self._lock:
+            self._active_profile = None
+            self._active_sync_state = "not_configured"
+        await asyncio.to_thread(
+            self._settings.personality_runtime_path.unlink,
+            missing_ok=True,
+        )
+
     @staticmethod
     def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         return {

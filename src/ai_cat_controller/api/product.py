@@ -17,6 +17,7 @@ from ai_cat_controller.schemas.product import (
     MockDeviceStatusRequest,
     MockLoginRequest,
     PetSettingsRequest,
+    ProductDataResetRequest,
     SendDialogRequest,
 )
 
@@ -304,3 +305,17 @@ async def update_mock_device_status(
         network_status=request.network_status,
     )
     return _response("Mock 设备状态已更新", result)
+
+
+@router.post(
+    "/admin/reset-product-data",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def reset_product_data(
+    request: ProductDataResetRequest,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    del request
+    result = await services.product.reset_product_data(user_id=user_id)
+    return _response("体验数据已格式化，请重新登录", result)

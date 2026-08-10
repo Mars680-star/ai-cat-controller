@@ -49,7 +49,7 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
   静音状态和 SQLite 持久值一致；实体右脚、鼻部和背部触摸共 4 次均被导入，
   亲密度由 `32` 增加到 `36`。部署前备份位于
   `/root/ai-cat-backups/before-volume-touch-20260810-1315/`。
-- 本地编译检查通过，自动测试更新为 `173 passed`。
+- 本地编译检查通过，自动测试更新为 `176 passed`。
 - 第二台 K1（序列号 `7c2b63fd4a128`）已完成 FastAPI 控制服务、固定安全电机
   应用和 `k1_vendor_smooth` 动作配置部署；头部左右、头部上下和尾部原厂轨迹已
   逐项执行验证。火山原生对话程序已在该板完成 RISC-V 编译，PulseAudio 与对话
@@ -71,6 +71,11 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - 新增 `AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY` 调试开关，第二台 K1 已临时启用：
   `touch` 事件不受每日 8 次和每日总增长上限限制，方便连续拍摄培养功能。重复事件
   幂等、触摸动作冷却及任务/对话等其他培养限制保持不变；正式环境默认关闭。
+- 设置页新增“一键格式化体验数据”：操作前自动生成 SQLite 与运行时文件备份，
+  随后清除体验账号、设备绑定、性格、亲密度、动作、对话和反馈数据，并使旧网页
+  会话立即失效。火山鉴权缓存、License、厂商 SDK、模型和 systemd 配置均不删除；
+  功能受 API Key、体验会话、固定确认词及 `AI_CAT_ENABLE_PRODUCT_DATA_RESET` 开关
+  共同保护，默认关闭。备份保存在产品数据库同级的 `backups/` 目录。
 
 ### 2026-08-07
 
@@ -396,6 +401,7 @@ export AI_CAT_API_KEY='替换为随机密钥'
 export AI_CAT_ENABLE_TAIL_MOTION=false
 export AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS=false
 export AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY=false
+export AI_CAT_ENABLE_PRODUCT_DATA_RESET=false
 export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
@@ -450,6 +456,10 @@ export AI_CAT_INTIMACY_DAILY_CAP=50
   跳过性格和亲密度解锁条件，不能绕过硬件与调度安全保护。
 - `AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY` 只能用于培养流程调试，正式环境必须关闭；
   同一触摸事件的 `request_id` 幂等保护始终保留。
+- 一键格式化会清除全部产品体验数据，只能在明确需要重新拍摄绑定和性格盲盒流程
+  时临时开启 `AI_CAT_ENABLE_PRODUCT_DATA_RESET=true`；操作仍要求 API Key、有效体验
+  会话和固定确认词，语音会话进行中会拒绝执行。备份目录权限为 `0700`，数据库和
+  运行时文件权限为 `0600`，HTTP 响应只返回备份编号。
 - 不执行 DDS 或 ROS2 操作。
 - 正式远程控制需要 HTTPS、鉴权和受控中转，不能直接暴露公网端口。
 

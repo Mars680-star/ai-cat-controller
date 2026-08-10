@@ -10,6 +10,7 @@ def test_default_settings_are_safe_mock() -> None:
     assert settings.hardware_driver == "mock"
     assert settings.api_host == "127.0.0.1"
     assert settings.api_key_enabled is False
+    assert settings.enable_product_data_reset is False
 
 
 def test_environment_values_are_parsed() -> None:
@@ -23,6 +24,7 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_ENABLE_TAIL_MOTION": "true",
             "AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS": "true",
             "AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY": "true",
+            "AI_CAT_ENABLE_PRODUCT_DATA_RESET": "true",
             "AI_CAT_ENABLE_TOUCH_MOTION": "false",
             "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS": "4.5",
             "AI_CAT_ENABLE_TOUCH_SPEECH": "true",
@@ -49,6 +51,7 @@ def test_environment_values_are_parsed() -> None:
     assert settings.enable_tail_motion is True
     assert settings.debug_unlock_all_actions is True
     assert settings.debug_unlimited_touch_intimacy is True
+    assert settings.enable_product_data_reset is True
     assert settings.enable_touch_motion is False
     assert settings.touch_motion_cooldown_seconds == 4.5
     assert settings.enable_touch_speech is True

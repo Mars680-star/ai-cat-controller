@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import time
 from functools import partial
 from pathlib import Path
@@ -487,6 +488,160 @@ def test_dialog_history_settings_device_status_and_feedback(
     )
     assert feedback.status_code == 200
     assert feedback.json()["data"]["feedback_id"].startswith("fb_")
+
+
+def test_product_data_reset_is_disabled_by_default(client: TestClient) -> None:
+    headers, _ = _login(client, code="reset-disabled-user")
+
+    response = client.post(
+        "/api/v1/admin/reset-product-data",
+        headers=headers,
+        json={"confirmation": "RESET_PRODUCT_DATA"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["data"]["code"] == "operation_disabled"
+
+
+def test_product_data_reset_backs_up_and_clears_experience_data(
+    tmp_path,
+) -> None:
+    data_path = tmp_path / "product-data.db"
+    runtime_paths = {
+        "personality_runtime_path": tmp_path / "personality-runtime.json",
+        "dialog_event_path": tmp_path / "dialog-events.jsonl",
+        "dialog_text_request_path": tmp_path / "dialog-text-request.json",
+        "dialog_config_path": tmp_path / "dialog-runtime-config.json",
+    }
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            motion_cooldown_seconds=0.0,
+            data_path=data_path,
+            enable_product_data_reset=True,
+            **runtime_paths,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="reset-enabled-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-RESET-ALL-DATA",
+        )["pet"]["pet_id"]
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "reset-task"},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+            json={"content": "格式化前的对话", "trigger_action": False},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/feedback",
+            headers=headers,
+            json={"category": "other", "content": "格式化前的反馈"},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/actions/head_shake/execute",
+            headers=headers,
+            json={"request_id": "reset-action"},
+        )
+        for path in runtime_paths.values():
+            path.write_text('{"test":true}\n', encoding="utf-8")
+
+        invalid = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET"},
+        )
+        assert invalid.status_code == 422
+
+        response = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET_PRODUCT_DATA"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()["data"]
+        assert result["reset"] is True
+        assert result["backup_id"].startswith("product-data-reset-")
+        assert "/" not in result["backup_id"]
+        assert "backup_directory" not in result
+        assert result["deleted"] == {
+            "feedback": 1,
+            "action_executions": 1,
+            "dialog_history": 2,
+            "interaction_events": 2,
+            "pets": 1,
+            "devices": 1,
+            "users": 1,
+        }
+        assert set(result["archived_files"]) == {
+            path.name for path in runtime_paths.values()
+        }
+        assert all(not path.exists() for path in runtime_paths.values())
+        assert test_client.portal is not None
+        personality_status = test_client.portal.call(
+            test_client.app.state.services.personality.status
+        )
+        assert personality_status == {
+            "active": False,
+            "sync_state": "not_configured",
+        }
+
+        expired_session = test_client.get("/api/v1/pets", headers=headers)
+        assert expired_session.status_code == 401
+
+    backup_directory = tmp_path / "backups" / result["backup_id"]
+    backup_database = backup_directory / "product-data.db"
+    assert backup_database.exists()
+    assert backup_database.stat().st_mode & 0o777 == 0o600
+    assert all((backup_directory / path.name).exists() for path in runtime_paths.values())
+    with sqlite3.connect(backup_database) as backup:
+        assert backup.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM pets").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM dialog_history").fetchone()[0] == 2
+    with sqlite3.connect(data_path) as active:
+        for table in (
+            "feedback",
+            "action_executions",
+            "dialog_history",
+            "interaction_events",
+            "pets",
+            "devices",
+            "users",
+        ):
+            assert active.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_product_data_reset_rejects_active_dialog(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            data_path=tmp_path / "busy-reset.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+            enable_product_data_reset=True,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="busy-reset-user")
+        _bind(test_client, headers, serial="K1-BUSY-RESET")
+        assert test_client.portal is not None
+        test_client.portal.call(test_client.app.state.services.adapter.wake_dialog)
+
+        response = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET_PRODUCT_DATA"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["data"]["code"] == "action_conflict"
+        assert len(test_client.get("/api/v1/pets", headers=headers).json()["data"]) == 1
 
 
 def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> None:
