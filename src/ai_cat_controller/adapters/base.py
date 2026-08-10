@@ -30,6 +30,16 @@ class AiCatAdapter(ABC):
     def capability_unavailable_reason(self, capability: Capability) -> str:
         return f"{self.mode} 适配器不支持 {capability.value}"
 
+    def supports_motion_preset(self, preset_name: str) -> bool:
+        del preset_name
+        return False
+
+    async def run_motion_preset(
+        self, preset_name: str, duration_ms: int
+    ) -> None:
+        del preset_name, duration_ms
+        raise NotImplementedError("适配器不支持板端动作预设")
+
     @abstractmethod
     async def connect(self) -> None: ...
 

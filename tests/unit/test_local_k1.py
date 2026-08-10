@@ -236,6 +236,43 @@ async def test_local_tail_action_uses_recorded_vendor_smooth_profile() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_vendor_smooth_profile_uses_named_product_presets() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={
+            "enable_tail_motion": True,
+            "motion_profile": "k1_vendor_smooth",
+        }
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    for preset in (
+        "proud_pose",
+        "quiet_companion",
+        "greeting_combo",
+        "celebration_combo",
+    ):
+        assert adapter.supports_motion_preset(preset) is True
+        await adapter.run_motion_preset(preset, 1800)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "proud_pose")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "quiet_companion")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "greeting_combo")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "celebration_combo")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_product_presets_fall_back_for_legacy_profile() -> None:
+    adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
+
+    assert adapter.supports_motion_preset("proud_pose") is False
+    with pytest.raises(AdapterNotImplementedError, match="不支持该动作预设"):
+        await adapter.run_motion_preset("proud_pose", 1000)
+
+
+@pytest.mark.asyncio
 async def test_local_dialog_control_uses_fixed_signals(tmp_path) -> None:
     runner = FakeRunner()
     status_path = tmp_path / "dialog-status.json"

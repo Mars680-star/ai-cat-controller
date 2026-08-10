@@ -59,6 +59,7 @@ def make_runner() -> CommandRunner:
         ("/usr/bin/ai-toy_app", ["motor", "tail_lr", "2"]),
         ("/usr/bin/ai-toy_app", ["motor", "head_lr", "2"]),
         ("/usr/bin/ai-toy_app", ["motor", "head_lr", "3"]),
+        ("/usr/bin/ai-toy_app", ["motor", "preset", "arbitrary"]),
         ("/usr/bin/ai-toy_app", ["motor", "all", "2"]),
         ("/usr/bin/pactl", ["set-sink-volume", "@DEFAULT_SINK@", "101%"]),
         ("/usr/bin/pactl", ["set-sink-volume", "sink-0", "35%"]),
@@ -305,12 +306,24 @@ async def test_factory_allowlists_only_selected_vendor_smooth_commands(
 
     await adapter.shake_head(0.5, 600)
     await adapter.nod_head(0.5, 600)
+    await adapter.run_motion_preset("quiet_companion", 1300)
 
     assert captured == [
         ("motor", "head_lr", "3"),
         ("motor", "head_ud", "3"),
+        ("motor", "preset", "quiet_companion"),
     ]
     with pytest.raises(CommandNotAllowedError):
         await adapter._runner.run(  # type: ignore[attr-defined]
             "/usr/bin/ai-toy_app", ["motor", "head_lr", "1"]
+        )
+    with pytest.raises(CommandNotAllowedError):
+        await adapter._runner.run(  # type: ignore[attr-defined]
+            "/usr/bin/ai-toy_app",
+            ["motor", "preset", "greeting_combo"],
+        )
+    with pytest.raises(CommandNotAllowedError):
+        await adapter._runner.run(  # type: ignore[attr-defined]
+            "/usr/bin/ai-toy_app",
+            ["motor", "preset", "proud_pose"],
         )

@@ -25,9 +25,24 @@ factory-smooth fixed profile:
 
 Speed 3 keeps the same bounded `180 -> 0 -> 90` normalized target sequence but
 uses the factory 100 ms dwell. This was recovered from factory behavior; the
-project-built helper still requires physical acceptance on the new device. See
-`docs/k1-motion-profiles.md` before enabling it through
+project-built helper has been physically accepted for the three standard axes
+on the new device. See `docs/k1-motion-profiles.md` before enabling it through
 `AI_CAT_MOTION_PROFILE=k1_vendor_smooth`.
+
+The new-device profile also exposes four fixed product presets:
+
+```bash
+/usr/bin/ai-toy_app motor preset proud_pose
+/usr/bin/ai-toy_app motor preset quiet_companion
+/usr/bin/ai-toy_app motor preset greeting_combo
+/usr/bin/ai-toy_app motor preset celebration_combo
+```
+
+`proud_pose` holds the head to one side, moves the tail once, and then returns
+the head to center; it has passed physical acceptance. The other three presets
+are compiled and allowlisted but still require individual physical acceptance.
+No preset accepts angles, speeds, dwell values, GPIO numbers, or arbitrary
+sequence data from HTTP.
 
 The routines use fixed board profiles, a cross-process lock at
 `/run/ai-cat/motor.lock`, and a PID file at `/run/ai-cat/motor.pid`. `SIGTERM`
@@ -43,9 +58,9 @@ DDS process does not honor this program's lock and can otherwise drive the same
 motor concurrently.
 
 The tail GPIO and motor index now match the factory configuration recorded from
-device `7c2b63fd4a128`. The project helper has not been physically accepted on
-that device, and the older sample still has a tail hardware fault. Remote API
-and voice access therefore remain disabled unless
+device `7c2b63fd4a128`, where the standard tail gesture has passed physical
+acceptance. The older sample still has a tail hardware fault. Remote API and
+voice access therefore remain disabled per device unless
 `AI_CAT_ENABLE_TAIL_MOTION=true`.
 
 The original SPDX and copyright notice is retained in `src/main.c`.

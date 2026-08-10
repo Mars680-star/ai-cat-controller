@@ -143,6 +143,21 @@ class MockAiCatAdapter(AiCatAdapter):
     async def wag_tail(self, intensity: float, duration_ms: int) -> None:
         await self._run_motion("tail_wag", "tail", intensity, duration_ms)
 
+    def supports_motion_preset(self, preset_name: str) -> bool:
+        return preset_name in {
+            "proud_pose",
+            "quiet_companion",
+            "greeting_combo",
+            "celebration_combo",
+        }
+
+    async def run_motion_preset(
+        self, preset_name: str, duration_ms: int
+    ) -> None:
+        if not self.supports_motion_preset(preset_name):
+            raise ValueError("未知动作预设")
+        await self._run_motion(preset_name, "head", 0.5, duration_ms)
+
     async def stop_motion(self) -> bool:
         async with self._state_lock:
             stopped = self.current_action != "idle"

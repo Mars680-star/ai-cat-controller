@@ -35,6 +35,10 @@ class LocalK1Adapter(AiCatAdapter):
             Capability.SPEAK_TEXT,
         }
     )
+    _HEAD_MOTION_PRESETS = frozenset({"quiet_companion"})
+    _TAIL_MOTION_PRESETS = frozenset(
+        {"proud_pose", "greeting_combo", "celebration_combo"}
+    )
 
     def __init__(self, settings: Settings, runner: CommandRunner) -> None:
         self._settings = settings
@@ -501,6 +505,42 @@ class LocalK1Adapter(AiCatAdapter):
                 "设置 AI_CAT_ENABLE_TAIL_MOTION=true 才可开放"
             )
         return super().capability_unavailable_reason(capability)
+
+    def supports_motion_preset(self, preset_name: str) -> bool:
+        if self._settings.motion_profile != "k1_vendor_smooth":
+            return False
+        if preset_name in self._HEAD_MOTION_PRESETS:
+            return True
+        return (
+            self._settings.enable_tail_motion
+            and preset_name in self._TAIL_MOTION_PRESETS
+        )
+
+    async def run_motion_preset(
+        self, preset_name: str, duration_ms: int
+    ) -> None:
+        if not 100 <= duration_ms <= 10_000:
+            raise ValueError("动作预设持续时间超出安全范围")
+        if not self.supports_motion_preset(preset_name):
+            raise AdapterNotImplementedError("当前设备不支持该动作预设")
+        result = await self._runner.run(
+            str(self._settings.hardware_binary),
+            ["motor", "preset", preset_name],
+        )
+        if result.timed_out:
+            raise DeviceUnavailableError("动作预设执行超时，已请求电机停止")
+        if result.returncode == 0:
+            return
+        combined_output = f"{result.stdout}\n{result.stderr}".lower()
+        if "busy" in combined_output or "正在执行" in combined_output:
+            raise ActionConflictError("电机正在执行其他动作")
+        raise DeviceUnavailableError(
+            "动作预设执行失败",
+            details={
+                "returncode": result.returncode,
+                "stderr": result.stderr,
+            },
+        )
 
     async def _run_head_motor(
         self, actuator: str, intensity: float, duration_ms: int

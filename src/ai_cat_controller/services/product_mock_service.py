@@ -299,6 +299,7 @@ class ProductMockService:
         try:
             result = await self._motion.run_sequence(
                 action_name=action.action_id,
+                preset_name=action.hardware_preset,
                 steps=tuple(
                     (
                         component.capability,

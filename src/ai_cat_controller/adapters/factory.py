@@ -20,10 +20,24 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
         ("motor", "head_ud", "3" if smooth_profile else "2"),
         ("motor", "stop"),
     }
+    if smooth_profile:
+        hardware_commands.update(
+            {
+                ("motor", "preset", "quiet_companion"),
+            }
+        )
     if settings.enable_tail_motion:
         hardware_commands.add(
             ("motor", "tail_lr", "3" if smooth_profile else "1")
         )
+        if smooth_profile:
+            hardware_commands.update(
+                {
+                    ("motor", "preset", "proud_pose"),
+                    ("motor", "preset", "greeting_combo"),
+                    ("motor", "preset", "celebration_combo"),
+                }
+            )
     pulseaudio_commands = {
         ("get-sink-volume", "@DEFAULT_SINK@"),
         ("get-sink-mute", "@DEFAULT_SINK@"),

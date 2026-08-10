@@ -45,7 +45,26 @@ def test_motor_source_uses_validated_head_and_provisional_tail_mappings() -> Non
 
     head_lr = source.split('"head_lr"', maxsplit=1)[1].split("},\n    },", maxsplit=1)[0]
     assert ".constant_range = 30" in head_lr
-    assert "{180.0f, 0.0f, 90.0f}" in source
+    assert "{180.0f, dwell_us}" in source
+    assert "{0.0f, dwell_us}" in source
+    assert "{90.0f, dwell_us}" in source
     assert "speed >= 3.0f ? 100000U : 500000U" in source
     assert "75.0f" not in source
     assert "105.0f" not in source
+
+
+def test_motor_source_has_only_named_safe_product_presets() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    for preset in (
+        "proud_pose",
+        "quiet_companion",
+        "greeting_combo",
+        "celebration_combo",
+    ):
+        assert f'"{preset}"' in source
+    assert "known_motor_preset(argv[1])" in source
+    assert 'strcmp(which, "preset") == 0' in source
+    assert "run_rohs_motor_waypoints(" in source
+    assert "run_proud_pose(head_lr, tail_lr)" in source
+    assert "usleep(1200000U)" in source
