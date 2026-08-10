@@ -34,6 +34,7 @@ class Settings(BaseModel):
     command_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     dialog_start_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
+    motion_profile: Literal["legacy_safe", "k1_vendor_smooth"] = "legacy_safe"
     enable_tail_motion: bool = False
     enable_touch_motion: bool = True
     touch_motion_cooldown_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
@@ -145,6 +146,9 @@ class Settings(BaseModel):
                 "AI_CAT_DIALOG_START_TIMEOUT_SECONDS", "30.0"
             ),
             "motion_cooldown_seconds": source.get("AI_CAT_MOTION_COOLDOWN_SECONDS", "0.2"),
+            "motion_profile": source.get(
+                "AI_CAT_MOTION_PROFILE", "legacy_safe"
+            ),
             "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
             "enable_touch_motion": source.get(
                 "AI_CAT_ENABLE_TOUCH_MOTION", "true"

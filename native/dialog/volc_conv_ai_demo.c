@@ -2063,6 +2063,32 @@ static bool __tail_motion_enabled(void) {
     );
 }
 
+static bool __vendor_smooth_motion_enabled(void) {
+    const char* value = getenv("AI_CAT_MOTION_PROFILE");
+
+    return value != NULL && strcmp(value, "k1_vendor_smooth") == 0;
+}
+
+static const char* __motor_motion_speed(const char* actuator) {
+    if (actuator == NULL) {
+        return NULL;
+    }
+    if (__vendor_smooth_motion_enabled()) {
+        return (
+            strcmp(actuator, "head_lr") == 0 ||
+            strcmp(actuator, "head_ud") == 0 ||
+            strcmp(actuator, "tail_lr") == 0
+        ) ? "3" : NULL;
+    }
+    if (strcmp(actuator, "head_ud") == 0) {
+        return "2";
+    }
+    return (
+        strcmp(actuator, "head_lr") == 0 ||
+        strcmp(actuator, "tail_lr") == 0
+    ) ? "1" : NULL;
+}
+
 static bool __is_motion_function(const char* name) {
     return name != NULL && (
         strcmp(name, "shake_head") == 0 ||
@@ -2116,15 +2142,9 @@ static int __run_motor_motion(const char* actuator, const char* speed) {
     pid_t pid;
     int status;
     int ret;
+    const char* expected_speed = __motor_motion_speed(actuator);
 
-    if (
-        actuator == NULL || speed == NULL ||
-        (
-            (strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0) &&
-            (strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0) &&
-            (strcmp(actuator, "tail_lr") != 0 || strcmp(speed, "1") != 0)
-        )
-    ) {
+    if (speed == NULL || expected_speed == NULL || strcmp(speed, expected_speed) != 0) {
         return -1;
     }
     ret = posix_spawn(&pid, executable, NULL, NULL, argv, environ);
@@ -2162,7 +2182,7 @@ static void* __run_function_call(void* arg) {
         bool is_tail = strcmp(task->name, "wag_tail") == 0;
         const char* action_name = is_tail ? "摇尾" : (is_nod ? "点头" : "摇头");
         const char* actuator = is_tail ? "tail_lr" : (is_nod ? "head_ud" : "head_lr");
-        const char* speed = (is_tail || !is_nod) ? "1" : "2";
+        const char* speed = __motor_motion_speed(actuator);
         char personality_name[PERSONALITY_NAME_MAX_LEN + 1];
         uint64_t now_ms;
         if (!__personality_allows_motion(

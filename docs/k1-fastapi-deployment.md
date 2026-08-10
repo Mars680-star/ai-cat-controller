@@ -21,6 +21,7 @@ AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
 AI_CAT_ENABLE_TAIL_MOTION=false
+AI_CAT_MOTION_PROFILE=legacy_safe
 AI_CAT_ENABLE_TOUCH_MOTION=true
 AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS=3.0
 AI_CAT_ENABLE_TOUCH_SPEECH=true
@@ -33,6 +34,12 @@ AI_CAT_TOUCH_EVENT_LOG_PATH=/root/.log/main_log
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
 AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
+
+For the factory-smooth motor profile recovered from device `7c2b63fd4a128`,
+install the updated native helper and set
+`AI_CAT_MOTION_PROFILE=k1_vendor_smooth`. Do not use that value on another
+device until its motor index, GPIO and physical range match
+`docs/k1-motion-profiles.md`.
 
 Copy `deploy/systemd/ai-cat-controller.service.example`, replace every
 `AI_CAT_*` placeholder, and review the resulting unit before installation.

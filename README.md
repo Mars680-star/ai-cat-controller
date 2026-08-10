@@ -35,6 +35,10 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - 根据当前 K1 样机实测修正触摸接线标签：厂商日志的 `nose` 对应实体头部、`head`
   对应实体鼻部、`back` 对应实体左爪、`left_foot` 对应实体背部，右爪不变；事件
   中同时保留 `hardware_sensor` 原始标签，便于后续检修接线。
+- 记录第二台 K1（序列号 `7c2b63fd4a128`）原厂顺滑动作参数：头部左右、上下和
+  尾部均使用归一化目标 `180 -> 0 -> 90`、速度级别 `3`、极限位停留 `100 ms`；
+  新增显式 `k1_vendor_smooth` 配置。默认 `legacy_safe` 不变，避免影响旧设备。
+  GPIO、电机编号、有效摆幅和其他原厂动作见 `docs/k1-motion-profiles.md`。
 - FastAPI systemd 模板改用 `pulse-access` 主组和固定 PulseAudio socket；新增
   音量命令白名单、状态解析、失败处理、触摸日志增量/半行处理及部署约束测试。
 - 完成双眼显示能力调查：板端 `toy_ui 1.1.10` 可通过 DDS `CUSTOM_MEDIA` 显示
@@ -45,7 +49,7 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
   静音状态和 SQLite 持久值一致；实体右脚、鼻部和背部触摸共 4 次均被导入，
   亲密度由 `32` 增加到 `36`。部署前备份位于
   `/root/ai-cat-backups/before-volume-touch-20260810-1315/`。
-- 本地编译检查通过，自动测试更新为 `159 passed`。
+- 本地编译检查通过，自动测试更新为 `163 passed`。
 
 ### 2026-08-07
 
@@ -220,9 +224,10 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - Local K1 固定摇头、点头和停止动作，以及默认关闭的维修后摇尾接口。
 - 火山引擎 K1 补丁、唤醒词入口和硬件应用源码。
 
-Local K1 只执行固定的 `head_lr 1`、`head_ud 2`、`motor stop` 命令。摇尾只在
-维修并完成低速验收后设置 `AI_CAT_ENABLE_TAIL_MOTION=true` 才开放固定的
-`tail_lr 1`；默认返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
+Local K1 只执行所选硬件配置中的固定命令：`legacy_safe` 使用 `head_lr 1`、
+`head_ud 2`，新设备验收配置 `k1_vendor_smooth` 使用对应的速度 `3`；两者均只
+允许固定 `motor stop`。摇尾还必须显式设置 `AI_CAT_ENABLE_TAIL_MOTION=true`，
+否则返回 `501`。对话 API 只允许向 `volc-conv-ai.service` 发送
 固定的 `SIGHUP`/`SIGUSR1`/`SIGUSR2`，并只允许按需启动这一个固定服务。产品
 Mock 的回答仍是本地模板，不会消耗火山服务；Local K1 使用同一性格定义中的
 真实火山音色 ID 和提示词。

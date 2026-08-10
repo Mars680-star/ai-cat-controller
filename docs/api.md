@@ -76,10 +76,14 @@ cannot override native motor parameters. The fixed mappings are:
 
 | API | Local K1 command | Availability |
 |---|---|---|
-| `/motion/head/shake` | `/usr/bin/ai-toy_app motor head_lr 1` | Enabled after board validation. |
-| `/motion/head/nod` | `/usr/bin/ai-toy_app motor head_ud 2` | Enabled after board validation. |
-| `/motion/tail/wag` | `/usr/bin/ai-toy_app motor tail_lr 1` | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
+| `/motion/head/shake` | `head_lr` with the selected fixed profile speed | Enabled after board/profile validation. |
+| `/motion/head/nod` | `head_ud` with the selected fixed profile speed | Enabled after board/profile validation. |
+| `/motion/tail/wag` | `tail_lr` with the selected fixed profile speed | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
 | `/motion/stop` | `/usr/bin/ai-toy_app motor stop` | Idempotent; also stops a voice-started motor process. |
+
+`legacy_safe` maps those commands to speeds `1`, `2`, `1`. The separately
+reviewed `k1_vendor_smooth` profile maps all three to speed `3`; see
+`k1-motion-profiles.md` for the device-specific evidence and ranges.
 
 Overlapping motion returns `409`. An unavailable tail action returns `501`.
 Timeout and cancellation first send `SIGTERM`; the native routine idles the

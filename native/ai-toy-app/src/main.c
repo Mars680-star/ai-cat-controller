@@ -105,7 +105,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
     {
         "head_ud",
         {
-            .motor_index = 3,
+            .motor_index = 2,
             .step_gpio = 34,
             .dir_gpio = 35,
             .enable_gpio = 36,
@@ -123,7 +123,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
     {
         "tail_lr",
         {
-            .motor_index = 2,
+            .motor_index = 3,
             .step_gpio = 37,
             .dir_gpio = 38,
             .enable_gpio = 39,
@@ -514,6 +514,7 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
     struct motor_state state;
     /* Match the board service's accepted right-left-center gesture. */
     const float positions[] = {180.0f, 0.0f, 90.0f};
+    const useconds_t settle_delay_us = speed >= 3.0f ? 100000U : 500000U;
 
     if (!fixed)
         return 1;
@@ -545,7 +546,7 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         motor_get_state_one(motor, &state);
         printf("[motor] target=%.1f pos=%.2f vel=%.2f trq=%.2f\n",
             cmd.pos_des, state.pos, state.vel, state.trq);
-        usleep(500000);
+        usleep(settle_delay_us);
     }
 
     cmd.mode = MOTOR_MODE_IDLE;
@@ -597,7 +598,7 @@ static int parse_motor_speed(const char *text, float *speed)
         if (errno || end == text || *end != '\0')
             return -1;
     }
-    if (value < 1 || value > 2)
+    if (value < 1 || value > 3)
         return -1;
     *speed = (float)value;
     return 0;
@@ -694,7 +695,7 @@ static int run_motor(int argc, char **argv)
         return 1;
     }
     if (argc > 2 || parse_motor_speed(argc > 1 ? argv[1] : NULL, &speed) != 0) {
-        fprintf(stderr, "motor speed must be 1 or 2\n");
+        fprintf(stderr, "motor speed must be 1, 2 or 3\n");
         return 1;
     }
 

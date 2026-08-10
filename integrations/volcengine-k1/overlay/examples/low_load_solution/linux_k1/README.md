@@ -70,9 +70,10 @@ the bot's `LLMConfig.Tools` in the Volcengine console:
 ]
 ```
 
-The K1 implementation executes `/usr/bin/ai-toy_app motor head_lr 1` and sends
-a `function_call_output` event back to the bot. Verify that command manually
-before testing the voice-triggered action.
+The K1 implementation executes the fixed `head_lr` command selected by
+`AI_CAT_MOTION_PROFILE` and sends a `function_call_output` event back to the
+bot. The default is speed 1; the reviewed new-device profile uses speed 3.
+Verify the selected command manually before testing the voice-triggered action.
 
 ## Weather function call
 
@@ -130,6 +131,8 @@ Set `AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180`,
 `AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0`,
 `AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true`, and
 `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false` in `/etc/ai-cat-controller.env`.
+Set `AI_CAT_MOTION_PROFILE=legacy_safe` unless the exact device has passed the
+`k1_vendor_smooth` checks documented in `docs/k1-motion-profiles.md`.
 Playback uses PulseAudio and never starts `volc-conv-ai.service`. The wake-word
 process releases capture while `/run/ai-cat/local-speech-active` exists and
 resumes automatically after playback. Local playback waits 2.2 seconds after

@@ -179,6 +179,23 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_head_actions_use_recorded_vendor_smooth_profile() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={"motion_profile": "k1_vendor_smooth"}
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.shake_head(0.1, 100)
+    await adapter.nod_head(1.0, 3000)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "head_lr", "3")),
+        ("/usr/bin/ai-toy_app", ("motor", "head_ud", "3")),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_local_tail_action_is_disabled() -> None:
     adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
 
@@ -197,6 +214,24 @@ async def test_local_tail_action_uses_fixed_low_speed_when_enabled() -> None:
     assert adapter.supports(Capability.WAG_TAIL) is True
     assert runner.calls == [
         ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "1")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_tail_action_uses_recorded_vendor_smooth_profile() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={
+            "enable_tail_motion": True,
+            "motion_profile": "k1_vendor_smooth",
+        }
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.wag_tail(0.5, 600)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "3")),
     ]
 
 

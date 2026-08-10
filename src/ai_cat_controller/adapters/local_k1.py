@@ -507,7 +507,11 @@ class LocalK1Adapter(AiCatAdapter):
     ) -> None:
         if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
             raise ValueError("头部动作参数超出安全预设范围")
-        speed = "1" if actuator == "head_lr" else "2"
+        speed = (
+            "3"
+            if self._settings.motion_profile == "k1_vendor_smooth"
+            else ("1" if actuator == "head_lr" else "2")
+        )
         result = await self._runner.run(
             str(self._settings.hardware_binary),
             ["motor", actuator, speed],
@@ -534,9 +538,12 @@ class LocalK1Adapter(AiCatAdapter):
             )
         if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
             raise ValueError("尾部动作参数超出安全预设范围")
+        speed = (
+            "3" if self._settings.motion_profile == "k1_vendor_smooth" else "1"
+        )
         result = await self._runner.run(
             str(self._settings.hardware_binary),
-            ["motor", "tail_lr", "1"],
+            ["motor", "tail_lr", speed],
         )
         if result.timed_out:
             raise DeviceUnavailableError("尾部动作执行超时，已请求电机停止")

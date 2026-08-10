@@ -14,13 +14,16 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
     hardware_binary = str(settings.hardware_binary)
     systemctl_binary = str(settings.systemctl_binary)
     pulseaudio_ctl_binary = str(settings.pulseaudio_ctl_binary)
+    smooth_profile = settings.motion_profile == "k1_vendor_smooth"
     hardware_commands = {
-        ("motor", "head_lr", "1"),
-        ("motor", "head_ud", "2"),
+        ("motor", "head_lr", "3" if smooth_profile else "1"),
+        ("motor", "head_ud", "3" if smooth_profile else "2"),
         ("motor", "stop"),
     }
     if settings.enable_tail_motion:
-        hardware_commands.add(("motor", "tail_lr", "1"))
+        hardware_commands.add(
+            ("motor", "tail_lr", "3" if smooth_profile else "1")
+        )
     pulseaudio_commands = {
         ("get-sink-volume", "@DEFAULT_SINK@"),
         ("get-sink-mute", "@DEFAULT_SINK@"),

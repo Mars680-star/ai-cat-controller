@@ -19,6 +19,7 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_API_PORT": "9000",
             "AI_CAT_LOG_LEVEL": "debug",
             "AI_CAT_MOTION_COOLDOWN_SECONDS": "0.5",
+            "AI_CAT_MOTION_PROFILE": "k1_vendor_smooth",
             "AI_CAT_ENABLE_TAIL_MOTION": "true",
             "AI_CAT_ENABLE_TOUCH_MOTION": "false",
             "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS": "4.5",
@@ -42,6 +43,7 @@ def test_environment_values_are_parsed() -> None:
     assert settings.api_port == 9000
     assert settings.log_level == "DEBUG"
     assert settings.motion_cooldown_seconds == 0.5
+    assert settings.motion_profile == "k1_vendor_smooth"
     assert settings.enable_tail_motion is True
     assert settings.enable_touch_motion is False
     assert settings.touch_motion_cooldown_seconds == 4.5
@@ -64,6 +66,11 @@ def test_environment_values_are_parsed() -> None:
 def test_local_k1_requires_api_key() -> None:
     with pytest.raises(ValidationError, match="requires AI_CAT_API_KEY_ENABLED"):
         Settings(hardware_driver="local_k1")
+
+
+def test_unknown_motion_profile_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(motion_profile="unreviewed_fast_profile")
 
 
 def test_enabled_auth_requires_nonempty_key() -> None:

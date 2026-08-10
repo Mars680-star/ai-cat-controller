@@ -164,10 +164,14 @@ capability instead of waiting until the 30-second watchdog expires.
 The three motion tools must be parameterless. The device ignores model-provided
 motor details and maps accepted tools to fixed native commands:
 
-- `shake_head` -> `motor head_lr 1`
-- `nod_head` -> `motor head_ud 2`
-- `wag_tail` -> `motor tail_lr 1`, only when
+- `shake_head` -> fixed `head_lr` command for `AI_CAT_MOTION_PROFILE`
+- `nod_head` -> fixed `head_ud` command for `AI_CAT_MOTION_PROFILE`
+- `wag_tail` -> fixed `tail_lr` command for `AI_CAT_MOTION_PROFILE`, only when
   `AI_CAT_ENABLE_TAIL_MOTION=true`
+
+The default `legacy_safe` speeds are `1`, `2`, `1`; device
+`7c2b63fd4a128` may use the recorded `k1_vendor_smooth` speed `3` only after
+installing and physically accepting the updated native helper.
 
 Configure `shake_head` for requests such as 摇头、左右摆头 or 否定，and
 `nod_head` for 点头、上下点头 or 同意. Do not expose `wag_tail` in the cloud
