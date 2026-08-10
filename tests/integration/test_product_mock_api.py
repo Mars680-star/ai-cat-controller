@@ -159,6 +159,61 @@ def test_intimacy_idempotency_daily_cap_and_unlocks(client: TestClient) -> None:
     assert any(event["points_delta"] == 0 for event in intimacy["history"])
 
 
+def test_debug_unlimited_touch_bypasses_only_touch_limits(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            debug_unlimited_touch_intimacy=True,
+            intimacy_daily_cap=3,
+            enable_touch_motion=False,
+            data_path=tmp_path / "unlimited-touch.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="unlimited-touch-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-UNLIMITED-TOUCH",
+        )["pet"]["pet_id"]
+
+        events = []
+        for index in range(10):
+            events.append(
+                test_client.post(
+                    f"/api/v1/pets/{pet_id}/interactions",
+                    headers=headers,
+                    json={
+                        "event_type": "touch",
+                        "request_id": f"debug-touch-{index}",
+                    },
+                ).json()["data"]
+            )
+        duplicate = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "touch", "request_id": "debug-touch-0"},
+        ).json()["data"]
+        task = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "limited-task"},
+        ).json()["data"]
+        intimacy = test_client.get(
+            f"/api/v1/pets/{pet_id}/intimacy",
+            headers=headers,
+        ).json()["data"]
+
+        assert all(event["points_delta"] == 1 for event in events)
+        assert events[-1]["points_after"] == 10
+        assert duplicate["duplicate"] is True
+        assert duplicate["points_after"] == 1
+        assert task["points_delta"] == 0
+        assert intimacy["points"] == 10
+        assert intimacy["debug_unlimited_touch_intimacy"] is True
+
+
 def test_physical_touch_starts_safe_action_and_preserves_cooldown(
     client: TestClient,
 ) -> None:

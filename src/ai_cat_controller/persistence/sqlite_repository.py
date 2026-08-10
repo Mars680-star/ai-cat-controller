@@ -361,6 +361,7 @@ class SQLiteRepository:
         base_points: int,
         max_per_day: int,
         daily_cap: int,
+        enforce_limits: bool,
         request_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
@@ -383,28 +384,31 @@ class SQLiteRepository:
                 result["duplicate"] = True
                 return result
 
-            event_count = connection.execute(
-                """
-                SELECT COUNT(*) FROM interaction_events
-                WHERE pet_id = ? AND event_type = ?
-                  AND substr(created_at, 1, 10) = ?
-                """,
-                (pet_id, event_type, today),
-            ).fetchone()[0]
-            positive_today = connection.execute(
-                """
-                SELECT COALESCE(SUM(points_delta), 0) FROM interaction_events
-                WHERE pet_id = ? AND points_delta > 0
-                  AND substr(created_at, 1, 10) = ?
-                """,
-                (pet_id, today),
-            ).fetchone()[0]
+            event_count = 0
+            positive_today = 0
+            if enforce_limits:
+                event_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM interaction_events
+                    WHERE pet_id = ? AND event_type = ?
+                      AND substr(created_at, 1, 10) = ?
+                    """,
+                    (pet_id, event_type, today),
+                ).fetchone()[0]
+                positive_today = connection.execute(
+                    """
+                    SELECT COALESCE(SUM(points_delta), 0) FROM interaction_events
+                    WHERE pet_id = ? AND points_delta > 0
+                      AND substr(created_at, 1, 10) = ?
+                    """,
+                    (pet_id, today),
+                ).fetchone()[0]
 
             reason: str | None = None
-            if event_count >= max_per_day:
+            if enforce_limits and event_count >= max_per_day:
                 points_delta = 0
                 reason = "该互动今日已达到次数上限"
-            elif base_points > 0:
+            elif enforce_limits and base_points > 0:
                 remaining = max(daily_cap - int(positive_today), 0)
                 points_delta = min(base_points, remaining)
                 if points_delta == 0:

@@ -61,6 +61,8 @@ Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖
 每个事件必须携带 `request_id`。重复 ID 返回原结果，不重复计分。Local K1 会从
 `toy_main` 日志增量导入头部、背部、左右脚和鼻部的实体触摸，并复用相同的幂等、
 每日次数与总增长上限。监控从文件末尾开始，不会在服务重启后重放历史触摸。
+现场调试可临时设置 `AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY=true`，仅让 `touch`
+事件跳过每日次数和总增长上限；幂等保护以及其他互动规则不变，正式环境必须关闭。
 当前 K1 样机的厂商日志标签与实体接线不一致，输入层会将 `nose`/`head` 和
 `back`/`left_foot` 分别交换，`right_foot` 保持不变；原始标签记录在
 `hardware_sensor`，后续动作、语音和亲密度均使用修正后的 `sensor`。

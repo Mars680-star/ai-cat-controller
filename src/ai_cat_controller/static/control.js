@@ -690,7 +690,9 @@
     ui.growthProgressCopy.textContent = data.progress.next_level === null
       ? "已达到最高等级"
       : `${data.points} / ${data.progress.next_level}`;
-    ui.growthDailyCap.textContent = `每日增长上限 ${data.daily_growth_cap}`;
+    ui.growthDailyCap.textContent = data.debug_unlimited_touch_intimacy
+      ? "触摸计分不限（调试）"
+      : `每日增长上限 ${data.daily_growth_cap}`;
     fillList(ui.currentUnlocks, data.current_unlocks, "暂无");
     fillList(ui.nextUnlocks, data.next_unlocks, "已全部解锁");
     renderInteractionHistory(data.history);

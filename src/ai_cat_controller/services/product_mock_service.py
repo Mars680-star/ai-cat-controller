@@ -200,6 +200,9 @@ class ProductMockService:
         return {
             **dashboard["intimacy"],
             "daily_growth_cap": self._settings.intimacy_daily_cap,
+            "debug_unlimited_touch_intimacy": (
+                self._settings.debug_unlimited_touch_intimacy
+            ),
             "rules": [rule.model_dump() for rule in INTERACTION_RULES.values()],
             "history": history,
             "current_unlocks": current_level.unlocks,
@@ -216,6 +219,10 @@ class ProductMockService:
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
         rule = INTERACTION_RULES[event_type]
+        enforce_limits = not (
+            event_type == "touch"
+            and self._settings.debug_unlimited_touch_intimacy
+        )
         event = await asyncio.to_thread(
             self._repository.apply_interaction,
             user_id=user_id,
@@ -224,6 +231,7 @@ class ProductMockService:
             base_points=rule.points,
             max_per_day=rule.max_per_day,
             daily_cap=self._settings.intimacy_daily_cap,
+            enforce_limits=enforce_limits,
             request_id=request_id,
             metadata=metadata,
         )

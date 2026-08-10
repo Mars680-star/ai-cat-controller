@@ -37,6 +37,7 @@ class Settings(BaseModel):
     motion_profile: Literal["legacy_safe", "k1_vendor_smooth"] = "legacy_safe"
     enable_tail_motion: bool = False
     debug_unlock_all_actions: bool = False
+    debug_unlimited_touch_intimacy: bool = False
     enable_touch_motion: bool = True
     touch_motion_cooldown_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     enable_touch_speech: bool = False
@@ -153,6 +154,9 @@ class Settings(BaseModel):
             "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
             "debug_unlock_all_actions": source.get(
                 "AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS", "false"
+            ),
+            "debug_unlimited_touch_intimacy": source.get(
+                "AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY", "false"
             ),
             "enable_touch_motion": source.get(
                 "AI_CAT_ENABLE_TOUCH_MOTION", "true"
