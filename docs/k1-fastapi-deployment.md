@@ -72,9 +72,9 @@ Touch feedback is submitted through the same serialized motion service used by
 the REST API: head/back touches nod, while nose/foot touches shake. Dialog-busy,
 motor-busy and cooldown cases keep the intimacy event but skip motor movement.
 When touch speech is enabled, the controller waits for the accepted motion to
-finish and plays only the allowlisted local WAV for that personality and sensor.
-The 25 `touch-*.wav` assets must exist before enabling the flag; no cloud fallback
-is used when an asset is unavailable.
+finish and plays only the shared allowlisted local WAV for that sensor. The five
+`assets/local-speech/shared/touch-*.wav` files must exist before enabling the
+flag; no cloud fallback is used when an asset is unavailable.
 
 ## Validate
 

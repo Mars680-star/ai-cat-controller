@@ -4,7 +4,11 @@ import stat
 import pytest
 
 from ai_cat_controller.core.config import Settings
-from ai_cat_controller.domain.personalities import PERSONALITIES
+from ai_cat_controller.domain.personalities import (
+    PERSONALITIES,
+    VOLCENGINE_CONSOLE_VOICE_ID,
+    VOLCENGINE_CONSOLE_VOICE_NAME,
+)
 from ai_cat_controller.services.personality_service import PersonalityService
 
 
@@ -18,7 +22,7 @@ def _pet(personality_id: str, *, points: int = 0) -> dict[str, object]:
     }
 
 
-def test_five_personalities_have_distinct_volcengine_runtime_profiles() -> None:
+def test_five_personalities_share_console_voice_and_keep_distinct_profiles() -> None:
     service = PersonalityService(Settings())
     profiles = [
         service._build_profile(_pet(personality.personality_id))
@@ -26,27 +30,24 @@ def test_five_personalities_have_distinct_volcengine_runtime_profiles() -> None:
     ]
 
     assert len(profiles) == 5
-    assert len({profile["voice_type"] for profile in profiles}) == 5
+    assert {profile["voice_type"] for profile in profiles} == {
+        VOLCENGINE_CONSOLE_VOICE_ID
+    }
+    assert {profile["voice_name"] for profile in profiles} == {
+        VOLCENGINE_CONSOLE_VOICE_NAME
+    }
     assert len({profile["revision"] for profile in profiles}) == 5
     for personality, profile in zip(PERSONALITIES, profiles, strict=True):
         update_config = profile["session_update"]["session"]["config"]
         assert set(personality.voice_function_triggers.values()).issubset(
             personality.allowed_voice_functions
         )
-        assert profile["voice_type"] == personality.voice_id
+        assert profile["voice_source"] == "volcengine_console"
         assert profile["personality_name"] in profile["system_prompt"]
         assert update_config["LLMConfig"]["SystemMessages"] == [
             profile["system_prompt"]
         ]
-        assert (
-            update_config["TTSConfig"]["ProviderParams"]["audio"]["voice_type"]
-            == personality.voice_id
-        )
-        assert update_config["TTSConfig"]["Provider"] == "volcano_bidirection"
-        assert (
-            update_config["TTSConfig"]["ProviderParams"]["ResourceId"]
-            == "volc.service_type.10029"
-        )
+        assert "TTSConfig" not in update_config
 
 
 def test_intimacy_level_changes_address_prompt_and_revision() -> None:

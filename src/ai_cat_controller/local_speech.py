@@ -43,14 +43,11 @@ def phrase_asset_path(
 
 def touch_phrase_asset_path(
     asset_root: Path,
-    personality_id: str,
     sensor: str,
 ) -> Path:
-    if personality_id not in PERSONALITY_BY_ID:
-        raise LocalSpeechError("unknown personality for local speech")
     if sensor not in TOUCH_PHRASES:
         raise LocalSpeechError("touch sensor is not allowlisted for local speech")
-    return asset_root / personality_id / f"touch-{sensor}.wav"
+    return asset_root / "shared" / f"touch-{sensor}.wav"
 
 
 class LocalPhrasePlayer:
@@ -79,10 +76,9 @@ class LocalPhrasePlayer:
         )
         return self._play_asset(expected_path, "personality-phrase")
 
-    def play_touch(self, personality_id: str, sensor: str) -> Path:
+    def play_touch(self, sensor: str) -> Path:
         expected_path = touch_phrase_asset_path(
             self._asset_root,
-            personality_id,
             sensor,
         )
         return self._play_asset(expected_path, f"touch-{sensor}")

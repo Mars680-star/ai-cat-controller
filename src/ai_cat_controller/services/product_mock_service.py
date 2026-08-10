@@ -783,7 +783,6 @@ class ProductMockService:
             pet_id=str(pet["pet_id"]),
             request_id=request_id,
             sensor=str(metadata.get("sensor", "")),
-            personality_id=str(pet["personality_id"]),
             duplicate=bool(event.get("duplicate")),
         )
         return event
@@ -795,7 +794,6 @@ class ProductMockService:
         pet_id: str,
         request_id: str,
         sensor: str,
-        personality_id: str,
         duplicate: bool,
     ) -> dict[str, Any]:
         action_id = TOUCH_ACTION_BY_SENSOR.get(sensor)
@@ -850,7 +848,7 @@ class ProductMockService:
             speech_scheduled = False
             if self._settings.enable_touch_speech:
                 speech_task = asyncio.create_task(
-                    self._play_touch_phrase_after_motion(personality_id, sensor),
+                    self._play_touch_phrase_after_motion(sensor),
                     name=f"touch-speech-{request_id}",
                 )
                 self._finalizers.add(speech_task)
@@ -865,7 +863,6 @@ class ProductMockService:
 
     async def _play_touch_phrase_after_motion(
         self,
-        personality_id: str,
         sensor: str,
     ) -> None:
         try:
@@ -883,7 +880,6 @@ class ProductMockService:
                 return
             path = await asyncio.to_thread(
                 self._touch_phrase_player.play_touch,
-                personality_id,
                 sensor,
             )
             LOGGER.info("touch phrase played: %s", path)

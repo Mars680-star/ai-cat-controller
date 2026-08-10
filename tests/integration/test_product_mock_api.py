@@ -293,15 +293,14 @@ def test_physical_touch_plays_local_phrase_after_motion(
     monkeypatch,
     tmp_path,
 ) -> None:
-    played: list[tuple[str, str]] = []
+    played: list[str] = []
 
     def fake_play_touch(
         self: LocalPhrasePlayer,
-        personality_id: str,
         sensor: str,
     ) -> Path:
         del self
-        played.append((personality_id, sensor))
+        played.append(sensor)
         return tmp_path / "touch.wav"
 
     monkeypatch.setattr(LocalPhrasePlayer, "play_touch", fake_play_touch)
@@ -316,7 +315,7 @@ def test_physical_touch_plays_local_phrase_after_motion(
     )
     with TestClient(app) as test_client:
         headers, _ = _login(test_client, code="touch-speech-user")
-        bound = _bind(test_client, headers, serial="K1-TOUCH-SPEECH")
+        _bind(test_client, headers, serial="K1-TOUCH-SPEECH")
         event = _add_device_touch(
             test_client,
             serial="K1-TOUCH-SPEECH",
@@ -328,7 +327,7 @@ def test_physical_touch_plays_local_phrase_after_motion(
         while not played and time.monotonic() < deadline:
             time.sleep(0.01)
 
-    assert played == [(bound["pet"]["personality_id"], "back")]
+    assert played == ["back"]
 
 
 def test_action_catalog_rejects_locked_and_tracks_idempotency(

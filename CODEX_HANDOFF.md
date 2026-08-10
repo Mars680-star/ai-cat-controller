@@ -62,7 +62,7 @@ AI_CAT_API_HOST=0.0.0.0 ./scripts/run_mock.sh
 ```text
 src/ai_cat_controller/       FastAPI、REST API、网页、业务服务和硬件适配器
 tests/                       Mock、Local K1、安全边界和源码约束测试
-assets/local-speech/         5 种性格各 3 条本地 WAV，共 15 条
+assets/local-speech/         15 条性格主动 WAV + 5 条共享触摸 WAV
 native/dialog/               当前对话主程序的可读源码快照
 native/wake-word/            “小安小安”本地唤醒入口
 native/ai-toy-app/           K1 固定安全电机命令应用层
@@ -88,7 +88,8 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
 - 设置页可在显式开启调试开关后，一键备份并格式化全部产品体验数据，供重新拍摄
   登录、绑定和性格盲盒流程；火山鉴权、License、SDK 与系统配置不在清理范围内。
 - 5 种持久化性格：元气探险家、温柔陪伴者、傲娇小明星、好奇小博士、沉稳守护者。
-  每种性格已绑定独立提示词、火山音色、动作白名单和本地主动短语。
+  每种性格已绑定独立提示词、动作白名单和本地主动短语；所有 TTS 统一使用火山
+  控制台当前音色，运行时不发送 `TTSConfig`。
 - 5 个亲密度等级、每日正向增长上限 `50`、称呼/动作解锁和 SQLite 持久化。
 - 真机电量、充电器在线、充电状态和电压读取；语音可通过 Function Calling 查询。
 - 网页音量直接控制 K1 PulseAudio 默认输出，页面同步实际音量；FastAPI systemd
@@ -96,8 +97,8 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
 - 头部、背部、左右脚和鼻部实体触摸从 `toy_main` 日志增量导入亲密度，复用
   request ID 幂等、每日次数和总增长上限；头部/背部映射安全点头，鼻部/左右脚
   映射安全摇头，对话忙、电机忙及 3 秒冷却内跳过动作；完成任务由网页按钮确认。
-- 5 种性格各有 5 个本地触摸 WAV，共 25 个；触摸动作结束后按部位播放对应性格
-  音色，不启动火山云端，并通过 `/run/ai-cat/local-speech-active` 暂停本地唤醒。
+- 5 个共享本地触摸 WAV 使用控制台当前音色预生成；触摸动作结束后按部位播放，
+  不启动火山云端，并通过 `/run/ai-cat/local-speech-active` 暂停本地唤醒。
 - 当前 K1 样机触摸接线需在日志输入层映射：`nose -> head`、`head -> nose`、
   `back -> left_foot`、`left_foot -> back`、`right_foot -> right_foot`。业务元数据
   的 `sensor` 是修正后的实体部位，`hardware_sensor` 保留厂商日志原值。
@@ -184,7 +185,7 @@ K1 真实语音和电机还需要物理板、厂商依赖及独立保存的部�
 - `volc-conv-ai.service` 使用 `Restart=on-failure` 且不开机启用；正常空闲退出后
   不应被 systemd 自动拉起。
 - 本地主动短语必须从仓库内 15 个 WAV 白名单选择，不允许 HTTP 指定任意音频路径。
-- 触摸短语必须从仓库内 25 个 `touch-*.wav` 白名单选择；生产播放开关为
+- 触摸短语必须从仓库内 5 个共享 `touch-*.wav` 白名单选择；生产播放开关为
   `AI_CAT_ENABLE_TOUCH_SPEECH`，不得回退到任意路径或云端自由文本。
 - `AI_CAT_ENABLE_PRODUCT_DATA_RESET` 默认关闭；临时开启时仍必须通过 API Key、
   有效体验会话和固定确认词校验，语音会话进行中不得执行。备份只保存在数据库
@@ -200,7 +201,8 @@ K1 真实语音和电机还需要物理板、厂商依赖及独立保存的部�
 3. 把 K1 外部模型、共享库和凭据恢复流程做成不含秘密的板端部署检查清单。
 4. 继续评估 K1 约 1 GiB 内存下的常驻唤醒占用、zram/swap 和长时间稳定性。
 5. 接入正式微信小程序、用户鉴权、设备绑定网关、HTTPS 和云端多用户数据隔离。
-6. 逐一人工验收其余性格音色；完成 RTC、视频和厂商 SDK 其余未覆盖 API 的测试。
+6. 控制台更换音色后重新采集并抽听 20 个本地 WAV；完成 RTC、视频和厂商 SDK
+   其余未覆盖 API 的测试。
 
 已知边界：当前并未测试完厂商 SDK 的全部 API；已重点验证设备鉴权、WebSocket
 实时会话、ASR/LLM/TTS、Function Calling、音频播放、唤醒、文字提问、电量查询、

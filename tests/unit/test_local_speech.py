@@ -59,7 +59,7 @@ def test_local_player_rejects_phrase_from_another_personality(tmp_path: Path) ->
 
 def test_local_player_uses_fixed_touch_asset(tmp_path: Path) -> None:
     marker = tmp_path / "run" / "local-speech-active"
-    asset = touch_phrase_asset_path(tmp_path, "sunny_explorer", "nose")
+    asset = touch_phrase_asset_path(tmp_path, "nose")
     asset.parent.mkdir(parents=True)
     asset.write_bytes(b"RIFF-touch")
     commands: list[list[str]] = []
@@ -77,7 +77,7 @@ def test_local_player_uses_fixed_touch_asset(tmp_path: Path) -> None:
         run_command=run_command,
     )
 
-    played = player.play_touch("sunny_explorer", "nose")
+    played = player.play_touch("nose")
 
     assert played == asset
     assert commands[0][1:3] == [
@@ -91,7 +91,7 @@ def test_local_player_rejects_unknown_touch_sensor(tmp_path: Path) -> None:
     player = LocalPhrasePlayer(asset_root=tmp_path)
 
     with pytest.raises(LocalSpeechError, match="not allowlisted"):
-        player.play_touch("sunny_explorer", "arbitrary_gpio")
+        player.play_touch("arbitrary_gpio")
 
 
 def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
@@ -115,18 +115,16 @@ def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
             assert stream.getnframes() > 48_000
 
 
-def test_repository_contains_all_twenty_five_touch_voice_assets() -> None:
+def test_repository_contains_five_shared_touch_voice_assets() -> None:
     paths = [
         touch_phrase_asset_path(
             REPOSITORY_ASSETS,
-            personality.personality_id,
             sensor,
         )
-        for personality in PERSONALITIES
         for sensor in TOUCH_PHRASES
     ]
 
-    assert len(paths) == 25
+    assert len(paths) == 5
     for path in paths:
         assert path.is_file()
         with wave.open(str(path), "rb") as stream:
