@@ -162,6 +162,10 @@ class PersonalityService:
                         "LLMConfig": {
                             "SystemMessages": [profile_core["system_prompt"]],
                         },
+                        "SubtitleConfig": {
+                            "DisableRTSSubtitle": False,
+                            "SubtitleMode": 1,
+                        },
                     },
                 },
             },

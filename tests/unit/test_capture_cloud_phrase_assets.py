@@ -27,6 +27,10 @@ def test_capture_runtime_removes_tts_override_without_mutating_source() -> None:
                 "object": "realtime.session",
                 "config": {
                     "LLMConfig": {"SystemMessages": ["keep this prompt"]},
+                    "SubtitleConfig": {
+                        "DisableRTSSubtitle": False,
+                        "SubtitleMode": 1,
+                    },
                     "TTSConfig": {
                         "ProviderParams": {
                             "audio": {"voice_type": "legacy_voice_id"}
@@ -45,6 +49,10 @@ def test_capture_runtime_removes_tts_override_without_mutating_source() -> None:
     assert result["voice_type"] == "volcengine_console"
     assert result["voice_source"] == "volcengine_console"
     assert config["LLMConfig"] == {"SystemMessages": ["keep this prompt"]}
+    assert config["SubtitleConfig"] == {
+        "DisableRTSSubtitle": False,
+        "SubtitleMode": 1,
+    }
     assert "TTSConfig" not in config
     assert original["voice_type"] == "legacy_voice_id"
     assert "TTSConfig" in original["session_update"]["session"]["config"]

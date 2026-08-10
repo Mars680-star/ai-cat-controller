@@ -86,6 +86,22 @@ class ProductMockService:
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
         await self._personality.initialize(self._repository)
+        await self._sync_bound_native_dialog_events()
+
+    async def _sync_bound_native_dialog_events(self) -> None:
+        events = await asyncio.to_thread(self._read_native_dialog_events)
+        device_serials = sorted({event["device_serial"] for event in events})
+        for device_serial in device_serials:
+            pet = await asyncio.to_thread(
+                self._repository.get_pet_by_serial,
+                device_serial,
+            )
+            if pet is None or not pet.get("owner_user_id"):
+                continue
+            await self._sync_native_dialog_events(
+                str(pet["owner_user_id"]),
+                str(pet["pet_id"]),
+            )
 
     def _action_is_unlocked(
         self, action: Any, personality_id: str, intimacy_level: int

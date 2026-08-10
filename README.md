@@ -84,6 +84,11 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - 已在 K1 上以控制台当前音色重新生成 15 条性格主动短语和 5 条共享触摸短语，
   共 20 个本地 WAV。控制台以后更换音色时，需要重新运行
   `tools/capture_cloud_phrase_assets.py --kind all` 才能同步更新离线语音。
+- 恢复真机对话历史：火山智能体必须开启“字幕显示”，运行时性格更新持续携带
+  `SubtitleConfig(DisableRTSSubtitle=false, SubtitleMode=1)`，防止性格切换覆盖字幕
+  回调。FastAPI 现在启动时即按设备序列号和当前绑定关系幂等导入
+  `dialog-events.jsonl`，不再要求浏览器历史页保持打开；文字和真实语音问答均已在
+  新 K1 上验证为同一会话内的用户、助手双向记录。
 
 ### 2026-08-07
 

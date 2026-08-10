@@ -705,6 +705,71 @@ def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> No
         assert first[0]["voice_id"] == "volcengine_tts"
 
 
+def test_native_dialog_events_are_imported_during_application_restart(
+    tmp_path,
+) -> None:
+    event_path = tmp_path / "dialog-events.jsonl"
+    database_path = tmp_path / "native-dialog-restart.db"
+    settings = Settings(
+        hardware_driver="mock",
+        motion_cooldown_seconds=0.0,
+        data_path=database_path,
+        dialog_event_path=event_path,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers, login = _login(client, code="native-dialog-restart-user")
+        pet_id = _bind(
+            client,
+            headers,
+            serial="K1-NATIVE-RESTART",
+        )["pet"]["pet_id"]
+        user_id = login["user"]["user_id"]
+
+    created_at_ms = int(time.time() * 1000) + 100
+    event_path.write_text(
+        "\n".join(
+            json.dumps(event, ensure_ascii=False)
+            for event in (
+                {
+                    "event_id": "event-restart-user",
+                    "conversation_id": "native-K1-NATIVE-RESTART-1",
+                    "device_serial": "K1-NATIVE-RESTART",
+                    "role": "user",
+                    "content": "重启后还能看到吗？",
+                    "created_at_ms": created_at_ms,
+                },
+                {
+                    "event_id": "event-restart-assistant",
+                    "conversation_id": "native-K1-NATIVE-RESTART-1",
+                    "device_serial": "K1-NATIVE-RESTART",
+                    "role": "assistant",
+                    "content": "可以，记录已经恢复。",
+                    "created_at_ms": created_at_ms + 1,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(settings)):
+        with sqlite3.connect(database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT role, content
+                FROM dialog_history
+                WHERE pet_id = ? AND user_id = ?
+                ORDER BY created_at ASC
+                """,
+                (pet_id, user_id),
+            ).fetchall()
+
+    assert rows == [
+        ("user", "重启后还能看到吗？"),
+        ("assistant", "可以，记录已经恢复。"),
+    ]
+
+
 def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(
     tmp_path,
 ) -> None:

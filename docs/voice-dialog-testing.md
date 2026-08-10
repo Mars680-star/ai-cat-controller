@@ -72,7 +72,13 @@ The explicit subtitle settings are required for real browser history. The K1
 stores final user and assistant transcripts in
 `/var/lib/ai-cat-controller/dialog-events.jsonl`; FastAPI imports them
 idempotently into SQLite using the bound device serial number and binding
-timestamp.
+timestamp. The Volcengine bot console's **subtitle display** switch must also be
+enabled; the server callback URL and signature can remain empty when the K1
+receives WebSocket subtitle events directly. Runtime personality updates retain
+`DisableRTSSubtitle: false` and `SubtitleMode: 1` so changing personality does
+not disable the callback. FastAPI imports any pending events during application
+startup as well as during history polling, so records do not depend on a browser
+page being open.
 
 While the browser history page is open, it polls the conversation summary every
 second. A final user transcript is shown immediately as `waiting_assistant`;

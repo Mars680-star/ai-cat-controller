@@ -38,7 +38,8 @@ def test_five_personalities_share_console_voice_and_keep_distinct_profiles() -> 
     }
     assert len({profile["revision"] for profile in profiles}) == 5
     for personality, profile in zip(PERSONALITIES, profiles, strict=True):
-        update_config = profile["session_update"]["session"]["config"]
+        update_session = profile["session_update"]["session"]
+        update_config = update_session["config"]
         assert set(personality.voice_function_triggers.values()).issubset(
             personality.allowed_voice_functions
         )
@@ -47,6 +48,10 @@ def test_five_personalities_share_console_voice_and_keep_distinct_profiles() -> 
         assert update_config["LLMConfig"]["SystemMessages"] == [
             profile["system_prompt"]
         ]
+        assert update_config["SubtitleConfig"] == {
+            "DisableRTSSubtitle": False,
+            "SubtitleMode": 1,
+        }
         assert "TTSConfig" not in update_config
 
 
