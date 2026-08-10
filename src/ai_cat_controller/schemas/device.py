@@ -38,6 +38,10 @@ class DeviceStatusData(BaseModel):
     charging: bool | None
     charger_online: bool | None
     battery_error: str | None
+    output_volume_available: bool
+    output_volume_percent: int | None = Field(default=None, ge=0, le=150)
+    output_muted: bool | None
+    output_volume_error: str | None
 
 
 class ServiceStatusData(BaseModel):

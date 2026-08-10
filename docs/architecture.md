@@ -36,6 +36,9 @@ enable wildcard CORS.
 
 Long-lived adapter and service objects are created by the FastAPI lifespan and
 stored in `app.state.services`. Request handlers never create hardware objects.
+In Local K1 mode, a lifespan-owned touch monitor tails the existing `toy_main`
+log and imports only newly appended, allowlisted touch events. It does not open
+or compete for GPIO lines already owned by the vendor process.
 
 The product Mock stores durable state in SQLite. Login sessions remain
 in-memory and are recreated from the Mock login code after process restart.
@@ -59,6 +62,8 @@ See `system-interaction-flow.md` for the target cloud/device architecture.
 - CommandRunner uses `asyncio.create_subprocess_exec`, never a shell.
 - Only fixed systemctl paths, verbs, confirmed service names and audited motor
   command tuples are accepted.
+- PulseAudio control is limited to get/set operations on `@DEFAULT_SINK@` and
+  a validated `0..100` volume.
 - The API has no endpoint for arbitrary commands, services, files or topics.
 
 Local K1 exposes fixed shake, nod, stop, wake and interrupt operations. Tail

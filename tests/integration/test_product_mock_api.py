@@ -227,6 +227,10 @@ def test_dialog_history_settings_device_status_and_feedback(
     ).json()["data"]
     assert settings["name"] == "安心"
     assert settings["volume"] == 35
+    device_status = client.get("/api/v1/device/status").json()["data"]
+    assert device_status["output_volume_available"] is True
+    assert device_status["output_volume_percent"] == 35
+    assert device_status["output_muted"] is False
 
     offline = client.post(
         f"/api/v1/pets/{pet_id}/mock-device-status",

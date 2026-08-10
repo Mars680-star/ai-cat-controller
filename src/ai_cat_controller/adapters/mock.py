@@ -23,6 +23,7 @@ class MockAiCatAdapter(AiCatAdapter):
         self.tail_state = "idle"
         self.action_count = 0
         self.last_action_at: str | None = None
+        self.output_volume_percent = 60
         self.service_states = {
             name: {"active": True, "enabled": True, "error": None}
             for name in service_names
@@ -61,6 +62,10 @@ class MockAiCatAdapter(AiCatAdapter):
                 "charging": False,
                 "charger_online": False,
                 "battery_error": None,
+                "output_volume_available": True,
+                "output_volume_percent": self.output_volume_percent,
+                "output_muted": self.output_volume_percent == 0,
+                "output_volume_error": None,
             }
 
     async def get_services_status(self) -> list[dict[str, Any]]:
@@ -95,6 +100,12 @@ class MockAiCatAdapter(AiCatAdapter):
                 "personality_revision": None,
                 "voice_type": None,
             }
+
+    async def set_output_volume(self, percent: int) -> None:
+        if not 0 <= percent <= 100:
+            raise ValueError("音量必须在 0 到 100 之间")
+        async with self._state_lock:
+            self.output_volume_percent = percent
 
     async def _run_motion(
         self, action: str, part: str, intensity: float, duration_ms: int

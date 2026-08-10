@@ -134,10 +134,18 @@ FastAPI 当前 revision 一致；它不代表 5 种音色都已完成人工听�
 - `charging`：是否正在充电；无法判断时为 `null`。
 - `charger_online`：充电器输入是否在线，不等同于一定正在充电。
 - `battery_error`：读取失败的属性，不可用时用于诊断。
+- `output_volume_available`：是否成功连接系统 PulseAudio。
+- `output_volume_percent`：当前默认输出音量；网页只允许设置 `0..100`。
+- `output_muted`：默认输出是否静音。
+- `output_volume_error`：PulseAudio 状态不可用时的诊断信息。
 
 为了避免电量计状态滞后，`charger_online=false` 时接口会把有效电池状态统一为
 `discharging`；充电器在线但电量计未报告充电时返回 `not_charging`。浏览器端
 状态请求使用 `no-store`，每 5 秒重新读取真机。
+
+`PATCH /api/v1/pets/{pet_id}/settings` 的音量在 `local_k1` 模式下会先写入
+PulseAudio 固定的 `@DEFAULT_SINK@`，成功后才持久化到 SQLite。`0` 同时静音，
+非零值自动取消静音；命令不接受任意 sink 名称。
 
 Validation errors use `422`, conflicts `409`, unavailable devices `503`,
 timeouts `504`, and invalid authentication `401`.

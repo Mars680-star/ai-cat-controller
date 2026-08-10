@@ -12,6 +12,7 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import (
     ActionConflictError,
     AdapterNotImplementedError,
+    DeviceUnavailableError,
 )
 
 
@@ -33,6 +34,22 @@ class PartiallyFailingRunner(FakeRunner):
         if args[1] == "volc-conv-ai.service":
             raise FileNotFoundError("simulated query failure")
         return await super().run(executable, args)
+
+
+class VolumeRunner(FakeRunner):
+    async def run(self, executable: str, args: list[str]) -> CommandResult:
+        self.calls.append((executable, tuple(args)))
+        if args == ["get-sink-volume", "@DEFAULT_SINK@"]:
+            return CommandResult(
+                0,
+                "Volume: front-left: 27525 / 42% / -22.62 dB, "
+                "front-right: 27525 / 42% / -22.62 dB",
+                "",
+                False,
+            )
+        if args == ["get-sink-mute", "@DEFAULT_SINK@"]:
+            return CommandResult(0, "Mute: no", "", False)
+        return CommandResult(0, "", "", False)
 
 
 def local_settings() -> Settings:
@@ -57,6 +74,57 @@ def write_dialog_status(path, state: str = "ready") -> None:
         ),
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_local_volume_status_uses_default_pulseaudio_sink() -> None:
+    runner = VolumeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    result = await adapter._read_output_volume_status()
+
+    assert result == {
+        "output_volume_available": True,
+        "output_volume_percent": 42,
+        "output_muted": False,
+        "output_volume_error": None,
+    }
+    assert runner.calls == [
+        ("/usr/bin/pactl", ("get-sink-volume", "@DEFAULT_SINK@")),
+        ("/usr/bin/pactl", ("get-sink-mute", "@DEFAULT_SINK@")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_volume_setting_updates_volume_and_mute() -> None:
+    runner = VolumeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    await adapter.set_output_volume(35)
+    await adapter.set_output_volume(0)
+
+    assert runner.calls == [
+        ("/usr/bin/pactl", ("set-sink-volume", "@DEFAULT_SINK@", "35%")),
+        ("/usr/bin/pactl", ("set-sink-mute", "@DEFAULT_SINK@", "0")),
+        ("/usr/bin/pactl", ("set-sink-volume", "@DEFAULT_SINK@", "0%")),
+        ("/usr/bin/pactl", ("set-sink-mute", "@DEFAULT_SINK@", "1")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_volume_setting_reports_pulseaudio_failure() -> None:
+    class FailingVolumeRunner(FakeRunner):
+        async def run(self, executable: str, args: list[str]) -> CommandResult:
+            del executable, args
+            return CommandResult(1, "", "access denied", False)
+
+    adapter = LocalK1Adapter(
+        local_settings(),
+        FailingVolumeRunner(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DeviceUnavailableError, match="设置输出音量失败"):
+        await adapter.set_output_volume(50)
 
 
 @pytest.mark.asyncio

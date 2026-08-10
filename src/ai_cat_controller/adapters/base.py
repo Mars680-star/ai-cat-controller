@@ -9,6 +9,7 @@ from typing import Any
 
 class Capability(str, Enum):
     BATTERY_STATUS = "battery_status"
+    OUTPUT_VOLUME = "output_volume"
     SHAKE_HEAD = "shake_head"
     NOD_HEAD = "nod_head"
     WAG_TAIL = "wag_tail"
@@ -43,6 +44,9 @@ class AiCatAdapter(ABC):
 
     @abstractmethod
     async def get_dialog_status(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_output_volume(self, percent: int) -> None: ...
 
     @abstractmethod
     async def shake_head(self, intensity: float, duration_ms: int) -> None: ...

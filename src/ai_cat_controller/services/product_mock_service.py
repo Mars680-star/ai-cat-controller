@@ -10,6 +10,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+from ai_cat_controller.adapters.base import AiCatAdapter, Capability
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import (
     AiCatError,
@@ -45,11 +46,13 @@ class ProductMockService:
         motion: MotionService,
         settings: Settings,
         personality: PersonalityService,
+        adapter: AiCatAdapter,
     ) -> None:
         self._repository = repository
         self._motion = motion
         self._settings = settings
         self._personality = personality
+        self._adapter = adapter
         self._sessions: dict[str, str] = {}
         self._finalizers: set[asyncio.Task[None]] = set()
         self._dialog_sync_lock = asyncio.Lock()
@@ -682,6 +685,19 @@ class ProductMockService:
         name: str | None,
         volume: int | None,
     ) -> dict[str, Any]:
+        await asyncio.to_thread(
+            self._repository.get_owned_pet,
+            user_id,
+            pet_id,
+        )
+        if volume is not None:
+            if not self._adapter.supports(Capability.OUTPUT_VOLUME):
+                raise AdapterNotImplementedError(
+                    self._adapter.capability_unavailable_reason(
+                        Capability.OUTPUT_VOLUME
+                    )
+                )
+            await self._adapter.set_output_volume(volume)
         pet = await asyncio.to_thread(
             self._repository.update_pet_settings,
             user_id,
@@ -691,6 +707,28 @@ class ProductMockService:
         )
         await self._personality.sync_pet(pet)
         return self._pet_summary(pet)
+
+    async def add_device_touch(
+        self,
+        *,
+        device_serial: str,
+        request_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        pet = await asyncio.to_thread(
+            self._repository.get_pet_by_serial,
+            device_serial,
+        )
+        if pet is None or not pet.get("owner_user_id"):
+            LOGGER.info("ignoring touch from unbound device %s", device_serial)
+            return None
+        return await self.add_interaction(
+            user_id=str(pet["owner_user_id"]),
+            pet_id=str(pet["pet_id"]),
+            event_type="touch",
+            request_id=request_id,
+            metadata=metadata,
+        )
 
     async def unbind(self, user_id: str, pet_id: str) -> None:
         await asyncio.to_thread(self._repository.unbind_pet, user_id, pet_id)

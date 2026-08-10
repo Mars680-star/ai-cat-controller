@@ -24,6 +24,7 @@ from ai_cat_controller.services.dialog_service import DialogService
 from ai_cat_controller.services.motion_service import MotionService
 from ai_cat_controller.services.personality_service import PersonalityService
 from ai_cat_controller.services.product_mock_service import ProductMockService
+from ai_cat_controller.services.touch_event_monitor import TouchEventMonitor
 from ai_cat_controller.web.router import router as web_router
 
 LOGGER = logging.getLogger(__name__)
@@ -58,8 +59,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             motion,
             resolved_settings,
             personality,
+            adapter,
         )
         await product.initialize()
+        touch_monitor: TouchEventMonitor | None = None
+        if resolved_settings.hardware_driver == "local_k1":
+            touch_monitor = TouchEventMonitor(resolved_settings, product)
+            await touch_monitor.start()
         application.state.services = AppServices(
             settings=resolved_settings,
             adapter=adapter,
@@ -73,6 +79,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            if touch_monitor is not None:
+                await _cleanup("touch event monitor", touch_monitor.close)
             await _cleanup("dialog service", dialog.shutdown)
             await _cleanup("motion service", motion.shutdown)
             await _cleanup("product mock service", product.shutdown)

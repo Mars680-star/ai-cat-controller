@@ -9,7 +9,7 @@ from ai_cat_controller.core.errors import CommandNotAllowedError
 def make_runner() -> CommandRunner:
     return CommandRunner(
         allowed_executables=frozenset(
-            {"/usr/bin/systemctl", "/usr/bin/ai-toy_app"}
+            {"/usr/bin/systemctl", "/usr/bin/ai-toy_app", "/usr/bin/pactl"}
         ),
         allowed_services=frozenset({"volc-conv-ai.service"}),
         timeout_seconds=1.0,
@@ -26,8 +26,15 @@ def make_runner() -> CommandRunner:
                     ("motor", "head_ud", "2"),
                     ("motor", "stop"),
                 }
-            )
+            ),
+            "/usr/bin/pactl": frozenset(
+                {
+                    ("get-sink-volume", "@DEFAULT_SINK@"),
+                    ("set-sink-volume", "@DEFAULT_SINK@", "35%"),
+                }
+            ),
         },
+        environment={"PULSE_SERVER": "unix:/var/run/pulse/native"},
     )
 
 
@@ -51,6 +58,8 @@ def make_runner() -> CommandRunner:
         ("/usr/bin/ai-toy_app", ["motor", "head_lr", "2"]),
         ("/usr/bin/ai-toy_app", ["motor", "head_lr", "3"]),
         ("/usr/bin/ai-toy_app", ["motor", "all", "2"]),
+        ("/usr/bin/pactl", ["set-sink-volume", "@DEFAULT_SINK@", "101%"]),
+        ("/usr/bin/pactl", ["set-sink-volume", "sink-0", "35%"]),
     ],
 )
 async def test_runner_rejects_non_allowlisted_commands(
@@ -96,6 +105,51 @@ async def test_runner_uses_exec_without_shell(
     assert captured["executable"] == "/usr/bin/systemctl"
     assert captured["args"] == ("is-active", "volc-conv-ai.service")
     assert "shell" not in captured["kwargs"]
+    assert captured["kwargs"]["env"]["PULSE_SERVER"] == (
+        "unix:/var/run/pulse/native"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_allows_fixed_default_sink_volume_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+        def kill(self) -> None:
+            pass
+
+        def terminate(self) -> None:
+            pass
+
+    async def fake_create_subprocess_exec(
+        executable: str, *args: str, **kwargs: object
+    ) -> FakeProcess:
+        captured["executable"] = executable
+        captured["args"] = args
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await make_runner().run(
+        "/usr/bin/pactl",
+        ["set-sink-volume", "@DEFAULT_SINK@", "35%"],
+    )
+
+    assert captured["executable"] == "/usr/bin/pactl"
+    assert captured["args"] == (
+        "set-sink-volume",
+        "@DEFAULT_SINK@",
+        "35%",
+    )
+    assert captured["env"]["PULSE_SERVER"] == "unix:/var/run/pulse/native"
 
 
 @pytest.mark.asyncio

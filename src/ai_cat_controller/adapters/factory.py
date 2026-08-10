@@ -13,6 +13,7 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
 
     hardware_binary = str(settings.hardware_binary)
     systemctl_binary = str(settings.systemctl_binary)
+    pulseaudio_ctl_binary = str(settings.pulseaudio_ctl_binary)
     hardware_commands = {
         ("motor", "head_lr", "1"),
         ("motor", "head_ud", "2"),
@@ -20,10 +21,25 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
     }
     if settings.enable_tail_motion:
         hardware_commands.add(("motor", "tail_lr", "1"))
+    pulseaudio_commands = {
+        ("get-sink-volume", "@DEFAULT_SINK@"),
+        ("get-sink-mute", "@DEFAULT_SINK@"),
+        ("set-sink-mute", "@DEFAULT_SINK@", "0"),
+        ("set-sink-mute", "@DEFAULT_SINK@", "1"),
+        *(
+            ("set-sink-volume", "@DEFAULT_SINK@", f"{percent}%")
+            for percent in range(101)
+        ),
+    }
 
     runner = CommandRunner(
         allowed_executables=frozenset(
-            {"/usr/bin/systemctl", "/bin/systemctl", hardware_binary}
+            {
+                "/usr/bin/systemctl",
+                "/bin/systemctl",
+                hardware_binary,
+                pulseaudio_ctl_binary,
+            }
         ),
         allowed_services=frozenset(settings.service_names),
         allowed_service_signals={
@@ -36,7 +52,9 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
             systemctl_binary: frozenset(
                 {("--no-block", "start", settings.dialog_service)}
             ),
+            pulseaudio_ctl_binary: frozenset(pulseaudio_commands),
         },
         timeout_seconds=settings.command_timeout_seconds,
+        environment={"PULSE_SERVER": settings.pulse_server},
     )
     return LocalK1Adapter(settings, runner)

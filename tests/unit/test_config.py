@@ -26,6 +26,10 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_DIALOG_TEXT_REQUEST_PATH": "/tmp/dialog-text.json",
             "AI_CAT_PERSONALITY_RUNTIME_PATH": "/tmp/personality.json",
             "AI_CAT_DEVICE_SERIAL_PATH": "/tmp/device-serial",
+            "AI_CAT_PULSEAUDIO_CTL_BINARY": "/bin/pactl",
+            "AI_CAT_PULSE_SERVER": "unix:/var/run/pulse/native",
+            "AI_CAT_TOUCH_EVENT_LOG_PATH": "/tmp/main-log",
+            "AI_CAT_TOUCH_MONITOR_POLL_SECONDS": "0.25",
         }
     )
 
@@ -39,6 +43,10 @@ def test_environment_values_are_parsed() -> None:
     assert str(settings.dialog_text_request_path) == "/tmp/dialog-text.json"
     assert str(settings.personality_runtime_path) == "/tmp/personality.json"
     assert str(settings.device_serial_path) == "/tmp/device-serial"
+    assert str(settings.pulseaudio_ctl_binary) == "/bin/pactl"
+    assert settings.pulse_server == "unix:/var/run/pulse/native"
+    assert str(settings.touch_event_log_path) == "/tmp/main-log"
+    assert settings.touch_monitor_poll_seconds == 0.25
 
 
 def test_local_k1_requires_api_key() -> None:
@@ -62,6 +70,11 @@ def test_unconfirmed_hardware_binary_is_rejected() -> None:
         match="AI_CAT_HARDWARE_BINARY is not allowlisted",
     ):
         Settings(hardware_binary="/tmp/user-controlled-program")
+
+
+def test_unconfirmed_pulseaudio_socket_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="AI_CAT_PULSE_SERVER is not allowlisted"):
+        Settings(pulse_server="tcp:attacker.example:4713")
 
 
 def test_secret_is_masked_in_settings_representation() -> None:

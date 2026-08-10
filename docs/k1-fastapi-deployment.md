@@ -21,6 +21,9 @@ AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
 AI_CAT_ENABLE_TAIL_MOTION=false
+AI_CAT_PULSEAUDIO_CTL_BINARY=/usr/bin/pactl
+AI_CAT_PULSE_SERVER=unix:/var/run/pulse/native
+AI_CAT_TOUCH_EVENT_LOG_PATH=/root/.log/main_log
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
 AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
@@ -33,6 +36,22 @@ The service account needs permission to query systemd and signal
 `volc-conv-ai.service`. For board-only lab validation, `User=root` is the
 shortest setup. A production deployment should use a dedicated account and a
 polkit rule restricted to the two dialog signals.
+
+Web volume changes are applied to PulseAudio's fixed `@DEFAULT_SINK@`. The
+service must use `pulse-access` as its primary group; this board's PulseAudio
+authentication rejects a process that has it only as a supplementary group.
+The tracked unit template therefore uses `Group=pulse-access`. Validate access with:
+
+```bash
+sg pulse-access -c \
+  'PULSE_SERVER=unix:/var/run/pulse/native pactl get-sink-volume @DEFAULT_SINK@'
+```
+
+Physical touches are imported from the existing `toy_main` log and add
+intimacy points through the same idempotent daily-cap rules as browser events.
+The monitor starts at the end of the file, so historical touches are not
+replayed after a FastAPI restart. The service account must be able to read
+`AI_CAT_TOUCH_EVENT_LOG_PATH`; the current K1 lab deployment uses `root`.
 
 ## Validate
 

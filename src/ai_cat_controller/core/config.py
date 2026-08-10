@@ -41,6 +41,10 @@ class Settings(BaseModel):
 
     hardware_binary: Path = Path("/usr/bin/ai-toy_app")
     systemctl_binary: Path = Path("/usr/bin/systemctl")
+    pulseaudio_ctl_binary: Path = Path("/usr/bin/pactl")
+    pulse_server: str = "unix:/var/run/pulse/native"
+    touch_event_log_path: Path = Path("/root/.log/main_log")
+    touch_monitor_poll_seconds: float = Field(default=0.5, ge=0.1, le=10.0)
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
     dialog_text_request_path: Path = Path(
@@ -77,6 +81,20 @@ class Settings(BaseModel):
     def validate_systemctl_binary(cls, value: Path) -> Path:
         if str(value) not in {"/usr/bin/systemctl", "/bin/systemctl"}:
             raise ValueError("AI_CAT_SYSTEMCTL_BINARY is not allowlisted")
+        return value
+
+    @field_validator("pulseaudio_ctl_binary")
+    @classmethod
+    def validate_pulseaudio_ctl_binary(cls, value: Path) -> Path:
+        if str(value) not in {"/usr/bin/pactl", "/bin/pactl"}:
+            raise ValueError("AI_CAT_PULSEAUDIO_CTL_BINARY is not allowlisted")
+        return value
+
+    @field_validator("pulse_server")
+    @classmethod
+    def validate_pulse_server(cls, value: str) -> str:
+        if value != "unix:/var/run/pulse/native":
+            raise ValueError("AI_CAT_PULSE_SERVER is not allowlisted")
         return value
 
     @field_validator("hardware_binary")
@@ -122,6 +140,18 @@ class Settings(BaseModel):
             "intimacy_daily_cap": source.get("AI_CAT_INTIMACY_DAILY_CAP", "20"),
             "hardware_binary": source.get("AI_CAT_HARDWARE_BINARY", "/usr/bin/ai-toy_app"),
             "systemctl_binary": source.get("AI_CAT_SYSTEMCTL_BINARY", "/usr/bin/systemctl"),
+            "pulseaudio_ctl_binary": source.get(
+                "AI_CAT_PULSEAUDIO_CTL_BINARY", "/usr/bin/pactl"
+            ),
+            "pulse_server": source.get(
+                "AI_CAT_PULSE_SERVER", "unix:/var/run/pulse/native"
+            ),
+            "touch_event_log_path": source.get(
+                "AI_CAT_TOUCH_EVENT_LOG_PATH", "/root/.log/main_log"
+            ),
+            "touch_monitor_poll_seconds": source.get(
+                "AI_CAT_TOUCH_MONITOR_POLL_SECONDS", "0.5"
+            ),
             "dialog_status_path": source.get(
                 "AI_CAT_DIALOG_STATUS_PATH", "/run/ai-cat/dialog-status.json"
             ),

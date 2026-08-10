@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ class LocalK1Adapter(AiCatAdapter):
     capabilities = frozenset(
         {
             Capability.BATTERY_STATUS,
+            Capability.OUTPUT_VOLUME,
             Capability.SHAKE_HEAD,
             Capability.NOD_HEAD,
             Capability.STOP_MOTION,
@@ -51,9 +53,10 @@ class LocalK1Adapter(AiCatAdapter):
         self._connected = False
 
     async def get_device_status(self) -> dict[str, Any]:
-        dialog_status, power_status = await asyncio.gather(
+        dialog_status, power_status, volume_status = await asyncio.gather(
             self.get_dialog_status(),
             asyncio.to_thread(self._read_power_status),
+            self._read_output_volume_status(),
         )
         return {
             "connected": self._connected,
@@ -66,7 +69,91 @@ class LocalK1Adapter(AiCatAdapter):
             "last_action_at": None,
             "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
             **power_status,
+            **volume_status,
         }
+
+    async def _run_pactl(self, args: list[str]) -> CommandResult:
+        return await self._runner.run(
+            str(self._settings.pulseaudio_ctl_binary),
+            args,
+        )
+
+    async def _read_output_volume_status(self) -> dict[str, Any]:
+        try:
+            volume_result, mute_result = await asyncio.gather(
+                self._run_pactl(["get-sink-volume", "@DEFAULT_SINK@"]),
+                self._run_pactl(["get-sink-mute", "@DEFAULT_SINK@"]),
+            )
+        except Exception as exc:
+            return {
+                "output_volume_available": False,
+                "output_volume_percent": None,
+                "output_muted": None,
+                "output_volume_error": f"无法读取输出音量: {exc}",
+            }
+
+        if volume_result.timed_out or mute_result.timed_out:
+            error = "读取输出音量超时"
+        elif volume_result.returncode != 0 or mute_result.returncode != 0:
+            error = (
+                volume_result.stderr
+                or mute_result.stderr
+                or "PulseAudio 未返回有效状态"
+            )
+        else:
+            percentages = [
+                int(value)
+                for value in re.findall(
+                    r"(?<!\d)(\d{1,3})%", volume_result.stdout
+                )
+            ]
+            mute_match = re.search(
+                r"(?:Mute|静音)\s*[:：]\s*(yes|no|是|否)",
+                mute_result.stdout,
+                flags=re.IGNORECASE,
+            )
+            if percentages and mute_match:
+                muted = mute_match.group(1).lower() in {"yes", "是"}
+                return {
+                    "output_volume_available": True,
+                    "output_volume_percent": max(percentages),
+                    "output_muted": muted,
+                    "output_volume_error": None,
+                }
+            error = "无法解析 PulseAudio 输出音量"
+
+        return {
+            "output_volume_available": False,
+            "output_volume_percent": None,
+            "output_muted": None,
+            "output_volume_error": error,
+        }
+
+    async def set_output_volume(self, percent: int) -> None:
+        if not 0 <= percent <= 100:
+            raise ValueError("音量必须在 0 到 100 之间")
+        commands = (
+            ["set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
+            ["set-sink-mute", "@DEFAULT_SINK@", "1" if percent == 0 else "0"],
+        )
+        for args in commands:
+            try:
+                result = await self._run_pactl(args)
+            except Exception as exc:
+                raise DeviceUnavailableError(
+                    "设置输出音量失败",
+                    details={"error": str(exc)},
+                ) from exc
+            if result.timed_out:
+                raise DeviceUnavailableError("设置输出音量超时")
+            if result.returncode != 0:
+                raise DeviceUnavailableError(
+                    "设置输出音量失败",
+                    details={
+                        "returncode": result.returncode,
+                        "stderr": result.stderr,
+                    },
+                )
 
     @staticmethod
     def _read_sysfs_value(directory: Path, name: str) -> str:
