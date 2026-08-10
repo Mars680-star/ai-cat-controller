@@ -88,9 +88,7 @@ ACTIONS = (
         action_no=3,
         name="开心摇尾",
         description="尾巴左右摆动表达亲近。",
-        personality_ids=frozenset(
-            {"sunny_explorer", "gentle_companion", "curious_scholar"}
-        ),
+        personality_ids=ALL_PERSONALITIES,
         min_intimacy_level=1,
         components=(
             ActionComponent(
