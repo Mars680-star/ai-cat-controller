@@ -75,6 +75,13 @@
     nextUnlocks: $("#next-unlocks"),
     interactionButtons: $$(".interaction-button"),
     interactionHistory: $("#interaction-history"),
+    growthTags: $("#growth-tags"),
+    growthTendencies: $("#growth-tendencies"),
+    growthBehaviorSummary: $("#growth-behavior-summary"),
+    growthEventHistory: $("#growth-event-history"),
+    growthDebugForm: $("#growth-debug-form"),
+    growthDebugEvent: $("#growth-debug-event"),
+    growthDebugCount: $("#growth-debug-count"),
     dialogPetName: $("#dialog-pet-name"),
     dialogVoice: $("#dialog-voice"),
     voiceStateDot: $("#voice-state-dot"),
@@ -131,6 +138,7 @@
     hardwareStatus: null,
     dialogConfig: null,
     intimacyPoints: null,
+    growthTagIds: null,
   };
 
   const statusLabels = {
@@ -177,6 +185,15 @@
     complete: "已完成",
     waiting_assistant: "等待回答",
     assistant_only: "仅有回答",
+  };
+
+  const growthAttributeLabels = {
+    curiosity: "好奇",
+    empathy: "共情",
+    knowledge: "求知",
+    energy: "活力",
+    mischief: "淘气",
+    discipline: "自律",
   };
 
   function showToast(message, level = "info") {
@@ -255,7 +272,8 @@
       if (viewName === "motion") {
         refreshActions().catch(reportError);
       } else if (viewName === "growth") {
-        refreshIntimacy().catch(reportError);
+        Promise.all([refreshIntimacy(), refreshGrowthPersonality()])
+          .catch(reportError);
       } else if (viewName === "history") {
         Promise.all([refreshDialogs(), refreshVoiceStatus()]).catch(reportError);
       }
@@ -325,6 +343,7 @@
 
     const pets = payload.data.pets;
     state.intimacyPoints = null;
+    state.growthTagIds = null;
     if (pets.length > 0) {
       state.petId = pets[0].pet_id;
       setBoundNavigation(true);
@@ -473,6 +492,7 @@
     const results = await Promise.allSettled([
       refreshActions(),
       refreshIntimacy(),
+      refreshGrowthPersonality(),
       refreshDialogs(),
       refreshDialogConfig(),
     ]);
@@ -716,7 +736,142 @@
       ? (event.reason || "本次亲密度未变化")
       : `亲密度 ${event.points_delta > 0 ? "+" : ""}${event.points_delta}`;
     showToast(message);
-    await Promise.all([refreshIntimacy(), refreshDashboard(), refreshActions()]);
+    await Promise.all([
+      refreshIntimacy(),
+      refreshGrowthPersonality({notifyTags: true}),
+      refreshDashboard(),
+      refreshActions(),
+    ]);
+  }
+
+  function renderGrowthPersonality(data, {notifyTags = false} = {}) {
+    const activeTagIds = data.active_tags.map((tag) => tag.tag_id);
+    if (notifyTags && state.growthTagIds !== null) {
+      const newTags = data.active_tags.filter(
+        (tag) => !state.growthTagIds.includes(tag.tag_id),
+      );
+      if (newTags.length > 0) {
+        showToast(`获得成长标签：${newTags.map((tag) => tag.display_name).join("、")}`);
+      }
+    }
+    state.growthTagIds = activeTagIds;
+
+    ui.growthTags.replaceChildren();
+    if (data.active_tags.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "muted";
+      empty.textContent = "尚未形成成长标签";
+      ui.growthTags.append(empty);
+    } else {
+      data.active_tags.forEach((tag) => {
+        const item = document.createElement("span");
+        item.className = "growth-tag";
+        item.textContent = tag.display_name;
+        item.title = tag.description;
+        ui.growthTags.append(item);
+      });
+    }
+
+    ui.growthTendencies.replaceChildren();
+    Object.values(data.attributes).forEach((attribute) => {
+      const row = document.createElement("div");
+      row.className = "tendency-row";
+      const label = document.createElement("span");
+      label.textContent = attribute.label;
+      const tendency = document.createElement("strong");
+      tendency.textContent = attribute.value === undefined
+        ? attribute.tendency
+        : `${attribute.tendency} · ${attribute.value.toFixed(2)}`;
+      row.append(label, tendency);
+      ui.growthTendencies.append(row);
+    });
+
+    fillList(
+      ui.growthBehaviorSummary,
+      data.behavior_profile.directives,
+      "尚未形成明显的长期行为倾向",
+    );
+    renderGrowthEvents(data.recent_events);
+    ui.growthDebugForm.classList.toggle("hidden", !data.debug_values_visible);
+  }
+
+  function renderGrowthEvents(events) {
+    ui.growthEventHistory.replaceChildren();
+    ui.growthEventHistory.classList.toggle("empty-state", events.length === 0);
+    if (events.length === 0) {
+      ui.growthEventHistory.textContent = "暂无成长记录";
+      return;
+    }
+    events.forEach((event) => {
+      const row = document.createElement("div");
+      row.className = "timeline-row";
+      const detail = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = event.event_label;
+      const context = document.createElement("small");
+      context.textContent = `${event.topic} · ${formatDate(event.created_at)}`;
+      const delta = document.createElement("span");
+      delta.className = "growth-event-delta";
+      const changes = Object.entries(event.attribute_delta || {})
+        .filter(([, value]) => value > 0)
+        .map(([name, value]) => (
+          `${growthAttributeLabels[name] || name} +${value.toFixed(2)}`
+        ));
+      if (changes.length > 0) {
+        delta.textContent = changes.join(" · ");
+      } else if (event.changed_attributes.length > 0) {
+        delta.textContent = `${event.changed_attributes.join("、")}有所成长`;
+      } else {
+        delta.textContent = "标签形成";
+      }
+      detail.append(title, context);
+      row.append(detail, delta);
+      ui.growthEventHistory.append(row);
+    });
+  }
+
+  async function refreshGrowthPersonality({notifyTags = false} = {}) {
+    if (!state.petId) {
+      return;
+    }
+    const payload = await apiRequest(
+      `/api/v1/pets/${encodeURIComponent(state.petId)}/growth`,
+    );
+    renderGrowthPersonality(payload.data, {notifyTags});
+  }
+
+  async function submitDebugGrowth() {
+    const submit = ui.growthDebugForm.querySelector("button[type='submit']");
+    submit.disabled = true;
+    try {
+      const eventType = ui.growthDebugEvent.value;
+      const payload = await apiRequest(
+        `/api/v1/pets/${encodeURIComponent(state.petId)}/growth/debug`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            request_id: `growth-${eventType}-${Date.now()}`,
+            event_type: eventType,
+            count: Number(ui.growthDebugCount.value),
+            topic: `debug-${eventType}`,
+            emotion: "neutral",
+            engagement: 1.0,
+          }),
+        },
+      );
+      renderGrowthPersonality(payload.data.growth);
+      const awardedNames = payload.data.batch.awarded_tags.map((tagId) => {
+        const tag = payload.data.growth.tag_history.find(
+          (item) => item.tag_id === tagId,
+        );
+        return tag?.display_name || tagId;
+      });
+      showToast(awardedNames.length > 0
+        ? `获得成长标签：${awardedNames.join("、")}`
+        : `已生成 ${payload.data.batch.processed} 条成长事件`);
+    } finally {
+      submit.disabled = false;
+    }
   }
 
   function renderDialogSync(sync) {
@@ -986,6 +1141,7 @@
       await Promise.all([
         refreshDialogs({selectLatest: true, forceDetail: true}),
         refreshIntimacy(),
+        refreshGrowthPersonality({notifyTags: true}),
         refreshDashboard(),
       ]);
     } finally {
@@ -1061,6 +1217,7 @@
     );
     state.petId = null;
     state.intimacyPoints = null;
+    state.growthTagIds = null;
     state.dashboard = null;
     state.actions = [];
     ui.navPetName.textContent = "等待绑定";
@@ -1099,6 +1256,7 @@
     state.user = null;
     state.petId = null;
     state.intimacyPoints = null;
+    state.growthTagIds = null;
     state.dashboard = null;
     window.sessionStorage.removeItem("aiCatMockIdentity");
     ui.appShell.classList.add("hidden");
@@ -1155,6 +1313,10 @@
     button.addEventListener("click", () => {
       addInteraction(button.dataset.event).catch(reportError);
     });
+  });
+  ui.growthDebugForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitDebugGrowth().catch(reportError);
   });
   ui.dialogForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1216,7 +1378,10 @@
     try {
       await refreshDashboard();
       if (state.activeView === "growth") {
-        await refreshIntimacy({notifyChange: true});
+        await Promise.all([
+          refreshIntimacy({notifyChange: true}),
+          refreshGrowthPersonality({notifyTags: true}),
+        ]);
       }
     } catch (error) {
       if (error.status === 401) {

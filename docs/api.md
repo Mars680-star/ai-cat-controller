@@ -49,6 +49,8 @@ Error:
 | GET | `/api/v1/pets/{pet_id}/dashboard` | 查询宠物主页聚合数据。 |
 | GET | `/api/v1/pets/{pet_id}/intimacy` | 查询等级、规则、解锁和事件。 |
 | POST | `/api/v1/pets/{pet_id}/interactions` | 幂等记录亲密度事件。 |
+| GET | `/api/v1/pets/{pet_id}/growth` | 查询成长属性倾向、标签、最近事件和行为画像。 |
+| POST | `/api/v1/pets/{pet_id}/growth/debug` | 批量模拟成长事件；仅 Mock 或显式开发开关。 |
 | GET | `/api/v1/pets/{pet_id}/actions` | 查询只读安全动作预设。 |
 | POST | `/api/v1/pets/{pet_id}/actions/{action_id}/execute` | 执行预设动作。 |
 | GET | `/api/v1/pets/{pet_id}/actions/executions` | 查询动作结果。 |
@@ -104,6 +106,24 @@ X-Mock-Session: temporary-session-token
 
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
+
+成长查询在 Mock 或显式开启 Debug 时额外返回 6 个属性的精确 `value`，正式
+Local K1 默认只返回“普通/初显/成长中/明显/突出”倾向。快速养成请求示例：
+
+```json
+{
+  "request_id": "demo-knowledge-1",
+  "event_type": "knowledge_discussion",
+  "count": 20,
+  "topic": "robotics",
+  "emotion": "neutral",
+  "engagement": 1.0
+}
+```
+
+Mock 模式始终允许该调试接口；Local K1 只有显式设置
+`AI_CAT_ENABLE_DEBUG_GROWTH=true` 才允许，默认返回 `403`。单批最多 500 条，
+同一 `request_id + 序号` 重放时返回重复统计，不会再次增长。
 
 格式化接口还要求 `AI_CAT_ENABLE_PRODUCT_DATA_RESET=true`，请求体必须为：
 

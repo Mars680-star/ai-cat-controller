@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.core.errors import ActionConflictError, ResourceNotFoundError
+from ai_cat_controller.domain.growth import (
+    ATTRIBUTE_MAX_UNITS,
+    GrowthAttribute,
+    GrowthEmotion,
+    GrowthEventType,
+    GrowthSourceType,
+)
 
 
 def _utc_now() -> str:
@@ -100,6 +108,48 @@ class SQLiteRepository:
                     UNIQUE(pet_id, request_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS growth_attributes (
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    attribute_name TEXT NOT NULL,
+                    value_units INTEGER NOT NULL DEFAULT 0
+                        CHECK(value_units BETWEEN 0 AND 10000),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(pet_id, attribute_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS growth_events (
+                    event_id TEXT PRIMARY KEY,
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    user_id TEXT REFERENCES users(user_id),
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    emotion TEXT NOT NULL,
+                    engagement_milli INTEGER NOT NULL
+                        CHECK(engagement_milli BETWEEN 0 AND 1000),
+                    novelty_milli INTEGER NOT NULL
+                        CHECK(novelty_milli BETWEEN 0 AND 1000),
+                    repetition_milli INTEGER NOT NULL
+                        CHECK(repetition_milli BETWEEN 0 AND 1000),
+                    attribute_delta_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(pet_id, source_type, source_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS growth_tags (
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    tag_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('active', 'replaced')),
+                    earned_at TEXT NOT NULL,
+                    replaced_at TEXT,
+                    triggering_event_id TEXT NOT NULL
+                        REFERENCES growth_events(event_id),
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(pet_id, tag_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS dialog_history (
                     message_id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL,
@@ -138,6 +188,12 @@ class SQLiteRepository:
                     ON interaction_events(pet_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_dialog_pet_time
                     ON dialog_history(pet_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_growth_events_pet_time
+                    ON growth_events(pet_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_growth_events_pet_type
+                    ON growth_events(pet_id, event_type);
+                CREATE INDEX IF NOT EXISTS idx_growth_tags_pet_status
+                    ON growth_tags(pet_id, status);
                 CREATE INDEX IF NOT EXISTS idx_dialog_conversation_time
                     ON dialog_history(
                         pet_id, user_id, conversation_id, created_at ASC
@@ -181,6 +237,9 @@ class SQLiteRepository:
             "feedback",
             "action_executions",
             "dialog_history",
+            "growth_tags",
+            "growth_events",
+            "growth_attributes",
             "interaction_events",
             "pets",
             "devices",
@@ -528,6 +587,350 @@ class SQLiteRepository:
                 (pet_id, user_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_growth_attributes(self, pet_id: str) -> dict[str, int]:
+        attributes = {attribute.value: 0 for attribute in GrowthAttribute}
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT attribute_name, value_units
+                FROM growth_attributes
+                WHERE pet_id = ?
+                """,
+                (pet_id,),
+            ).fetchall()
+        for row in rows:
+            if row["attribute_name"] in attributes:
+                attributes[row["attribute_name"]] = int(row["value_units"])
+        return attributes
+
+    def list_recent_growth_events(
+        self,
+        pet_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, source_type, source_id, event_type, topic,
+                       emotion, engagement_milli, novelty_milli,
+                       repetition_milli, attribute_delta_json, metadata_json,
+                       created_at
+                FROM growth_events
+                WHERE pet_id = ? AND event_type != 'tag_awarded'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (pet_id, limit),
+            ).fetchall()
+        return [self._growth_event_dict(row) for row in rows]
+
+    def list_owned_growth_events(
+        self,
+        user_id: str,
+        pet_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            rows = connection.execute(
+                """
+                SELECT event_id, source_type, source_id, event_type, topic,
+                       emotion, engagement_milli, novelty_milli,
+                       repetition_milli, attribute_delta_json, metadata_json,
+                       created_at
+                FROM growth_events
+                WHERE pet_id = ? AND user_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (pet_id, user_id, limit),
+            ).fetchall()
+        return [self._growth_event_dict(row) for row in rows]
+
+    @staticmethod
+    def _growth_event_dict(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["engagement"] = int(result.pop("engagement_milli")) / 1000
+        result["novelty"] = int(result.pop("novelty_milli")) / 1000
+        result["repetition_decay"] = int(result.pop("repetition_milli")) / 1000
+        result["attribute_delta"] = json.loads(
+            result.pop("attribute_delta_json")
+        )
+        result["metadata"] = json.loads(result.pop("metadata_json"))
+        return result
+
+    def growth_event_counts(self, pet_id: str) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_type, COUNT(*) AS event_count
+                FROM growth_events
+                WHERE pet_id = ?
+                GROUP BY event_type
+                """,
+                (pet_id,),
+            ).fetchall()
+        return {str(row["event_type"]): int(row["event_count"]) for row in rows}
+
+    def apply_growth_event(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        source_type: str,
+        source_id: str,
+        event_type: str,
+        topic: str,
+        emotion: str,
+        engagement: float,
+        novelty: float,
+        repetition_decay: float,
+        attribute_delta: dict[str, int],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        valid_source_types = {item.value for item in GrowthSourceType}
+        valid_event_types = {item.value for item in GrowthEventType}
+        valid_emotions = {item.value for item in GrowthEmotion}
+        if source_type not in valid_source_types:
+            raise ValueError(f"unknown growth source type: {source_type}")
+        if event_type not in valid_event_types:
+            raise ValueError(f"unknown growth event type: {event_type}")
+        if emotion not in valid_emotions:
+            raise ValueError(f"unknown growth emotion: {emotion}")
+        if not source_id or len(source_id) > 256:
+            raise ValueError("growth source_id must contain 1..256 characters")
+        if not topic.strip() or len(topic) > 64:
+            raise ValueError("growth topic must contain 1..64 characters")
+        factors = (engagement, novelty, repetition_decay)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not 0.0 <= float(value) <= 1.0
+            for value in factors
+        ):
+            raise ValueError("growth factors must be finite values between 0 and 1")
+        now = _utc_now()
+        event_id = _stable_id(
+            "growth",
+            f"{pet_id}:{source_type}:{source_id}",
+        )
+        for attribute_name, delta in attribute_delta.items():
+            if attribute_name not in {item.value for item in GrowthAttribute}:
+                raise ValueError(f"unknown growth attribute: {attribute_name}")
+            if type(delta) is not int or delta < 0 or delta > ATTRIBUTE_MAX_UNITS:
+                raise ValueError("invalid growth attribute delta")
+        metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        if len(metadata_json.encode("utf-8")) > 16 * 1024:
+            raise ValueError("growth metadata exceeds 16 KiB")
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._owned_pet_row(connection, user_id, pet_id)
+            existing = connection.execute(
+                """
+                SELECT event_id FROM growth_events
+                WHERE pet_id = ? AND source_type = ? AND source_id = ?
+                """,
+                (pet_id, source_type, source_id),
+            ).fetchone()
+            if existing is not None:
+                return {
+                    "event_id": str(existing["event_id"]),
+                    "duplicate": True,
+                    "attributes": self._growth_attributes_in_connection(
+                        connection,
+                        pet_id,
+                    ),
+                }
+
+            applied_delta: dict[str, int] = {}
+            for attribute_name, delta in attribute_delta.items():
+                current_row = connection.execute(
+                    """
+                    SELECT value_units FROM growth_attributes
+                    WHERE pet_id = ? AND attribute_name = ?
+                    """,
+                    (pet_id, attribute_name),
+                ).fetchone()
+                current = 0 if current_row is None else int(current_row[0])
+                updated = min(ATTRIBUTE_MAX_UNITS, current + delta)
+                applied_delta[attribute_name] = updated - current
+                connection.execute(
+                    """
+                    INSERT INTO growth_attributes(
+                        pet_id, attribute_name, value_units, updated_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pet_id, attribute_name) DO UPDATE SET
+                        value_units = excluded.value_units,
+                        updated_at = excluded.updated_at
+                    """,
+                    (pet_id, attribute_name, updated, now),
+                )
+
+            connection.execute(
+                """
+                INSERT INTO growth_events(
+                    event_id, pet_id, user_id, source_type, source_id,
+                    event_type, topic, emotion, engagement_milli,
+                    novelty_milli, repetition_milli, attribute_delta_json,
+                    metadata_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    pet_id,
+                    user_id,
+                    source_type,
+                    source_id,
+                    event_type,
+                    topic,
+                    emotion,
+                    round(engagement * 1000),
+                    round(novelty * 1000),
+                    round(repetition_decay * 1000),
+                    json.dumps(applied_delta, sort_keys=True),
+                    metadata_json,
+                    now,
+                ),
+            )
+            attributes = self._growth_attributes_in_connection(connection, pet_id)
+        return {
+            "event_id": event_id,
+            "duplicate": False,
+            "event_type": event_type,
+            "attribute_delta": applied_delta,
+            "attributes": attributes,
+            "created_at": now,
+        }
+
+    @staticmethod
+    def _growth_attributes_in_connection(
+        connection: sqlite3.Connection,
+        pet_id: str,
+    ) -> dict[str, int]:
+        attributes = {attribute.value: 0 for attribute in GrowthAttribute}
+        rows = connection.execute(
+            """
+            SELECT attribute_name, value_units
+            FROM growth_attributes
+            WHERE pet_id = ?
+            """,
+            (pet_id,),
+        ).fetchall()
+        for row in rows:
+            if row["attribute_name"] in attributes:
+                attributes[row["attribute_name"]] = int(row["value_units"])
+        return attributes
+
+    def list_growth_tags(self, pet_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tag_id, status, earned_at, replaced_at,
+                       triggering_event_id, evidence_json
+                FROM growth_tags
+                WHERE pet_id = ?
+                ORDER BY earned_at ASC, tag_id ASC
+                """,
+                (pet_id,),
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["evidence"] = json.loads(item.pop("evidence_json"))
+            results.append(item)
+        return results
+
+    def award_growth_tags(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        triggering_event_id: str,
+        awards: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not awards:
+            return []
+        now = _utc_now()
+        awarded: list[dict[str, Any]] = []
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._owned_pet_row(connection, user_id, pet_id)
+            for award in awards:
+                tag_id = str(award["tag_id"])
+                evidence = dict(award["evidence"])
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO growth_tags(
+                        pet_id, tag_id, status, earned_at, replaced_at,
+                        triggering_event_id, evidence_json
+                    )
+                    VALUES (?, ?, 'active', ?, NULL, ?, ?)
+                    """,
+                    (
+                        pet_id,
+                        tag_id,
+                        now,
+                        triggering_event_id,
+                        json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                replaces = tuple(str(item) for item in award.get("replaces", ()))
+                if replaces:
+                    placeholders = ",".join("?" for _ in replaces)
+                    connection.execute(
+                        f"""
+                        UPDATE growth_tags
+                        SET status = 'replaced', replaced_at = ?
+                        WHERE pet_id = ? AND status = 'active'
+                          AND tag_id IN ({placeholders})
+                        """,
+                        (now, pet_id, *replaces),
+                    )
+                tag_event_source_id = f"{tag_id}:{triggering_event_id}"
+                tag_event_id = _stable_id(
+                    "growth",
+                    f"{pet_id}:system:{tag_event_source_id}",
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO growth_events(
+                        event_id, pet_id, user_id, source_type, source_id,
+                        event_type, topic, emotion, engagement_milli,
+                        novelty_milli, repetition_milli, attribute_delta_json,
+                        metadata_json, created_at
+                    )
+                    VALUES (?, ?, ?, 'system', ?, 'tag_awarded', ?, 'positive',
+                            1000, 1000, 1000, '{}', ?, ?)
+                    """,
+                    (
+                        tag_event_id,
+                        pet_id,
+                        user_id,
+                        tag_event_source_id,
+                        tag_id,
+                        json.dumps(
+                            {"tag_id": tag_id},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        now,
+                    ),
+                )
+                awarded.append(
+                    {
+                        "tag_id": tag_id,
+                        "earned_at": now,
+                        "triggering_event_id": triggering_event_id,
+                    }
+                )
+        return awarded
 
     def add_dialog_pair(
         self,

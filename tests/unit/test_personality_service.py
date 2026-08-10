@@ -111,6 +111,37 @@ def test_tail_voice_action_requires_hardware_and_intimacy_level_one() -> None:
     assert "wag_tail" in familiar_profile["allowed_functions"]
 
 
+def test_growth_behavior_enters_runtime_prompt_and_changes_revision() -> None:
+    service = PersonalityService(Settings())
+    base = service._build_profile(
+        _pet("proud_star", points=50),
+        {
+            "revision": "ordinary-growth",
+            "active_tag_ids": [],
+            "directives": [],
+        },
+    )
+    grown = service._build_profile(
+        _pet("proud_star", points=50),
+        {
+            "revision": "caring-growth",
+            "active_tag_ids": ["caring_partner"],
+            "directives": ["先确认用户感受，再提供一个可执行的小建议。"],
+        },
+    )
+
+    assert base["revision"] != grown["revision"]
+    assert grown["growth_revision"] == "caring-growth"
+    assert grown["growth_tags"] == ["caring_partner"]
+    assert "## 长期成长人格" in grown["system_prompt"]
+    assert "先确认用户感受" in grown["system_prompt"]
+    assert (
+        grown["session_update"]["session"]["config"]["LLMConfig"]
+        ["SystemMessages"]
+        == [grown["system_prompt"]]
+    )
+
+
 @pytest.mark.asyncio
 async def test_mock_profile_is_visible_but_not_written(tmp_path) -> None:
     runtime_path = tmp_path / "personality.json"

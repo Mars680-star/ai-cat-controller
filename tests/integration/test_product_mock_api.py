@@ -160,6 +160,224 @@ def test_intimacy_idempotency_daily_cap_and_unlocks(client: TestClient) -> None:
     assert any(event["points_delta"] == 0 for event in intimacy["history"])
 
 
+def test_growth_api_reuses_existing_interactions_and_dialogs(client: TestClient) -> None:
+    headers, _ = _login(client, code="growth-events-user")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-GROWTH-EVENTS",
+    )["pet"]["pet_id"]
+
+    initial = client.get(
+        f"/api/v1/pets/{pet_id}/growth",
+        headers=headers,
+    ).json()["data"]
+    assert initial["debug_values_visible"] is True
+    assert all(attribute["value"] == 0 for attribute in initial["attributes"].values())
+
+    first_task = client.post(
+        f"/api/v1/pets/{pet_id}/interactions",
+        headers=headers,
+        json={"event_type": "completed_task", "request_id": "growth-task"},
+    ).json()["data"]
+    duplicate_task = client.post(
+        f"/api/v1/pets/{pet_id}/interactions",
+        headers=headers,
+        json={"event_type": "completed_task", "request_id": "growth-task"},
+    ).json()["data"]
+    daily_meeting = client.post(
+        f"/api/v1/pets/{pet_id}/interactions",
+        headers=headers,
+        json={"event_type": "daily_check_in", "request_id": "growth-daily"},
+    ).json()["data"]
+    dialog = client.post(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+        json={"content": "机器人传感器的原理是什么？", "trigger_action": False},
+    ).json()["data"]
+
+    assert first_task["growth"]["duplicate"] is False
+    assert duplicate_task["growth"]["duplicate"] is True
+    assert daily_meeting["growth"]["duplicate"] is False
+    assert dialog["growth_event"]["duplicate"] is False
+    growth = client.get(
+        f"/api/v1/pets/{pet_id}/growth",
+        headers=headers,
+    ).json()["data"]
+    event_types = {event["event_type"] for event in growth["recent_events"]}
+    assert {
+        "completed_task",
+        "daily_meeting",
+        "knowledge_discussion",
+    } <= event_types
+    assert growth["attributes"]["discipline"]["value"] > 0
+    assert growth["attributes"]["knowledge"]["value"] > 0
+
+
+def test_debug_growth_reaches_tags_and_updates_runtime(client: TestClient) -> None:
+    headers, _ = _login(client, code="growth-debug-user")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-GROWTH-DEBUG",
+    )["pet"]["pet_id"]
+
+    response = client.post(
+        f"/api/v1/pets/{pet_id}/growth/debug",
+        headers=headers,
+        json={
+            "request_id": "knowledge-batch",
+            "event_type": "knowledge_discussion",
+            "count": 220,
+            "topic": "robotics",
+            "emotion": "neutral",
+            "engagement": 1.0,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["batch"]["processed"] == 220
+    active_ids = {tag["tag_id"] for tag in result["growth"]["active_tags"]}
+    assert {"explorer", "scholar_cat"} <= active_ids
+    tag_history = {
+        tag["tag_id"]: tag["status"]
+        for tag in result["growth"]["tag_history"]
+    }
+    assert tag_history["little_explorer"] == "replaced"
+    assert tag_history["little_scholar"] == "replaced"
+    runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    assert {"explorer", "scholar_cat"} <= set(runtime["growth_tags"])
+    assert runtime["behavior_directives"]
+
+
+def test_debug_growth_batch_is_idempotent(client: TestClient) -> None:
+    headers, _ = _login(client, code="growth-debug-idempotent")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-GROWTH-IDEMPOTENT",
+    )["pet"]["pet_id"]
+    request = {
+        "request_id": "same-growth-batch",
+        "event_type": "question",
+        "count": 3,
+        "topic": "science",
+        "emotion": "neutral",
+        "engagement": 1.0,
+    }
+
+    first = client.post(
+        f"/api/v1/pets/{pet_id}/growth/debug",
+        headers=headers,
+        json=request,
+    ).json()["data"]["batch"]
+    second = client.post(
+        f"/api/v1/pets/{pet_id}/growth/debug",
+        headers=headers,
+        json=request,
+    ).json()["data"]["batch"]
+
+    assert first["processed"] == 3
+    assert second["processed"] == 0
+    assert second["duplicates"] == 3
+
+
+def test_growth_follows_pet_but_previous_owner_events_are_private(
+    client: TestClient,
+) -> None:
+    first_headers, _ = _login(client, code="growth-owner-a")
+    pet_id = _bind(
+        client,
+        first_headers,
+        serial="K1-GROWTH-TRANSFER",
+    )["pet"]["pet_id"]
+    client.post(
+        f"/api/v1/pets/{pet_id}/interactions",
+        headers=first_headers,
+        json={
+            "event_type": "touch",
+            "request_id": "private-touch",
+            "metadata": {"sensor": "head"},
+        },
+    )
+    before = client.get(
+        f"/api/v1/pets/{pet_id}/growth",
+        headers=first_headers,
+    ).json()["data"]
+    assert before["recent_events"]
+    client.post(f"/api/v1/pets/{pet_id}/unbind", headers=first_headers)
+
+    second_headers, _ = _login(client, code="growth-owner-b")
+    rebound = _bind(client, second_headers, serial="K1-GROWTH-TRANSFER")
+    assert rebound["pet"]["pet_id"] == pet_id
+    after = client.get(
+        f"/api/v1/pets/{pet_id}/growth",
+        headers=second_headers,
+    ).json()["data"]
+
+    assert after["attributes"]["empathy"]["value"] > 0
+    assert after["recent_events"] == []
+
+
+def test_local_k1_growth_debug_is_disabled_by_default(tmp_path) -> None:
+    serial_path = tmp_path / "serial-number"
+    serial_path.write_text("K1-GROWTH-LOCAL", encoding="ascii")
+    settings = Settings(
+        hardware_driver="local_k1",
+        api_key_enabled=True,
+        api_key="growth-test-key",
+        enable_touch_motion=False,
+        data_path=tmp_path / "local-growth.db",
+        dialog_config_path=tmp_path / "dialog-config.json",
+        dialog_event_path=tmp_path / "dialog-events.jsonl",
+        device_serial_path=serial_path,
+        personality_runtime_path=tmp_path / "personality-runtime.json",
+        touch_event_log_path=tmp_path / "touch.log",
+    )
+    with TestClient(create_app(settings)) as test_client:
+        api_headers = {"X-API-Key": "growth-test-key"}
+        login = test_client.post(
+            "/api/v1/auth/mock-login",
+            headers=api_headers,
+            json={"login_code": "local-growth-user", "nickname": "测试用户"},
+        ).json()["data"]
+        headers = {
+            **api_headers,
+            "X-Mock-Session": login["session_token"],
+        }
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-GROWTH-LOCAL",
+        )["pet"]["pet_id"]
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "local-task"},
+        )
+
+        state = test_client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        ).json()["data"]
+        response = test_client.post(
+            f"/api/v1/pets/{pet_id}/growth/debug",
+            headers=headers,
+            json={"event_type": "question", "count": 1},
+        )
+
+        assert state["debug_values_visible"] is False
+        assert all("value" not in item for item in state["attributes"].values())
+        assert all(
+            "attribute_delta" not in event for event in state["recent_events"]
+        )
+        assert state["recent_events"][0]["changed_attributes"]
+        assert all("evidence" not in tag for tag in state["tag_history"])
+        assert response.status_code == 403
+        assert response.json()["data"]["code"] == "operation_disabled"
+
+
 def test_debug_unlimited_touch_bypasses_only_touch_limits(tmp_path) -> None:
     app = create_app(
         Settings(
@@ -574,6 +792,9 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
             "feedback": 1,
             "action_executions": 1,
             "dialog_history": 2,
+            "growth_tags": 0,
+            "growth_events": 2,
+            "growth_attributes": 3,
             "interaction_events": 2,
             "pets": 1,
             "devices": 1,
@@ -604,11 +825,15 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
         assert backup.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
         assert backup.execute("SELECT COUNT(*) FROM pets").fetchone()[0] == 1
         assert backup.execute("SELECT COUNT(*) FROM dialog_history").fetchone()[0] == 2
+        assert backup.execute("SELECT COUNT(*) FROM growth_events").fetchone()[0] == 2
     with sqlite3.connect(data_path) as active:
         for table in (
             "feedback",
             "action_executions",
             "dialog_history",
+            "growth_tags",
+            "growth_events",
+            "growth_attributes",
             "interaction_events",
             "pets",
             "devices",
@@ -805,6 +1030,11 @@ def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(
         ).json()["data"]
         assert partial["sync"]["imported_messages"] == 1
         assert partial["conversations"][0]["status"] == "waiting_assistant"
+        partial_growth = client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        ).json()["data"]
+        assert partial_growth["recent_events"] == []
         first_conversation_id = partial["conversations"][0]["conversation_id"]
         first_revision = partial["sync"]["revision"]
 
@@ -827,6 +1057,13 @@ def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(
         assert complete["sync"]["revision"] != first_revision
         assert complete["conversations"][0]["conversation_id"] == first_conversation_id
         assert complete["conversations"][0]["status"] == "complete"
+        complete_growth = client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        ).json()["data"]
+        assert [
+            event["event_type"] for event in complete_growth["recent_events"]
+        ] == ["question"]
         detail = client.get(
             f"/api/v1/pets/{pet_id}/dialog-conversations/{first_conversation_id}",
             headers=headers,

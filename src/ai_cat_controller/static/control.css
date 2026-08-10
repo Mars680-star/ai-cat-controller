@@ -779,6 +779,91 @@ textarea:focus-visible {
   padding: 3px 0;
 }
 
+.growth-personality {
+  margin-top: 34px;
+  padding-top: 24px;
+  border-top: 2px solid #e4c85f;
+}
+
+.growth-tags {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.growth-tag {
+  padding: 5px 9px;
+  color: #704b00;
+  background: var(--mint-soft);
+  border: 1px solid #e4c85f;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.growth-personality-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(280px, 1.2fr);
+  gap: 28px;
+}
+
+.growth-personality-grid > section + section {
+  padding-left: 28px;
+  border-left: 1px solid var(--line);
+}
+
+.growth-personality-grid h3,
+.growth-debug-form h3 {
+  font-size: 0.92rem;
+}
+
+.tendency-list {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.tendency-row {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8rem;
+}
+
+.tendency-row strong {
+  color: #704b00;
+}
+
+.growth-event-delta {
+  max-width: 48%;
+  color: var(--success);
+  text-align: right;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.growth-debug-form {
+  margin-top: 24px;
+  padding: 16px 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) 90px 150px;
+  align-items: end;
+  gap: 12px;
+  border-top: 1px dashed #d8bd5d;
+  border-bottom: 1px dashed #d8bd5d;
+}
+
+.growth-debug-form p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .conversation-workspace {
   height: min(540px, calc(100vh - 300px));
   min-height: 360px;
@@ -1148,6 +1233,22 @@ textarea:focus-visible {
   .view {
     min-height: calc(100vh - 132px);
     padding: 22px 18px 92px;
+  }
+
+  .growth-personality-grid,
+  .growth-debug-form {
+    grid-template-columns: 1fr;
+  }
+
+  .growth-personality-grid > section + section {
+    padding-top: 18px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .growth-event-delta {
+    max-width: 44%;
   }
 
   .bottom-nav {

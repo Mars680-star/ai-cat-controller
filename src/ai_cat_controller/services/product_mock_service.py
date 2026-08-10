@@ -26,6 +26,10 @@ from ai_cat_controller.core.errors import (
     ResourceNotFoundError,
 )
 from ai_cat_controller.domain.actions import ACTIONS, ACTION_BY_ID, action_is_unlocked
+from ai_cat_controller.domain.growth import (
+    GrowthEmotion,
+    GrowthEventType,
+)
 from ai_cat_controller.domain.intimacy import (
     INTERACTION_RULES,
     INTIMACY_LEVELS,
@@ -35,6 +39,7 @@ from ai_cat_controller.domain.intimacy import (
 from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
 from ai_cat_controller.local_speech import LocalPhrasePlayer
 from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
+from ai_cat_controller.services.growth_service import GrowthService
 from ai_cat_controller.services.motion_service import MotionService
 from ai_cat_controller.services.personality_service import PersonalityService
 
@@ -68,6 +73,7 @@ class ProductMockService:
         self._settings = settings
         self._personality = personality
         self._adapter = adapter
+        self._growth = GrowthService(repository)
         self._touch_phrase_player = LocalPhrasePlayer(
             asset_root=settings.touch_speech_asset_root,
             marker_path=settings.touch_speech_marker_path,
@@ -85,8 +91,28 @@ class ProductMockService:
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
-        await self._personality.initialize(self._repository)
+        await self._initialize_personality()
         await self._sync_bound_native_dialog_events()
+
+    async def _initialize_personality(self) -> None:
+        if self._settings.hardware_driver != "local_k1":
+            return
+        serial = await asyncio.to_thread(
+            self._personality.read_device_serial,
+            self._settings.device_serial_path,
+        )
+        if serial is None:
+            LOGGER.warning("cannot synchronize personality: device serial unavailable")
+            return
+        pet = await asyncio.to_thread(self._repository.get_pet_by_serial, serial)
+        if pet is None:
+            LOGGER.info("no pet is bound to local device %s", serial)
+            return
+        await self._sync_personality(pet)
+
+    async def _sync_personality(self, pet: dict[str, Any]) -> dict[str, Any]:
+        behavior_profile = await self._growth.behavior_profile(pet)
+        return await self._personality.sync_pet(pet, behavior_profile)
 
     async def _sync_bound_native_dialog_events(self) -> None:
         events = await asyncio.to_thread(self._read_native_dialog_events)
@@ -172,7 +198,7 @@ class ProductMockService:
             network_name=network_name,
             personality_id=selected.personality_id,
         )
-        personality_sync = await self._personality.sync_pet(pet)
+        personality_sync = await self._sync_personality(pet)
         return {
             "pet": self._pet_summary(pet),
             "blind_box_revealed": personality_created,
@@ -231,6 +257,57 @@ class ProductMockService:
             "next_unlocks": next_level.unlocks if next_level else (),
         }
 
+    def _growth_debug_enabled(self) -> bool:
+        return (
+            self._settings.hardware_driver == "mock"
+            or self._settings.enable_debug_growth
+        )
+
+    async def growth_state(self, user_id: str, pet_id: str) -> dict[str, Any]:
+        return await self._growth.state(
+            user_id=user_id,
+            pet_id=pet_id,
+            include_debug_values=self._growth_debug_enabled(),
+        )
+
+    async def debug_growth(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+        event_type: str,
+        count: int,
+        topic: str,
+        emotion: str,
+        engagement: float,
+    ) -> dict[str, Any]:
+        if not self._growth_debug_enabled():
+            raise OperationDisabledError(
+                "当前部署未启用成长人格调试接口"
+            )
+        result = await self._growth.record_debug_events(
+            user_id=user_id,
+            pet_id=pet_id,
+            request_id=request_id,
+            event_type=GrowthEventType(event_type),
+            count=count,
+            topic=topic,
+            emotion=GrowthEmotion(emotion),
+            engagement=engagement,
+        )
+        if result["behavior_changed"]:
+            pet = await asyncio.to_thread(
+                self._repository.get_owned_pet,
+                user_id,
+                pet_id,
+            )
+            await self._sync_personality(pet)
+        return {
+            "batch": result,
+            "growth": await self.growth_state(user_id, pet_id),
+        }
+
     async def add_interaction(
         self,
         *,
@@ -259,13 +336,82 @@ class ProductMockService:
         )
         event["level"] = level_for_points(event["points_after"]).model_dump()
         event["progress"] = level_progress(event["points_after"])
+        event["growth"] = await self._safe_record_interaction_growth(
+            user_id=user_id,
+            pet_id=pet_id,
+            request_id=request_id,
+            event_type=event_type,
+            metadata=metadata,
+        )
         pet = await asyncio.to_thread(
             self._repository.get_owned_pet,
             user_id,
             pet_id,
         )
-        event["personality_sync"] = await self._personality.sync_pet(pet)
+        event["personality_sync"] = await self._sync_personality(pet)
         return event
+
+    async def _safe_record_interaction_growth(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+        event_type: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            growth = await self._growth.record_interaction(
+                user_id=user_id,
+                pet_id=pet_id,
+                source_id=request_id,
+                interaction_type=event_type,
+                metadata=metadata,
+            )
+        except Exception:
+            LOGGER.exception("interaction growth skipped: %s", request_id)
+            return None
+        return self._growth_result_summary(growth)
+
+    async def _safe_record_dialog_growth(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        conversation_id: str,
+        user_content: str,
+        source: str,
+    ) -> dict[str, Any] | None:
+        try:
+            growth = await self._growth.record_dialog(
+                user_id=user_id,
+                pet_id=pet_id,
+                conversation_id=conversation_id,
+                user_content=user_content,
+                metadata={"source": source},
+            )
+        except Exception:
+            LOGGER.exception("dialog growth skipped: %s", conversation_id)
+            return None
+        return self._growth_result_summary(growth)
+
+    @staticmethod
+    def _growth_result_summary(
+        growth: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if growth is None:
+            return None
+        return {
+            key: growth[key]
+            for key in (
+                "event_id",
+                "duplicate",
+                "attribute_delta",
+                "awarded_tags",
+                "behavior_changed",
+            )
+            if key in growth
+        }
 
     async def action_catalog(
         self, user_id: str, pet_id: str
@@ -451,6 +597,20 @@ class ProductMockService:
             request_id=f"dialog:{conversation_id}",
             metadata={"conversation_id": conversation_id},
         )
+        growth = await self._safe_record_dialog_growth(
+            user_id=user_id,
+            pet_id=pet_id,
+            conversation_id=conversation_id,
+            user_content=content,
+            source="mock",
+        )
+        if growth and growth.get("behavior_changed"):
+            pet = await asyncio.to_thread(
+                self._repository.get_owned_pet,
+                user_id,
+                pet_id,
+            )
+            await self._sync_personality(pet)
 
         action_result: dict[str, Any] | None = None
         if trigger_action:
@@ -485,6 +645,7 @@ class ProductMockService:
             "voice_integration_status": "mock_only",
             "style": style.model_dump(),
             "intimacy_event": intimacy_event,
+            "growth_event": growth,
             "action": action_result,
         }
 
@@ -543,6 +704,7 @@ class ProductMockService:
             pass
 
         owner_key = (user_id, pet_id)
+        growth_changed = False
         async with self._dialog_sync_lock:
             imported = 0
             if (
@@ -560,12 +722,25 @@ class ProductMockService:
                     )
                     if imported:
                         LOGGER.info("imported %d native dialog messages", imported)
+                    growth_changed = await self._record_native_dialog_growth(
+                        user_id=user_id,
+                        pet_id=pet_id,
+                        events=events,
+                    )
                 self._dialog_source_signatures[owner_key] = source_signature
             state = await asyncio.to_thread(
                 self._repository.dialog_sync_state,
                 user_id,
                 pet_id,
             )
+
+        if growth_changed:
+            pet = await asyncio.to_thread(
+                self._repository.get_owned_pet,
+                user_id,
+                pet_id,
+            )
+            await self._sync_personality(pet)
 
         latest_message_at = state["latest_message_at"]
         return {
@@ -578,6 +753,36 @@ class ProductMockService:
             "synced_at": datetime.now(timezone.utc).isoformat(),
             "revision": f"{state['message_count']}:{latest_message_at or ''}",
         }
+
+    async def _record_native_dialog_growth(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        events: list[dict[str, Any]],
+    ) -> bool:
+        conversations: dict[str, dict[str, str]] = {}
+        for event in events:
+            conversation = conversations.setdefault(
+                str(event["conversation_id"]),
+                {},
+            )
+            conversation.setdefault(str(event["role"]), str(event["content"]))
+        behavior_changed = False
+        for conversation_id, messages in conversations.items():
+            if "user" not in messages or "assistant" not in messages:
+                continue
+            result = await self._safe_record_dialog_growth(
+                user_id=user_id,
+                pet_id=pet_id,
+                conversation_id=conversation_id,
+                user_content=messages["user"],
+                source="native",
+            )
+            behavior_changed = behavior_changed or bool(
+                result and result.get("behavior_changed")
+            )
+        return behavior_changed
 
     @staticmethod
     def _conversation_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -770,7 +975,7 @@ class ProductMockService:
             name=name,
             volume=volume,
         )
-        await self._personality.sync_pet(pet)
+        await self._sync_personality(pet)
         return self._pet_summary(pet)
 
     async def add_device_touch(

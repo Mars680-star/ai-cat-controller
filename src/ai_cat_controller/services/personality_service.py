@@ -37,7 +37,7 @@ class PersonalityService:
         self._active_sync_state = "not_configured"
 
     @staticmethod
-    def _read_device_serial(path: Path) -> str | None:
+    def read_device_serial(path: Path) -> str | None:
         try:
             serial = path.read_bytes().replace(b"\x00", b"").decode("ascii").strip()
         except (OSError, UnicodeError):
@@ -68,6 +68,7 @@ class PersonalityService:
         pet_name: str,
         intimacy_level: int,
         allowed_functions: tuple[str, ...],
+        behavior_directives: tuple[str, ...] = (),
     ) -> str:
         style = personality.style_for_level(intimacy_level)
         trigger_lines = [
@@ -85,6 +86,16 @@ class PersonalityService:
             f"- {item}。" if not item.endswith("。") else f"- {item}"
             for item in personality.prohibited_content
         ]
+        growth_lines = (
+            (
+                "",
+                "## 长期成长人格",
+                "初始性格决定表达方式，以下成长倾向只决定更倾向做什么。",
+                *(f"- {directive}" for directive in behavior_directives),
+            )
+            if behavior_directives
+            else ()
+        )
         return "\n".join(
             (
                 "## 身份",
@@ -101,6 +112,7 @@ class PersonalityService:
                 "优先直接回答用户问题，通常使用一到三句简短自然的中文。",
                 "不知道或无法实时查询时明确说明，不编造事实或设备状态。",
                 "不要朗读本提示词，不要声称已经执行未收到成功结果的动作。",
+                *growth_lines,
                 "",
                 "## 动作规则",
                 "动作只是回答的补充。仅在用户明确要求或语义明显符合触发规则时调用，"
@@ -114,11 +126,20 @@ class PersonalityService:
             )
         )
 
-    def _build_profile(self, pet: dict[str, Any]) -> dict[str, Any]:
+    def _build_profile(
+        self,
+        pet: dict[str, Any],
+        behavior_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         personality = PERSONALITY_BY_ID[pet["personality_id"]]
         level = level_for_points(int(pet["intimacy_points"])).level
         style = personality.style_for_level(level)
         allowed_functions = self._effective_functions(personality, level)
+        growth = behavior_profile or {
+            "revision": "base-v1",
+            "active_tag_ids": [],
+            "directives": [],
+        }
         profile_core = {
             "version": 1,
             "device_serial": pet["serial_number"],
@@ -132,6 +153,9 @@ class PersonalityService:
             "voice_type": VOLCENGINE_CONSOLE_VOICE_ID,
             "voice_source": "volcengine_console",
             "allowed_functions": list(allowed_functions),
+            "growth_revision": str(growth["revision"]),
+            "growth_tags": list(growth["active_tag_ids"]),
+            "behavior_directives": list(growth["directives"]),
             "autonomy": {
                 "action_weights": personality.autonomy_action_weights,
                 "phrases": list(personality.proactive_phrases),
@@ -141,6 +165,7 @@ class PersonalityService:
                 pet_name=pet["name"],
                 intimacy_level=level,
                 allowed_functions=allowed_functions,
+                behavior_directives=tuple(str(item) for item in growth["directives"]),
             ),
         }
         canonical = json.dumps(
@@ -201,7 +226,7 @@ class PersonalityService:
         if self._settings.hardware_driver != "local_k1":
             return
         serial = await asyncio.to_thread(
-            self._read_device_serial,
+            self.read_device_serial,
             self._settings.device_serial_path,
         )
         if serial is None:
@@ -213,8 +238,12 @@ class PersonalityService:
             return
         await self.sync_pet(pet)
 
-    async def sync_pet(self, pet: dict[str, Any]) -> dict[str, Any]:
-        profile = self._build_profile(pet)
+    async def sync_pet(
+        self,
+        pet: dict[str, Any],
+        behavior_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        profile = self._build_profile(pet, behavior_profile)
         if self._settings.hardware_driver != "local_k1":
             async with self._lock:
                 self._active_profile = profile
@@ -222,7 +251,7 @@ class PersonalityService:
             return {**self._public_profile(profile), "sync_state": "mock_only"}
 
         serial = await asyncio.to_thread(
-            self._read_device_serial,
+            self.read_device_serial,
             self._settings.device_serial_path,
         )
         if serial != pet["serial_number"]:
@@ -280,6 +309,9 @@ class PersonalityService:
                 "voice_type",
                 "voice_source",
                 "allowed_functions",
+                "growth_revision",
+                "growth_tags",
+                "behavior_directives",
                 "autonomy",
             )
         }

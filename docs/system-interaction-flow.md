@@ -7,8 +7,8 @@
    │  HTTP JSON，X-Mock-Session，可选 X-API-Key
    ▼
 FastAPI 产品 API
-   ├── SQLite：用户、设备、宠物、性格、亲密度、历史、动作记录
-   ├── ProductMockService：绑定、盲盒、成长、对话模板、设置
+   ├── SQLite：用户、设备、宠物、性格、亲密度、长期成长、历史、动作记录
+   ├── ProductMockService：绑定、盲盒、亲密度、长期成长、对话模板、设置
    └── MotionService：串行、超时、冷却、停止、结果跟踪
           │
           ▼
@@ -58,11 +58,15 @@ Mock 对话回复仍由本地模板生成，不调用火山引擎，也不播放
 
 宠物性格和亲密度跟随 `pet_id`。对话、互动事件和动作记录同时保存
 `pet_id + user_id`；设备转移给新用户后，新用户不能读取旧用户的对话记录。
+成长属性和标签作为宠物养成结果继续跟随 `pet_id`；成长原因事件同时记录
+`user_id`，设备转移后新主人只能看到转移后的原因事件。
 
 ## 数据一致性
 
 - 绑定和亲密度变更使用 SQLite 事务。
 - 同一 `pet_id + request_id` 的互动和动作只处理一次。
+- 成长事件使用 `pet_id + source_type + source_id` 唯一约束；对话只有在用户文本和
+  助手回答都成功持久化后才转换为成长事件。
 - 正向亲密度按 UTC 自然日计算次数与总增长上限，扣减后不低于 0。
 - 动作先写 `pending`，调度成功后写 `running`，最终写
   `completed/cancelled/failed/timed_out`。

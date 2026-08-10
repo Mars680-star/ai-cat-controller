@@ -300,6 +300,62 @@
           </section>
         </div>
         <div id="interaction-history" class="timeline empty-state">暂无培养记录</div>
+
+        <section class="growth-personality" aria-labelledby="growth-personality-title">
+          <div class="section-heading compact">
+            <div>
+              <h3 id="growth-personality-title">成长人格</h3>
+              <p>长期互动形成的稳定倾向，不改变出生性格</p>
+            </div>
+          </div>
+          <div id="growth-tags" class="growth-tags" aria-label="当前成长标签">
+            <span class="muted">尚未形成成长标签</span>
+          </div>
+          <div class="growth-personality-grid">
+            <section>
+              <h3>成长倾向</h3>
+              <div id="growth-tendencies" class="tendency-list"></div>
+            </section>
+            <section>
+              <h3>当前行为画像</h3>
+              <ul id="growth-behavior-summary" class="plain-list"></ul>
+            </section>
+          </div>
+
+          <div class="section-heading compact">
+            <div>
+              <h3>最近成长</h3>
+              <p>记录互动如何影响长期人格</p>
+            </div>
+          </div>
+          <div id="growth-event-history" class="timeline empty-state">
+            暂无成长记录
+          </div>
+
+          <form id="growth-debug-form" class="growth-debug-form hidden">
+            <div>
+              <h3>Mock 快速养成</h3>
+              <p>仅用于开发验证；重复请求 ID 不会重复成长</p>
+            </div>
+            <label>
+              <span>事件类型</span>
+              <select id="growth-debug-event">
+                <option value="knowledge_discussion">知识讨论</option>
+                <option value="question">提出问题</option>
+                <option value="emotional_sharing">情绪分享</option>
+                <option value="encouragement">鼓励互动</option>
+                <option value="joke">轻松玩笑</option>
+                <option value="planning">计划讨论</option>
+                <option value="casual_chat">日常闲聊</option>
+              </select>
+            </label>
+            <label>
+              <span>次数</span>
+              <input id="growth-debug-count" type="number" min="1" max="500" value="20">
+            </label>
+            <button class="button secondary" type="submit">生成成长事件</button>
+          </form>
+        </section>
       </section>
 
       <section id="view-history" class="view" data-view-panel="history">
@@ -454,6 +510,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260810-2" defer></script>
+  <script src="/static/control.js?v=20260810-3" defer></script>
 </body>
 </html>

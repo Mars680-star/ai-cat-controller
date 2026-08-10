@@ -11,6 +11,7 @@ from ai_cat_controller.core.state import AppServices
 from ai_cat_controller.schemas.common import ApiResponse
 from ai_cat_controller.schemas.product import (
     BindPetRequest,
+    DebugGrowthRequest,
     ExecuteActionRequest,
     FeedbackRequest,
     InteractionRequest,
@@ -99,6 +100,44 @@ async def intimacy(
     user_id: Annotated[str, Depends(mock_user_id)],
 ) -> ApiResponse[Any]:
     return _response("亲密度详情", await services.product.intimacy(user_id, pet_id))
+
+
+@router.get(
+    "/pets/{pet_id}/growth",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def growth(
+    pet_id: str,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    return _response(
+        "成长人格详情",
+        await services.product.growth_state(user_id, pet_id),
+    )
+
+
+@router.post(
+    "/pets/{pet_id}/growth/debug",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def debug_growth(
+    pet_id: str,
+    request: DebugGrowthRequest,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    result = await services.product.debug_growth(
+        user_id=user_id,
+        pet_id=pet_id,
+        request_id=request.request_id,
+        event_type=request.event_type,
+        count=request.count,
+        topic=request.topic,
+        emotion=request.emotion,
+        engagement=request.engagement,
+    )
+    return _response("成长人格调试事件已处理", result)
 
 
 @router.post(
