@@ -1,10 +1,13 @@
 import json
 import time
+from functools import partial
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.domain.personalities import PERSONALITY_BY_ID
+from ai_cat_controller.local_speech import LocalPhrasePlayer
 from ai_cat_controller.main import create_app
 
 
@@ -40,6 +43,29 @@ def _bind(
     )
     assert response.status_code == 200
     return response.json()["data"]
+
+
+def _add_device_touch(
+    client: TestClient,
+    *,
+    serial: str,
+    request_id: str,
+    sensor: str,
+) -> dict:
+    services = client.app.state.services
+    assert client.portal is not None
+    return client.portal.call(
+        partial(
+            services.product.add_device_touch,
+            device_serial=serial,
+            request_id=request_id,
+            metadata={
+                "source": "test_touch",
+                "sensor": sensor,
+                "gesture": "short",
+            },
+        )
+    )
 
 
 def test_login_bind_blind_box_and_dashboard(client: TestClient) -> None:
@@ -127,10 +153,126 @@ def test_intimacy_idempotency_daily_cap_and_unlocks(client: TestClient) -> None:
     intimacy = client.get(
         f"/api/v1/pets/{pet_id}/intimacy", headers=headers
     ).json()["data"]
-    assert intimacy["points"] == 20
+    assert intimacy["points"] == 23
     assert intimacy["level"]["level"] == 1
-    assert intimacy["daily_growth_cap"] == 20
+    assert intimacy["daily_growth_cap"] == 50
     assert any(event["points_delta"] == 0 for event in intimacy["history"])
+
+
+def test_physical_touch_starts_safe_action_and_preserves_cooldown(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client, code="touch-action-user")
+    pet_id = _bind(client, headers, serial="K1-TOUCH-ACTION")["pet"]["pet_id"]
+
+    first = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-1",
+        sensor="head",
+    )
+    assert first["points_delta"] == 1
+    assert first["touch_action"]["status"] == "started"
+    assert first["touch_action"]["action_id"] == "head_nod"
+
+    services = client.app.state.services
+    assert client.portal is not None
+    client.portal.call(services.motion.wait_until_idle)
+    second = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-2",
+        sensor="nose",
+    )
+    duplicate = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-1",
+        sensor="head",
+    )
+
+    assert second["points_delta"] == 1
+    assert second["touch_action"] == {
+        "status": "skipped",
+        "reason": "touch_motion_cooldown",
+    }
+    assert duplicate["duplicate"] is True
+    assert duplicate["touch_action"] == {
+        "status": "skipped",
+        "reason": "duplicate_touch",
+    }
+    executions = client.get(
+        f"/api/v1/pets/{pet_id}/actions/executions",
+        headers=headers,
+    ).json()["data"]
+    assert len(executions) == 1
+    assert executions[0]["action_id"] == "head_nod"
+
+
+def test_physical_touch_does_not_move_during_dialog(client: TestClient) -> None:
+    headers, _ = _login(client, code="touch-dialog-user")
+    pet_id = _bind(client, headers, serial="K1-TOUCH-DIALOG")["pet"]["pet_id"]
+    services = client.app.state.services
+    assert client.portal is not None
+    client.portal.call(services.adapter.wake_dialog)
+
+    event = _add_device_touch(
+        client,
+        serial="K1-TOUCH-DIALOG",
+        request_id="dialog-touch-1",
+        sensor="right_foot",
+    )
+
+    assert event["points_delta"] == 1
+    assert event["touch_action"]["status"] == "skipped"
+    assert event["touch_action"]["reason"] == "dialog_busy"
+    executions = client.get(
+        f"/api/v1/pets/{pet_id}/actions/executions",
+        headers=headers,
+    ).json()["data"]
+    assert executions == []
+
+
+def test_physical_touch_plays_local_phrase_after_motion(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    played: list[tuple[str, str]] = []
+
+    def fake_play_touch(
+        self: LocalPhrasePlayer,
+        personality_id: str,
+        sensor: str,
+    ) -> Path:
+        del self
+        played.append((personality_id, sensor))
+        return tmp_path / "touch.wav"
+
+    monkeypatch.setattr(LocalPhrasePlayer, "play_touch", fake_play_touch)
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            motion_cooldown_seconds=0.0,
+            data_path=tmp_path / "touch-speech.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+            enable_touch_speech=True,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="touch-speech-user")
+        bound = _bind(test_client, headers, serial="K1-TOUCH-SPEECH")
+        event = _add_device_touch(
+            test_client,
+            serial="K1-TOUCH-SPEECH",
+            request_id="touch-speech-1",
+            sensor="back",
+        )
+        assert event["touch_action"]["speech_scheduled"] is True
+        deadline = time.monotonic() + 2.0
+        while not played and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert played == [(bound["pet"]["personality_id"], "back")]
 
 
 def test_action_catalog_rejects_locked_and_tracks_idempotency(

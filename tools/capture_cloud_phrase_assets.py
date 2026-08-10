@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import array
 import hashlib
 import json
@@ -16,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.domain.personalities import PERSONALITIES
-from ai_cat_controller.local_speech import DEFAULT_ASSET_ROOT, phrase_asset_path
+from ai_cat_controller.local_speech import (
+    DEFAULT_ASSET_ROOT,
+    TOUCH_PHRASES,
+    phrase_asset_path,
+    touch_phrase_asset_path,
+)
 
 ENV_PATH = Path("/etc/ai-cat-controller.env")
 RUNTIME_PATH = Path("/var/lib/ai-cat-controller/personality-runtime.json")
@@ -178,8 +184,11 @@ def capture_phrase(
     personality_id: str,
     phrase_index: int,
     phrase: str,
+    *,
+    target: Path | None = None,
+    request_name: str | None = None,
 ) -> tuple[Path, float]:
-    target = phrase_asset_path(DEFAULT_ASSET_ROOT, personality_id, phrase)
+    target = target or phrase_asset_path(DEFAULT_ASSET_ROOT, personality_id, phrase)
     target.parent.mkdir(parents=True, exist_ok=True)
     raw_capture = target.with_suffix(".capture.wav")
     raw_capture.unlink(missing_ok=True)
@@ -203,7 +212,11 @@ def capture_phrase(
         time.sleep(0.5)
         if recorder.poll() is not None:
             raise RuntimeError("parecord exited before TTS started")
-        request_id = f"asset-{personality_id}-{phrase_index + 1:02d}"
+        request_id = (
+            f"asset-{personality_id}-{request_name}"
+            if request_name
+            else f"asset-{personality_id}-{phrase_index + 1:02d}"
+        )
         post_speak(api_key, phrase, request_id)
         saw_playback = False
         deadline = time.monotonic() + CAPTURE_TIMEOUT_SECONDS
@@ -230,6 +243,13 @@ def capture_phrase(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--kind",
+        choices=("proactive", "touch", "all"),
+        default="proactive",
+    )
+    args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("run this capture tool as root on the provisioned K1")
     os.umask(0o077)
@@ -245,17 +265,37 @@ def main() -> None:
                 timeout=40.0,
             )
             wait_for_runtime(runtime["revision"])
-            for index, phrase in enumerate(personality.proactive_phrases):
-                path, duration = capture_phrase(
-                    api_key,
-                    personality.personality_id,
-                    index,
-                    phrase,
-                )
-                print(
-                    f"captured {personality.personality_id}/"
-                    f"{path.name}: {duration:.2f}s"
-                )
+            if args.kind in {"proactive", "all"}:
+                for index, phrase in enumerate(personality.proactive_phrases):
+                    path, duration = capture_phrase(
+                        api_key,
+                        personality.personality_id,
+                        index,
+                        phrase,
+                    )
+                    print(
+                        f"captured {personality.personality_id}/"
+                        f"{path.name}: {duration:.2f}s"
+                    )
+            if args.kind in {"touch", "all"}:
+                for index, (sensor, phrase) in enumerate(TOUCH_PHRASES.items()):
+                    target = touch_phrase_asset_path(
+                        DEFAULT_ASSET_ROOT,
+                        personality.personality_id,
+                        sensor,
+                    )
+                    path, duration = capture_phrase(
+                        api_key,
+                        personality.personality_id,
+                        index,
+                        phrase,
+                        target=target,
+                        request_name=f"touch-{sensor}",
+                    )
+                    print(
+                        f"captured {personality.personality_id}/"
+                        f"{path.name}: {duration:.2f}s"
+                    )
     finally:
         try:
             write_runtime(original)

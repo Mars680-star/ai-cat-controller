@@ -20,6 +20,12 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_LOG_LEVEL": "debug",
             "AI_CAT_MOTION_COOLDOWN_SECONDS": "0.5",
             "AI_CAT_ENABLE_TAIL_MOTION": "true",
+            "AI_CAT_ENABLE_TOUCH_MOTION": "false",
+            "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS": "4.5",
+            "AI_CAT_ENABLE_TOUCH_SPEECH": "true",
+            "AI_CAT_TOUCH_SPEECH_ASSET_ROOT": "/tmp/touch-assets",
+            "AI_CAT_TOUCH_SPEECH_MARKER_PATH": "/tmp/touch-marker",
+            "AI_CAT_TOUCH_SPEECH_PLAYER_PATH": "/bin/paplay",
             "AI_CAT_BATTERY_SUPPLY_PATH": "/tmp/test-cw-bat",
             "AI_CAT_CHARGER_SUPPLY_PATH": "/tmp/test-charger",
             "AI_CAT_DIALOG_CONFIG_PATH": "/tmp/dialog-config.json",
@@ -37,6 +43,12 @@ def test_environment_values_are_parsed() -> None:
     assert settings.log_level == "DEBUG"
     assert settings.motion_cooldown_seconds == 0.5
     assert settings.enable_tail_motion is True
+    assert settings.enable_touch_motion is False
+    assert settings.touch_motion_cooldown_seconds == 4.5
+    assert settings.enable_touch_speech is True
+    assert str(settings.touch_speech_asset_root) == "/tmp/touch-assets"
+    assert str(settings.touch_speech_marker_path) == "/tmp/touch-marker"
+    assert str(settings.touch_speech_player_path) == "/bin/paplay"
     assert str(settings.battery_supply_path) == "/tmp/test-cw-bat"
     assert str(settings.charger_supply_path) == "/tmp/test-charger"
     assert str(settings.dialog_config_path) == "/tmp/dialog-config.json"
@@ -75,6 +87,14 @@ def test_unconfirmed_hardware_binary_is_rejected() -> None:
 def test_unconfirmed_pulseaudio_socket_is_rejected() -> None:
     with pytest.raises(ValidationError, match="AI_CAT_PULSE_SERVER is not allowlisted"):
         Settings(pulse_server="tcp:attacker.example:4713")
+
+
+def test_unconfirmed_touch_speech_player_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="AI_CAT_TOUCH_SPEECH_PLAYER_PATH is not allowlisted",
+    ):
+        Settings(touch_speech_player_path="/tmp/player")
 
 
 def test_secret_is_masked_in_settings_representation() -> None:

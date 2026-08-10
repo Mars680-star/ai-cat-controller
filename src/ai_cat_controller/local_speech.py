@@ -13,6 +13,13 @@ DEFAULT_ASSET_ROOT = Path("/opt/ai-cat-controller/assets/local-speech")
 DEFAULT_MARKER_PATH = Path("/run/ai-cat/local-speech-active")
 DEFAULT_PLAYER_PATH = Path("/usr/bin/paplay")
 PLAYER_TIMEOUT_SECONDS = 15.0
+TOUCH_PHRASES = {
+    "head": "摸摸头，好舒服呀。",
+    "back": "轻轻摸背，我很喜欢。",
+    "nose": "呀，鼻子有点痒。",
+    "left_foot": "你碰到我的左爪啦。",
+    "right_foot": "你碰到我的右爪啦。",
+}
 
 
 class LocalSpeechError(RuntimeError):
@@ -32,6 +39,18 @@ def phrase_asset_path(
     except ValueError as exc:
         raise LocalSpeechError("phrase is not allowlisted for this personality") from exc
     return asset_root / personality_id / f"phrase-{phrase_index + 1:02d}.wav"
+
+
+def touch_phrase_asset_path(
+    asset_root: Path,
+    personality_id: str,
+    sensor: str,
+) -> Path:
+    if personality_id not in PERSONALITY_BY_ID:
+        raise LocalSpeechError("unknown personality for local speech")
+    if sensor not in TOUCH_PHRASES:
+        raise LocalSpeechError("touch sensor is not allowlisted for local speech")
+    return asset_root / personality_id / f"touch-{sensor}.wav"
 
 
 class LocalPhrasePlayer:
@@ -58,6 +77,17 @@ class LocalPhrasePlayer:
             personality_id,
             phrase,
         )
+        return self._play_asset(expected_path, "personality-phrase")
+
+    def play_touch(self, personality_id: str, sensor: str) -> Path:
+        expected_path = touch_phrase_asset_path(
+            self._asset_root,
+            personality_id,
+            sensor,
+        )
+        return self._play_asset(expected_path, f"touch-{sensor}")
+
+    def _play_asset(self, expected_path: Path, stream_name: str) -> Path:
         try:
             root = self._asset_root.resolve(strict=True)
             asset = expected_path.resolve(strict=True)
@@ -89,7 +119,7 @@ class LocalPhrasePlayer:
                     [
                         str(self._player_path),
                         "--client-name=ai-cat-local-speech",
-                        "--stream-name=personality-phrase",
+                        f"--stream-name={stream_name}",
                         str(asset),
                     ],
                     check=False,

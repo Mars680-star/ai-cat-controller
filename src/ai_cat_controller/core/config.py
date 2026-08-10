@@ -35,9 +35,15 @@ class Settings(BaseModel):
     dialog_start_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
     enable_tail_motion: bool = False
+    enable_touch_motion: bool = True
+    touch_motion_cooldown_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
+    enable_touch_speech: bool = False
+    touch_speech_asset_root: Path = Path("/opt/ai-cat-controller/assets/local-speech")
+    touch_speech_marker_path: Path = Path("/run/ai-cat/local-speech-active")
+    touch_speech_player_path: Path = Path("/usr/bin/paplay")
     service_status_cache_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
     data_path: Path = Path(".data/ai-cat-mock.db")
-    intimacy_daily_cap: int = Field(default=20, ge=1, le=100)
+    intimacy_daily_cap: int = Field(default=50, ge=1, le=100)
 
     hardware_binary: Path = Path("/usr/bin/ai-toy_app")
     systemctl_binary: Path = Path("/usr/bin/systemctl")
@@ -90,6 +96,13 @@ class Settings(BaseModel):
             raise ValueError("AI_CAT_PULSEAUDIO_CTL_BINARY is not allowlisted")
         return value
 
+    @field_validator("touch_speech_player_path")
+    @classmethod
+    def validate_touch_speech_player_path(cls, value: Path) -> Path:
+        if str(value) not in {"/usr/bin/paplay", "/bin/paplay"}:
+            raise ValueError("AI_CAT_TOUCH_SPEECH_PLAYER_PATH is not allowlisted")
+        return value
+
     @field_validator("pulse_server")
     @classmethod
     def validate_pulse_server(cls, value: str) -> str:
@@ -133,11 +146,31 @@ class Settings(BaseModel):
             ),
             "motion_cooldown_seconds": source.get("AI_CAT_MOTION_COOLDOWN_SECONDS", "0.2"),
             "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
+            "enable_touch_motion": source.get(
+                "AI_CAT_ENABLE_TOUCH_MOTION", "true"
+            ),
+            "touch_motion_cooldown_seconds": source.get(
+                "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS", "3.0"
+            ),
+            "enable_touch_speech": source.get(
+                "AI_CAT_ENABLE_TOUCH_SPEECH", "false"
+            ),
+            "touch_speech_asset_root": source.get(
+                "AI_CAT_TOUCH_SPEECH_ASSET_ROOT",
+                "/opt/ai-cat-controller/assets/local-speech",
+            ),
+            "touch_speech_marker_path": source.get(
+                "AI_CAT_TOUCH_SPEECH_MARKER_PATH",
+                "/run/ai-cat/local-speech-active",
+            ),
+            "touch_speech_player_path": source.get(
+                "AI_CAT_TOUCH_SPEECH_PLAYER_PATH", "/usr/bin/paplay"
+            ),
             "service_status_cache_seconds": source.get(
                 "AI_CAT_SERVICE_STATUS_CACHE_SECONDS", "2.0"
             ),
             "data_path": source.get("AI_CAT_DATA_PATH", ".data/ai-cat-mock.db"),
-            "intimacy_daily_cap": source.get("AI_CAT_INTIMACY_DAILY_CAP", "20"),
+            "intimacy_daily_cap": source.get("AI_CAT_INTIMACY_DAILY_CAP", "50"),
             "hardware_binary": source.get("AI_CAT_HARDWARE_BINARY", "/usr/bin/ai-toy_app"),
             "systemctl_binary": source.get("AI_CAT_SYSTEMCTL_BINARY", "/usr/bin/systemctl"),
             "pulseaudio_ctl_binary": source.get(

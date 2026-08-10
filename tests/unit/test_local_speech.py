@@ -8,7 +8,9 @@ from ai_cat_controller.domain.personalities import PERSONALITIES
 from ai_cat_controller.local_speech import (
     LocalPhrasePlayer,
     LocalSpeechError,
+    TOUCH_PHRASES,
     phrase_asset_path,
+    touch_phrase_asset_path,
 )
 
 REPOSITORY_ASSETS = Path(__file__).parents[2] / "assets/local-speech"
@@ -55,6 +57,43 @@ def test_local_player_rejects_phrase_from_another_personality(tmp_path: Path) ->
         player.play("gentle_companion", "今天也要元气满满呀。")
 
 
+def test_local_player_uses_fixed_touch_asset(tmp_path: Path) -> None:
+    marker = tmp_path / "run" / "local-speech-active"
+    asset = touch_phrase_asset_path(tmp_path, "sunny_explorer", "nose")
+    asset.parent.mkdir(parents=True)
+    asset.write_bytes(b"RIFF-touch")
+    commands: list[list[str]] = []
+
+    def run_command(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    player = LocalPhrasePlayer(
+        asset_root=tmp_path,
+        marker_path=marker,
+        player_path=Path("/usr/bin/paplay"),
+        run_command=run_command,
+    )
+
+    played = player.play_touch("sunny_explorer", "nose")
+
+    assert played == asset
+    assert commands[0][1:3] == [
+        "--client-name=ai-cat-local-speech",
+        "--stream-name=touch-nose",
+    ]
+    assert not marker.exists()
+
+
+def test_local_player_rejects_unknown_touch_sensor(tmp_path: Path) -> None:
+    player = LocalPhrasePlayer(asset_root=tmp_path)
+
+    with pytest.raises(LocalSpeechError, match="not allowlisted"):
+        player.play_touch("sunny_explorer", "arbitrary_gpio")
+
+
 def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
     paths = [
         phrase_asset_path(
@@ -67,6 +106,27 @@ def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
     ]
 
     assert len(paths) == 15
+    for path in paths:
+        assert path.is_file()
+        with wave.open(str(path), "rb") as stream:
+            assert stream.getnchannels() == 2
+            assert stream.getsampwidth() == 2
+            assert stream.getframerate() == 48_000
+            assert stream.getnframes() > 48_000
+
+
+def test_repository_contains_all_twenty_five_touch_voice_assets() -> None:
+    paths = [
+        touch_phrase_asset_path(
+            REPOSITORY_ASSETS,
+            personality.personality_id,
+            sensor,
+        )
+        for personality in PERSONALITIES
+        for sensor in TOUCH_PHRASES
+    ]
+
+    assert len(paths) == 25
     for path in paths:
         assert path.is_file()
         with wave.open(str(path), "rb") as stream:

@@ -68,6 +68,7 @@ async def test_touch_monitor_ignores_history_and_imports_appended_event(
     assert product.events[0]["metadata"] == {
         "source": "k1_touch_log",
         "sensor": "right_foot",
+        "hardware_sensor": "right_foot",
         "gesture": "long",
     }
 
@@ -110,4 +111,44 @@ async def test_touch_monitor_reads_new_log_created_after_start(tmp_path) -> None
     finally:
         await monitor.close()
 
-    assert product.events[0]["metadata"]["sensor"] == "nose"
+    assert product.events[0]["metadata"]["sensor"] == "head"
+    assert product.events[0]["metadata"]["hardware_sensor"] == "nose"
+
+
+@pytest.mark.parametrize(
+    ("handler", "hardware_sensor", "sensor"),
+    [
+        ("Head", "HEAD", "nose"),
+        ("Nose", "NOSE", "head"),
+        ("Back", "BACK", "left_foot"),
+        ("Left Foot", "LEFT_FOOT", "back"),
+        ("Right Foot", "RIGHT_FOOT", "right_foot"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_touch_monitor_normalizes_k1_physical_sensor_mapping(
+    tmp_path,
+    handler: str,
+    hardware_sensor: str,
+    sensor: str,
+) -> None:
+    settings = monitor_settings(tmp_path)
+    settings.touch_event_log_path.touch()
+    product = FakeProduct()
+    monitor = TouchEventMonitor(settings, product)  # type: ignore[arg-type]
+    await monitor.start()
+    try:
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"[{handler} Touch Handler] {hardware_sensor}_SHORT_TOUCH detected\n"
+            )
+        assert await monitor.poll_once() == 1
+    finally:
+        await monitor.close()
+
+    assert product.events[0]["metadata"] == {
+        "source": "k1_touch_log",
+        "sensor": sensor,
+        "hardware_sensor": hardware_sensor.lower(),
+        "gesture": "short",
+    }

@@ -20,6 +20,16 @@ TOUCH_PATTERN = re.compile(
     r"(?P<gesture>SHORT|LONG)_TOUCH detected\s*$"
 )
 
+# The current K1 sample's touch wiring does not match toy_main's labels.
+# Normalize it at the input boundary so every consumer uses physical locations.
+K1_TOUCH_SENSOR_MAP = {
+    "head": "nose",
+    "nose": "head",
+    "back": "left_foot",
+    "left_foot": "back",
+    "right_foot": "right_foot",
+}
+
 
 class TouchEventMonitor:
     """Tail the vendor touch log and convert new events into intimacy records."""
@@ -112,6 +122,8 @@ class TouchEventMonitor:
             match = TOUCH_PATTERN.match(line)
             if match is None:
                 continue
+            hardware_sensor = match.group("sensor").lower()
+            sensor = K1_TOUCH_SENSOR_MAP[hardware_sensor]
             digest = hashlib.sha256(
                 f"{serial}:{epoch}:{offset}:{line}".encode()
             ).hexdigest()[:32]
@@ -121,7 +133,8 @@ class TouchEventMonitor:
                     request_id=f"k1-touch-{digest}",
                     metadata={
                         "source": "k1_touch_log",
-                        "sensor": match.group("sensor").lower(),
+                        "sensor": sensor,
+                        "hardware_sensor": hardware_sensor,
                         "gesture": match.group("gesture").lower(),
                     },
                 )
@@ -131,6 +144,15 @@ class TouchEventMonitor:
                 continue
             if event is not None:
                 imported += 1
+                LOGGER.info(
+                    "K1 touch imported: hardware_sensor=%s sensor=%s gesture=%s "
+                    "points_delta=%s action=%s",
+                    hardware_sensor,
+                    sensor,
+                    match.group("gesture").lower(),
+                    event.get("points_delta"),
+                    event.get("touch_action"),
+                )
         return imported
 
     async def _run(self) -> None:

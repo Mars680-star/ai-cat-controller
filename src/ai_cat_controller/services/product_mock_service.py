@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,6 +29,7 @@ from ai_cat_controller.domain.intimacy import (
     level_progress,
 )
 from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
+from ai_cat_controller.local_speech import LocalPhrasePlayer
 from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 from ai_cat_controller.services.motion_service import MotionService
 from ai_cat_controller.services.personality_service import PersonalityService
@@ -35,6 +37,14 @@ from ai_cat_controller.services.personality_service import PersonalityService
 LOGGER = logging.getLogger(__name__)
 MAX_NATIVE_DIALOG_FILE_BYTES = 4 * 1024 * 1024
 MAX_NATIVE_DIALOG_LINE_BYTES = 16 * 1024
+TOUCH_ACTION_BY_SENSOR = {
+    "head": "head_nod",
+    "back": "head_nod",
+    "nose": "head_shake",
+    "left_foot": "head_shake",
+    "right_foot": "head_shake",
+}
+TOUCH_MOTION_READY_STATES = {"offline", "ready", "interrupted"}
 
 
 class ProductMockService:
@@ -53,9 +63,16 @@ class ProductMockService:
         self._settings = settings
         self._personality = personality
         self._adapter = adapter
+        self._touch_phrase_player = LocalPhrasePlayer(
+            asset_root=settings.touch_speech_asset_root,
+            marker_path=settings.touch_speech_marker_path,
+            player_path=settings.touch_speech_player_path,
+        )
         self._sessions: dict[str, str] = {}
         self._finalizers: set[asyncio.Task[None]] = set()
         self._dialog_sync_lock = asyncio.Lock()
+        self._touch_motion_lock = asyncio.Lock()
+        self._last_touch_motion_at = 0.0
         self._dialog_source_signatures: dict[
             tuple[str, str], tuple[int, int]
         ] = {}
@@ -722,13 +739,126 @@ class ProductMockService:
         if pet is None or not pet.get("owner_user_id"):
             LOGGER.info("ignoring touch from unbound device %s", device_serial)
             return None
-        return await self.add_interaction(
+        event = await self.add_interaction(
             user_id=str(pet["owner_user_id"]),
             pet_id=str(pet["pet_id"]),
             event_type="touch",
             request_id=request_id,
             metadata=metadata,
         )
+        event["touch_action"] = await self._trigger_touch_action(
+            user_id=str(pet["owner_user_id"]),
+            pet_id=str(pet["pet_id"]),
+            request_id=request_id,
+            sensor=str(metadata.get("sensor", "")),
+            personality_id=str(pet["personality_id"]),
+            duplicate=bool(event.get("duplicate")),
+        )
+        return event
+
+    async def _trigger_touch_action(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+        sensor: str,
+        personality_id: str,
+        duplicate: bool,
+    ) -> dict[str, Any]:
+        action_id = TOUCH_ACTION_BY_SENSOR.get(sensor)
+        if duplicate:
+            return {"status": "skipped", "reason": "duplicate_touch"}
+        if not self._settings.enable_touch_motion:
+            return {"status": "skipped", "reason": "touch_motion_disabled"}
+        if action_id is None:
+            return {"status": "skipped", "reason": "unknown_sensor"}
+
+        dialog_status = await self._adapter.get_dialog_status()
+        dialog_state = str(dialog_status.get("state", "unavailable"))
+        if (
+            dialog_status.get("session_active")
+            or dialog_status.get("stale")
+            or dialog_state not in TOUCH_MOTION_READY_STATES
+        ):
+            return {
+                "status": "skipped",
+                "reason": "dialog_busy",
+                "dialog_state": dialog_state,
+            }
+
+        async with self._touch_motion_lock:
+            now = time.monotonic()
+            if (
+                now - self._last_touch_motion_at
+                < self._settings.touch_motion_cooldown_seconds
+            ):
+                return {"status": "skipped", "reason": "touch_motion_cooldown"}
+            try:
+                result = await self.execute_action(
+                    user_id=user_id,
+                    pet_id=pet_id,
+                    action_id=action_id,
+                    request_id=f"{request_id}-motion",
+                )
+            except AiCatError as exc:
+                LOGGER.info("touch motion skipped: %s", exc.message)
+                return {
+                    "status": "skipped",
+                    "reason": exc.code,
+                    "message": exc.message,
+                }
+            except Exception as exc:
+                LOGGER.exception("touch motion failed")
+                return {
+                    "status": "failed",
+                    "reason": type(exc).__name__,
+                }
+            self._last_touch_motion_at = now
+            speech_scheduled = False
+            if self._settings.enable_touch_speech:
+                speech_task = asyncio.create_task(
+                    self._play_touch_phrase_after_motion(personality_id, sensor),
+                    name=f"touch-speech-{request_id}",
+                )
+                self._finalizers.add(speech_task)
+                speech_task.add_done_callback(self._finalizers.discard)
+                speech_scheduled = True
+            return {
+                "status": "started",
+                "action_id": action_id,
+                "execution_id": result["execution_id"],
+                "speech_scheduled": speech_scheduled,
+            }
+
+    async def _play_touch_phrase_after_motion(
+        self,
+        personality_id: str,
+        sensor: str,
+    ) -> None:
+        try:
+            await self._motion.wait_until_idle(
+                timeout=self._settings.command_timeout_seconds + 5.0
+            )
+            dialog_status = await self._adapter.get_dialog_status()
+            if (
+                dialog_status.get("session_active")
+                or dialog_status.get("stale")
+                or str(dialog_status.get("state", "unavailable"))
+                not in TOUCH_MOTION_READY_STATES
+            ):
+                LOGGER.info("touch phrase skipped because dialog became busy")
+                return
+            path = await asyncio.to_thread(
+                self._touch_phrase_player.play_touch,
+                personality_id,
+                sensor,
+            )
+            LOGGER.info("touch phrase played: %s", path)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("touch phrase playback skipped")
 
     async def unbind(self, user_id: str, pet_id: str) -> None:
         await asyncio.to_thread(self._repository.unbind_pet, user_id, pet_id)

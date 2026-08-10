@@ -21,6 +21,12 @@ AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
 AI_CAT_ENABLE_TAIL_MOTION=false
+AI_CAT_ENABLE_TOUCH_MOTION=true
+AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS=3.0
+AI_CAT_ENABLE_TOUCH_SPEECH=true
+AI_CAT_TOUCH_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
+AI_CAT_TOUCH_SPEECH_MARKER_PATH=/run/ai-cat/local-speech-active
+AI_CAT_TOUCH_SPEECH_PLAYER_PATH=/usr/bin/paplay
 AI_CAT_PULSEAUDIO_CTL_BINARY=/usr/bin/pactl
 AI_CAT_PULSE_SERVER=unix:/var/run/pulse/native
 AI_CAT_TOUCH_EVENT_LOG_PATH=/root/.log/main_log
@@ -52,6 +58,16 @@ intimacy points through the same idempotent daily-cap rules as browser events.
 The monitor starts at the end of the file, so historical touches are not
 replayed after a FastAPI restart. The service account must be able to read
 `AI_CAT_TOUCH_EVENT_LOG_PATH`; the current K1 lab deployment uses `root`.
+The current sample's verified wiring swaps the vendor labels `nose`/`head` and
+`back`/`left_foot`; `right_foot` is unchanged. The monitor exposes the corrected
+physical location as `sensor` and keeps the raw log label as `hardware_sensor`.
+Touch feedback is submitted through the same serialized motion service used by
+the REST API: head/back touches nod, while nose/foot touches shake. Dialog-busy,
+motor-busy and cooldown cases keep the intimacy event but skip motor movement.
+When touch speech is enabled, the controller waits for the accepted motion to
+finish and plays only the allowlisted local WAV for that personality and sensor.
+The 25 `touch-*.wav` assets must exist before enabling the flag; no cloud fallback
+is used when an asset is unavailable.
 
 ## Validate
 
