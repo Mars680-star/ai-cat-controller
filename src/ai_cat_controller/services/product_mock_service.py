@@ -81,6 +81,13 @@ class ProductMockService:
         await asyncio.to_thread(self._repository.initialize)
         await self._personality.initialize(self._repository)
 
+    def _action_is_unlocked(
+        self, action: Any, personality_id: str, intimacy_level: int
+    ) -> bool:
+        return self._settings.debug_unlock_all_actions or action_is_unlocked(
+            action, personality_id, intimacy_level
+        )
+
     async def login(self, login_code: str, nickname: str) -> dict[str, Any]:
         user = await asyncio.to_thread(
             self._repository.login_user, login_code, nickname
@@ -162,7 +169,9 @@ class ProductMockService:
         unlocked_actions = [
             action.action_id
             for action in ACTIONS
-            if action_is_unlocked(action, personality.personality_id, level.level)
+            if self._action_is_unlocked(
+                action, personality.personality_id, level.level
+            )
         ]
         return {
             "pet": self._pet_summary(pet),
@@ -242,8 +251,14 @@ class ProductMockService:
             catalog.append(
                 {
                     **action.model_dump(mode="json"),
-                    "unlocked": action_is_unlocked(
+                    "unlocked": self._action_is_unlocked(
                         action, pet["personality_id"], level
+                    ),
+                    "debug_unlocked": (
+                        self._settings.debug_unlock_all_actions
+                        and not action_is_unlocked(
+                            action, pet["personality_id"], level
+                        )
                     ),
                     "available": unavailable_reason is None,
                     "unavailable_reason": unavailable_reason,
@@ -268,7 +283,9 @@ class ProductMockService:
         if not bool(pet["online"]):
             raise DeviceUnavailableError("设备离线，无法执行动作")
         level = level_for_points(int(pet["intimacy_points"])).level
-        if not action_is_unlocked(action, pet["personality_id"], level):
+        if not self._action_is_unlocked(
+            action, pet["personality_id"], level
+        ):
             raise ActionConflictError("当前性格或亲密度尚未解锁该动作")
         capabilities = tuple(
             component.capability for component in action.components

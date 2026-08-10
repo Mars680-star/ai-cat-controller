@@ -39,8 +39,9 @@ The new-device profile also exposes four fixed product presets:
 ```
 
 `proud_pose` holds the head to one side, moves the tail once, and then returns
-the head to center; it has passed physical acceptance. The other three presets
-are compiled and allowlisted but still require individual physical acceptance.
+the head to center; `quiet_companion` performs one shallow slow nod. Both have
+passed physical acceptance. The two combination presets are compiled and
+allowlisted but still require individual physical acceptance.
 No preset accepts angles, speeds, dwell values, GPIO numbers, or arbitrary
 sequence data from HTTP.
 

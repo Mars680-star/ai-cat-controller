@@ -49,7 +49,7 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
   静音状态和 SQLite 持久值一致；实体右脚、鼻部和背部触摸共 4 次均被导入，
   亲密度由 `32` 增加到 `36`。部署前备份位于
   `/root/ai-cat-backups/before-volume-touch-20260810-1315/`。
-- 本地编译检查通过，自动测试更新为 `171 passed`。
+- 本地编译检查通过，自动测试更新为 `172 passed`。
 - 第二台 K1（序列号 `7c2b63fd4a128`）已完成 FastAPI 控制服务、固定安全电机
   应用和 `k1_vendor_smooth` 动作配置部署；头部左右、头部上下和尾部原厂轨迹已
   逐项执行验证。火山原生对话程序已在该板完成 RISC-V 编译，PulseAudio 与对话
@@ -61,9 +61,13 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - 修复产品动作参数只展示但未真正传到 K1 的问题：`k1_vendor_smooth` 新增
   `proud_pose`、`quiet_companion`、`greeting_combo` 和 `celebration_combo` 四个
   固定板端预设，FastAPI 只能通过命令白名单选择预设名。骄傲转身现为侧向保持、
-  摇尾一次、缓慢回中，已通过现场验收；安静陪伴改为速度 1 的小幅慢点头，见面
-  问候和升级庆祝按描述组合动作，三者代码、RISC-V 编译和接口检查通过，仍待逐项
-  现场动作验收。旧设备 `legacy_safe` 自动回退原固定动作，不使用新轨迹。
+  摇尾一次、缓慢回中，已通过现场验收；安静陪伴改为速度 1 的小幅慢点头并通过
+  现场验收。见面问候和升级庆祝按描述组合动作，二者代码、RISC-V 编译和接口检查
+  通过，仍待逐项现场动作验收。旧设备 `legacy_safe` 自动回退原固定动作，不使用
+  新轨迹。
+- 新增 `AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS` 调试开关，第二台 K1 已临时启用，可在网页
+  测试全部 7 个固定动作。该开关仅跳过性格和亲密度解锁条件，不绕过硬件能力门、
+  命令白名单、动作互斥、冷却、超时或停止保护；默认关闭，不得用于正式产品环境。
 
 ### 2026-08-07
 
@@ -279,8 +283,8 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
   后者的头部左右、上下及尾部原厂轨迹已真机验证。尾部 API 虽已实现，但生产开关
   默认关闭，必须在对应设备完成机械维修和安全验收后才能开放。
 - `k1_vendor_smooth` 的复杂动作使用固定命名预设，不再把动作目录中的差异参数
-  丢弃后复用同一个电机轨迹；骄傲转身已真机验收，其余三个预设继续保持待验收
-  标记，不能仅凭自动测试认定机械表现正确。
+  丢弃后复用同一个电机轨迹；骄傲转身和安静陪伴已真机验收，其余两个组合预设
+  继续保持待验收标记，不能仅凭自动测试认定机械表现正确。
 
 ### 工程与部署
 
@@ -387,6 +391,7 @@ export AI_CAT_HARDWARE_DRIVER=local_k1
 export AI_CAT_API_KEY_ENABLED=true
 export AI_CAT_API_KEY='替换为随机密钥'
 export AI_CAT_ENABLE_TAIL_MOTION=false
+export AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS=false
 export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
@@ -437,6 +442,8 @@ export AI_CAT_INTIMACY_DAILY_CAP=50
 - 实体触摸只允许触发固定的 `head_nod`/`head_shake`，并受对话状态、动作互斥和
   3 秒冷却限制；不恢复原厂 DDS 电机消费者，也不触发未验收的尾部动作。
 - 尾部动作必须在硬件修复、低速直连和停止验收全部通过后才允许开启配置。
+- `AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS` 只能用于现场动作验收，正式环境必须关闭；它只
+  跳过性格和亲密度解锁条件，不能绕过硬件与调度安全保护。
 - 不执行 DDS 或 ROS2 操作。
 - 正式远程控制需要 HTTPS、鉴权和受控中转，不能直接暴露公网端口。
 

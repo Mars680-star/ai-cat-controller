@@ -21,6 +21,7 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_MOTION_COOLDOWN_SECONDS": "0.5",
             "AI_CAT_MOTION_PROFILE": "k1_vendor_smooth",
             "AI_CAT_ENABLE_TAIL_MOTION": "true",
+            "AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS": "true",
             "AI_CAT_ENABLE_TOUCH_MOTION": "false",
             "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS": "4.5",
             "AI_CAT_ENABLE_TOUCH_SPEECH": "true",
@@ -45,6 +46,7 @@ def test_environment_values_are_parsed() -> None:
     assert settings.motion_cooldown_seconds == 0.5
     assert settings.motion_profile == "k1_vendor_smooth"
     assert settings.enable_tail_motion is True
+    assert settings.debug_unlock_all_actions is True
     assert settings.enable_touch_motion is False
     assert settings.touch_motion_cooldown_seconds == 4.5
     assert settings.enable_touch_speech is True

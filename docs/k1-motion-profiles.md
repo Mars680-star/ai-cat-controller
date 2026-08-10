@@ -63,11 +63,12 @@ Four product actions use additional fixed presets on this profile:
 | Preset | Fixed behavior | Physical status |
 |---|---|---|
 | `proud_pose` | Hold head to one side for 1.2 s, wag tail once, return to center over 0.6 s | Accepted |
-| `quiet_companion` | Shallow head-down target at speed 1, then return to center | Pending |
+| `quiet_companion` | Shallow head-down target at speed 1, then return to center | Accepted |
 | `greeting_combo` | Standard nod at speed 2, then one standard tail gesture | Pending |
 | `celebration_combo` | Standard head shake, nod, then one standard tail gesture | Pending |
 
 All names and trajectories are compiled into `/usr/bin/ai-toy_app`; HTTP cannot
-provide motion parameters. The three standard axes and `proud_pose` have passed
-physical acceptance on device `7c2b63fd4a128`. Keep the remaining presets out
-of autonomous behavior until their individual physical checks are complete.
+provide motion parameters. The three standard axes, `proud_pose`, and
+`quiet_companion` have passed physical acceptance on device `7c2b63fd4a128`.
+Keep the remaining two combination presets out of autonomous behavior until
+their individual physical checks are complete.

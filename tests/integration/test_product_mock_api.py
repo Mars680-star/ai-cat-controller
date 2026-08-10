@@ -322,6 +322,38 @@ def test_action_catalog_rejects_locked_and_tracks_idempotency(
     assert execution["status"] == "completed"
 
 
+def test_debug_unlock_exposes_and_executes_all_safe_actions(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            debug_unlock_all_actions=True,
+            motion_cooldown_seconds=0.0,
+            data_path=tmp_path / "debug-actions.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="debug-action-user")
+        pet_id = _bind(test_client, headers, serial="K1-DEBUG-ACTIONS")["pet"][
+            "pet_id"
+        ]
+        catalog = test_client.get(
+            f"/api/v1/pets/{pet_id}/actions", headers=headers
+        ).json()["data"]
+
+        assert len(catalog) == 7
+        assert all(action["unlocked"] for action in catalog)
+        assert any(action["debug_unlocked"] for action in catalog)
+        response = test_client.post(
+            f"/api/v1/pets/{pet_id}/actions/celebration_combo/execute",
+            headers=headers,
+            json={"request_id": "debug-celebration"},
+        )
+
+        assert response.status_code == 202
+        assert response.json()["data"]["status"] == "running"
+
+
 def test_dialog_history_settings_device_status_and_feedback(
     client: TestClient,
 ) -> None:
