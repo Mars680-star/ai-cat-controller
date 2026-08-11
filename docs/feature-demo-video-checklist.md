@@ -1,6 +1,6 @@
 # AI 猫已实现功能演示视频测试步骤
 
-日期：2026-08-10  
+日期：2026-08-11
 测试人：Mars
 
 ## 1. 建议成片结构
@@ -15,18 +15,18 @@
 
 当前新 K1：
 
-- 地址：`192.168.1.107`
+- 当前地址：`192.168.1.112`（DHCP，重启后需重新确认）
 - 设备序列号：`7c2b63fd4a128`
-- 网页：`http://192.168.1.107:8000/control`
+- 网页：`http://192.168.1.112:8000/control`
 - FastAPI、动作服务和眼睛 UI 已运行。
 - 网页全部 7 个固定动作已临时开放，仅用于现场验收。
 
 拍摄前在电脑执行：
 
 ```bash
-curl -fsS http://192.168.1.107:8000/health
+curl -fsS http://192.168.1.112:8000/health
 
-ssh -i ~/.ssh/codex_k1 root@192.168.1.107 \
+ssh -i ~/.ssh/codex_k1 root@192.168.1.112 \
   'systemctl is-active ai-cat-controller.service toy_motor.service toy_ui.service'
 ```
 
@@ -191,7 +191,7 @@ ssh -i ~/.ssh/codex_k1 root@192.168.1.107 \
 确认 `toy_motor.service` 为 `active`，云端对话为空闲状态，然后拍摄约 3 分钟延时：
 
 ```bash
-ssh -i ~/.ssh/codex_k1 root@192.168.1.107 \
+ssh -i ~/.ssh/codex_k1 root@192.168.1.112 \
   'systemctl is-active toy_motor.service volc-conv-ai.service'
 ```
 
@@ -204,7 +204,7 @@ ssh -i ~/.ssh/codex_k1 root@192.168.1.107 \
 重启前拍摄性格、亲密度和最近一条对话。执行：
 
 ```bash
-ssh -i ~/.ssh/codex_k1 root@192.168.1.107 reboot
+ssh -i ~/.ssh/codex_k1 root@192.168.1.112 reboot
 ```
 
 设备重新联网后刷新网页，预期：
