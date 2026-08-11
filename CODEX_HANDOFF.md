@@ -1,6 +1,6 @@
 # AI Cat Controller 开发交接
 
-> 最后更新：2026-08-10
+> 最后更新：2026-08-11
 >
 > 维护人：Mars
 >
@@ -9,7 +9,8 @@
 ## 1. 仓库与连续开发规则
 
 - GitHub 私有仓库：`https://github.com/Mars680-star/ai-cat-controller`
-- 权威分支：`main`。历史开发分支 `feat/product-experience-mock` 已用于第一阶段集成。
+- 权威分支：`main`。成长人格 V1 当前开发分支为
+  `feat/growth-personality-v1`，完成真机验收后再合并。
 - Python 要求：`>=3.10`。
 - 新会话第一步必须执行：
 
@@ -95,7 +96,13 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
   成长事件、重复与话题衰减、按宠物隔离的 SQLite 原因日志，以及现有
   `personality-runtime.json` / `session.update` Prompt 集成。培养页可查看倾向、
   标签、行为画像和最近成长；Mock 可快速模拟，Local K1 默认禁止 Debug 写入。
-  软件层全量回归为 `201 passed`，尚未进行本阶段的 Local K1 真机验收。
+  总开关 `AI_CAT_ENABLE_GROWTH_PERSONALITY_V1` 默认关闭；关闭期间不写成长、不修改
+  Prompt，重新开启也不会追溯处理关闭期间已导入的真机对话。软件层全量回归为
+  `215 passed`。
+- K1 发布前可运行 `scripts/k1_backup_release.sh`，回滚前可先用
+  `scripts/k1_rollback_release.sh BACKUP --check` 校验；五部位实体触摸使用
+  `scripts/k1_verify_touch_mapping.sh` 验收。完整流程见
+  `docs/growth-v1-deployment.md`。
 - 真机电量、充电器在线、充电状态和电压读取；语音可通过 Function Calling 查询。
 - 网页音量直接控制 K1 PulseAudio 默认输出，页面同步实际音量；FastAPI systemd
   进程必须使用 `Group=pulse-access`（只设附加组会被当前板端拒绝）。

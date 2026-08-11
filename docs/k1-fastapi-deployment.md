@@ -21,6 +21,7 @@ AI_CAT_API_PORT=8000
 AI_CAT_API_KEY_ENABLED=true
 AI_CAT_API_KEY=REPLACE_WITH_A_RANDOM_SECRET
 AI_CAT_ENABLE_TAIL_MOTION=false
+AI_CAT_ENABLE_GROWTH_PERSONALITY_V1=false
 AI_CAT_MOTION_PROFILE=legacy_safe
 AI_CAT_ENABLE_TOUCH_MOTION=true
 AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS=3.0
@@ -34,6 +35,12 @@ AI_CAT_TOUCH_EVENT_LOG_PATH=/root/.log/main_log
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
 AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
+
+Keep `AI_CAT_ENABLE_GROWTH_PERSONALITY_V1=false` during the first deployment.
+When disabled, existing growth data remains readable, but new dialog, touch, task,
+and daily-meeting events do not update growth attributes or the runtime prompt.
+Enable it only after the rollback package and physical touch acceptance pass. See
+`docs/growth-v1-deployment.md`.
 
 For the factory-smooth motor profile recovered from device `7c2b63fd4a128`,
 install the updated native helper and set

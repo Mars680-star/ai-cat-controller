@@ -76,6 +76,7 @@
     interactionButtons: $$(".interaction-button"),
     interactionHistory: $("#interaction-history"),
     growthTags: $("#growth-tags"),
+    growthV1Status: $("#growth-v1-status"),
     growthTendencies: $("#growth-tendencies"),
     growthBehaviorSummary: $("#growth-behavior-summary"),
     growthEventHistory: $("#growth-event-history"),
@@ -745,6 +746,10 @@
   }
 
   function renderGrowthPersonality(data, {notifyTags = false} = {}) {
+    ui.growthV1Status.textContent = data.enabled ? "已启用" : "未启用";
+    ui.growthV1Status.title = data.enabled
+      ? "成长事件会更新长期人格和运行时提示词"
+      : "成长数据只读，不记录新事件，也不修改运行时提示词";
     const activeTagIds = data.active_tags.map((tag) => tag.tag_id);
     if (notifyTags && state.growthTagIds !== null) {
       const newTags = data.active_tags.filter(

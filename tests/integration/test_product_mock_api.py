@@ -172,6 +172,7 @@ def test_growth_api_reuses_existing_interactions_and_dialogs(client: TestClient)
         f"/api/v1/pets/{pet_id}/growth",
         headers=headers,
     ).json()["data"]
+    assert initial["enabled"] is True
     assert initial["debug_values_visible"] is True
     assert all(attribute["value"] == 0 for attribute in initial["attributes"].values())
 
@@ -327,6 +328,7 @@ def test_local_k1_growth_debug_is_disabled_by_default(tmp_path) -> None:
         hardware_driver="local_k1",
         api_key_enabled=True,
         api_key="growth-test-key",
+        enable_growth_personality_v1=True,
         enable_touch_motion=False,
         data_path=tmp_path / "local-growth.db",
         dialog_config_path=tmp_path / "dialog-config.json",
@@ -376,6 +378,138 @@ def test_local_k1_growth_debug_is_disabled_by_default(tmp_path) -> None:
         assert all("evidence" not in tag for tag in state["tag_history"])
         assert response.status_code == 403
         assert response.json()["data"]["code"] == "operation_disabled"
+
+
+def test_growth_master_switch_preserves_core_features_without_growth(
+    tmp_path,
+) -> None:
+    settings = Settings(
+        hardware_driver="mock",
+        enable_growth_personality_v1=False,
+        motion_cooldown_seconds=0.0,
+        service_status_cache_seconds=0.0,
+        data_path=tmp_path / "growth-disabled.db",
+        dialog_config_path=tmp_path / "dialog-config.json",
+    )
+    with TestClient(create_app(settings)) as test_client:
+        headers, _ = _login(test_client, code="growth-disabled-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-GROWTH-DISABLED",
+        )["pet"]["pet_id"]
+
+        interaction = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "task-disabled"},
+        )
+        dialog = test_client.post(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+            json={"content": "解释一下传感器", "trigger_action": False},
+        )
+        state = test_client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        )
+        debug = test_client.post(
+            f"/api/v1/pets/{pet_id}/growth/debug",
+            headers=headers,
+            json={"event_type": "question", "count": 1},
+        )
+        runtime = test_client.get("/api/v1/personality/runtime").json()["data"]
+
+        assert interaction.status_code == 200
+        assert interaction.json()["data"]["growth"] is None
+        assert dialog.status_code == 200
+        assert dialog.json()["data"]["growth_event"] is None
+        assert state.status_code == 200
+        assert state.json()["data"]["enabled"] is False
+        assert state.json()["data"]["recent_events"] == []
+        assert debug.status_code == 403
+        assert debug.json()["message"] == "成长人格 V1 当前未启用"
+        assert runtime["growth_revision"] == "base-v1"
+        assert runtime["growth_tags"] == []
+        assert runtime["behavior_directives"] == []
+
+        with sqlite3.connect(settings.data_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM growth_events"
+            ).fetchone()[0] == 0
+
+
+def test_growth_does_not_backfill_native_dialogs_imported_while_disabled(
+    tmp_path,
+) -> None:
+    data_path = tmp_path / "growth-no-backfill.db"
+    event_path = tmp_path / "dialog-events.jsonl"
+    created_at_ms = int(time.time() * 1000) + 100
+    events = (
+        {
+            "event_id": "disabled-user",
+            "conversation_id": "native-disabled-1",
+            "device_serial": "K1-GROWTH-NO-BACKFILL",
+            "role": "user",
+            "content": "为什么天空是蓝色的？",
+            "created_at_ms": created_at_ms,
+        },
+        {
+            "event_id": "disabled-assistant",
+            "conversation_id": "native-disabled-1",
+            "device_serial": "K1-GROWTH-NO-BACKFILL",
+            "role": "assistant",
+            "content": "主要与瑞利散射有关。",
+            "created_at_ms": created_at_ms + 1,
+        },
+    )
+    event_path.write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    disabled = Settings(
+        hardware_driver="mock",
+        enable_growth_personality_v1=False,
+        data_path=data_path,
+        dialog_event_path=event_path,
+        dialog_config_path=tmp_path / "dialog-disabled.json",
+    )
+    with TestClient(create_app(disabled)) as test_client:
+        headers, _ = _login(test_client, code="growth-no-backfill")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-GROWTH-NO-BACKFILL",
+        )["pet"]["pet_id"]
+        history = test_client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations",
+            headers=headers,
+        ).json()["data"]
+        assert history["sync"]["imported_messages"] == 2
+        assert test_client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        ).json()["data"]["recent_events"] == []
+
+    enabled = disabled.model_copy(
+        update={"enable_growth_personality_v1": True}
+    )
+    with TestClient(create_app(enabled)) as test_client:
+        headers, login = _login(test_client, code="growth-no-backfill")
+        pet_id = login["pets"][0]["pet_id"]
+        history = test_client.get(
+            f"/api/v1/pets/{pet_id}/dialog-conversations",
+            headers=headers,
+        ).json()["data"]
+        growth = test_client.get(
+            f"/api/v1/pets/{pet_id}/growth",
+            headers=headers,
+        ).json()["data"]
+
+        assert history["sync"]["imported_messages"] == 0
+        assert growth["enabled"] is True
+        assert growth["recent_events"] == []
 
 
 def test_debug_unlimited_touch_bypasses_only_touch_limits(tmp_path) -> None:
@@ -525,6 +659,7 @@ def test_physical_touch_plays_local_phrase_after_motion(
     app = create_app(
         Settings(
             hardware_driver="mock",
+            enable_growth_personality_v1=True,
             motion_cooldown_seconds=0.0,
             data_path=tmp_path / "touch-speech.db",
             dialog_config_path=tmp_path / "dialog-config.json",
@@ -758,6 +893,7 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
     app = create_app(
         Settings(
             hardware_driver="mock",
+            enable_growth_personality_v1=True,
             motion_cooldown_seconds=0.0,
             data_path=data_path,
             enable_product_data_reset=True,
@@ -897,6 +1033,7 @@ def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> No
     event_path = tmp_path / "dialog-events.jsonl"
     settings = Settings(
         hardware_driver="mock",
+        enable_growth_personality_v1=True,
         motion_cooldown_seconds=0.0,
         data_path=tmp_path / "native-dialog.db",
         dialog_event_path=event_path,
@@ -1026,6 +1163,7 @@ def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(
     event_path = tmp_path / "dialog-events.jsonl"
     settings = Settings(
         hardware_driver="mock",
+        enable_growth_personality_v1=True,
         motion_cooldown_seconds=0.0,
         data_path=tmp_path / "native-conversations.db",
         dialog_event_path=event_path,

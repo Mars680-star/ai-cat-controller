@@ -38,6 +38,7 @@ class Settings(BaseModel):
     enable_tail_motion: bool = False
     debug_unlock_all_actions: bool = False
     debug_unlimited_touch_intimacy: bool = False
+    enable_growth_personality_v1: bool = False
     enable_debug_growth: bool = False
     enable_product_data_reset: bool = False
     enable_touch_motion: bool = True
@@ -166,6 +167,9 @@ class Settings(BaseModel):
             ),
             "debug_unlimited_touch_intimacy": source.get(
                 "AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY", "false"
+            ),
+            "enable_growth_personality_v1": source.get(
+                "AI_CAT_ENABLE_GROWTH_PERSONALITY_V1", "false"
             ),
             "enable_debug_growth": source.get(
                 "AI_CAT_ENABLE_DEBUG_GROWTH", "false"

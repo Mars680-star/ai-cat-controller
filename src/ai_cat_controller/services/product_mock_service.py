@@ -113,7 +113,9 @@ class ProductMockService:
         await self._sync_personality(pet)
 
     async def _sync_personality(self, pet: dict[str, Any]) -> dict[str, Any]:
-        behavior_profile = await self._growth.behavior_profile(pet)
+        behavior_profile = None
+        if self._settings.enable_growth_personality_v1:
+            behavior_profile = await self._growth.behavior_profile(pet)
         return await self._personality.sync_pet(pet, behavior_profile)
 
     async def _sync_bound_native_dialog_events(self) -> None:
@@ -261,16 +263,23 @@ class ProductMockService:
 
     def _growth_debug_enabled(self) -> bool:
         return (
-            self._settings.hardware_driver == "mock"
-            or self._settings.enable_debug_growth
+            self._settings.enable_growth_personality_v1
+            and (
+                self._settings.hardware_driver == "mock"
+                or self._settings.enable_debug_growth
+            )
         )
 
     async def growth_state(self, user_id: str, pet_id: str) -> dict[str, Any]:
-        return await self._growth.state(
+        state = await self._growth.state(
             user_id=user_id,
             pet_id=pet_id,
             include_debug_values=self._growth_debug_enabled(),
         )
+        return {
+            "enabled": self._settings.enable_growth_personality_v1,
+            **state,
+        }
 
     async def debug_growth(
         self,
@@ -284,6 +293,8 @@ class ProductMockService:
         emotion: str,
         engagement: float,
     ) -> dict[str, Any]:
+        if not self._settings.enable_growth_personality_v1:
+            raise OperationDisabledError("成长人格 V1 当前未启用")
         if not self._growth_debug_enabled():
             raise OperationDisabledError(
                 "当前部署未启用成长人格调试接口"
@@ -362,6 +373,8 @@ class ProductMockService:
         event_type: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any] | None:
+        if not self._settings.enable_growth_personality_v1:
+            return None
         try:
             growth = await self._growth.record_interaction(
                 user_id=user_id,
@@ -384,6 +397,8 @@ class ProductMockService:
         user_content: str,
         source: str,
     ) -> dict[str, Any] | None:
+        if not self._settings.enable_growth_personality_v1:
+            return None
         try:
             growth = await self._growth.record_dialog(
                 user_id=user_id,
@@ -724,11 +739,11 @@ class ProductMockService:
                     )
                     if imported:
                         LOGGER.info("imported %d native dialog messages", imported)
-                    growth_changed = await self._record_native_dialog_growth(
-                        user_id=user_id,
-                        pet_id=pet_id,
-                        events=events,
-                    )
+                        growth_changed = await self._record_native_dialog_growth(
+                            user_id=user_id,
+                            pet_id=pet_id,
+                            events=events,
+                        )
                 self._dialog_source_signatures[owner_key] = source_signature
             state = await asyncio.to_thread(
                 self._repository.dialog_sync_state,

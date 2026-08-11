@@ -27,6 +27,7 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="dialog-sync-state"' in response.text
     assert 'id="reset-data-button"' in response.text
     assert 'id="growth-personality-title"' in response.text
+    assert 'id="growth-v1-status"' in response.text
     assert 'id="growth-tendencies"' in response.text
     assert 'id="growth-debug-form"' in response.text
     assert "格式化体验数据" in response.text

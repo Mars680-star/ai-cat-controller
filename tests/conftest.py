@@ -12,6 +12,7 @@ from ai_cat_controller.main import create_app
 def settings(tmp_path) -> Settings:
     return Settings(
         hardware_driver="mock",
+        enable_growth_personality_v1=True,
         motion_cooldown_seconds=0.0,
         service_status_cache_seconds=0.0,
         data_path=tmp_path / "ai-cat-test.db",
