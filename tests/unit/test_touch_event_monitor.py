@@ -5,7 +5,10 @@ from typing import Any
 import pytest
 
 from ai_cat_controller.core.config import Settings
-from ai_cat_controller.services.touch_event_monitor import TouchEventMonitor
+from ai_cat_controller.services.touch_event_monitor import (
+    TouchEventMonitor,
+    touch_sensor_map_for_serial,
+)
 
 
 class FakeProduct:
@@ -28,9 +31,14 @@ class FakeProduct:
         return event
 
 
-def monitor_settings(tmp_path, **overrides: Any) -> Settings:
+def monitor_settings(
+    tmp_path,
+    *,
+    serial: str = "7c2b63fd4a128",
+    **overrides: Any,
+) -> Settings:
     serial_path = tmp_path / "serial-number"
-    serial_path.write_bytes(b"K1-TOUCH-001\0")
+    serial_path.write_bytes(f"{serial}\0".encode("ascii"))
     values = {
         "device_serial_path": serial_path,
         "touch_event_log_path": tmp_path / "main_log",
@@ -72,12 +80,13 @@ async def test_touch_monitor_ignores_history_and_imports_appended_event(
         await monitor.close()
 
     assert len(product.events) == 1
-    assert product.events[0]["device_serial"] == "K1-TOUCH-001"
+    assert product.events[0]["device_serial"] == "7c2b63fd4a128"
     assert product.events[0]["request_id"].startswith("k1-touch-")
     assert product.events[0]["metadata"] == {
         "source": "k1_touch_log",
         "sensor": "right_foot",
         "hardware_sensor": "right_foot",
+        "sensor_mapping": "identity",
         "gesture": "short",
     }
 
@@ -120,16 +129,17 @@ async def test_touch_monitor_reads_new_log_created_after_start(tmp_path) -> None
     finally:
         await monitor.close()
 
-    assert product.events[0]["metadata"]["sensor"] == "head"
+    assert product.events[0]["metadata"]["sensor"] == "nose"
     assert product.events[0]["metadata"]["hardware_sensor"] == "nose"
+    assert product.events[0]["metadata"]["sensor_mapping"] == "identity"
 
 
 @pytest.mark.parametrize(
     ("handler", "hardware_sensor", "sensor"),
     [
-        ("Head", "HEAD", "nose"),
-        ("Nose", "NOSE", "head"),
-        ("Left Foot", "LEFT_FOOT", "back"),
+        ("Head", "HEAD", "head"),
+        ("Nose", "NOSE", "nose"),
+        ("Back", "BACK", "back"),
     ],
 )
 @pytest.mark.asyncio
@@ -157,6 +167,7 @@ async def test_touch_monitor_normalizes_k1_physical_sensor_mapping(
         "source": "k1_touch_log",
         "sensor": sensor,
         "hardware_sensor": hardware_sensor.lower(),
+        "sensor_mapping": "identity",
         "gesture": "short",
     }
 
@@ -164,7 +175,7 @@ async def test_touch_monitor_normalizes_k1_physical_sensor_mapping(
 @pytest.mark.parametrize(
     ("handler", "hardware_sensor", "sensor"),
     [
-        ("Back", "BACK", "left_foot"),
+        ("Left Foot", "LEFT_FOOT", "left_foot"),
         ("Right Foot", "RIGHT_FOOT", "right_foot"),
     ],
 )
@@ -223,7 +234,9 @@ async def test_paw_confirmation_is_separate_per_paw_and_expires(tmp_path) -> Non
     await monitor.start()
     try:
         with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
-            stream.write("[Back Touch Handler] BACK_SHORT_TOUCH detected\n")
+            stream.write(
+                "[Left Foot Touch Handler] LEFT_FOOT_SHORT_TOUCH detected\n"
+            )
             stream.write(
                 "[Right Foot Touch Handler] RIGHT_FOOT_SHORT_TOUCH detected\n"
             )
@@ -231,15 +244,41 @@ async def test_paw_confirmation_is_separate_per_paw_and_expires(tmp_path) -> Non
 
         now[0] += 2.1
         with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
-            stream.write("[Back Touch Handler] BACK_SHORT_TOUCH detected\n")
+            stream.write(
+                "[Left Foot Touch Handler] LEFT_FOOT_SHORT_TOUCH detected\n"
+            )
         assert await monitor.poll_once() == 0
 
         now[0] += 0.5
         with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
-            stream.write("[Back Touch Handler] BACK_LONG_TOUCH detected\n")
+            stream.write(
+                "[Left Foot Touch Handler] LEFT_FOOT_LONG_TOUCH detected\n"
+            )
         assert await monitor.poll_once() == 1
     finally:
         await monitor.close()
 
     assert len(product.events) == 1
     assert product.events[0]["metadata"]["sensor"] == "left_foot"
+
+
+def test_touch_sensor_mapping_is_selected_by_device_serial() -> None:
+    current_map, current_profile = touch_sensor_map_for_serial("7c2b63fd4a128")
+    legacy_map, legacy_profile = touch_sensor_map_for_serial("7c2b63fd4a138")
+
+    assert current_profile == "identity"
+    assert current_map == {
+        "head": "head",
+        "nose": "nose",
+        "back": "back",
+        "left_foot": "left_foot",
+        "right_foot": "right_foot",
+    }
+    assert legacy_profile == "legacy_swapped"
+    assert legacy_map == {
+        "head": "nose",
+        "nose": "head",
+        "back": "left_foot",
+        "left_foot": "back",
+        "right_foot": "right_foot",
+    }

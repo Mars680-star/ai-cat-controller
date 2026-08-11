@@ -104,9 +104,12 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
   映射安全摇头，对话忙、电机忙及 3 秒冷却内跳过动作；完成任务由网页按钮确认。
 - 5 个共享本地触摸 WAV 使用控制台当前音色预生成；触摸动作结束后按部位播放，
   不启动火山云端，并通过 `/run/ai-cat/local-speech-active` 暂停本地唤醒。
-- 当前 K1 样机触摸接线需在日志输入层映射：`nose -> head`、`head -> nose`、
-  `back -> left_foot`、`left_foot -> back`、`right_foot -> right_foot`。业务元数据
-  的 `sensor` 是修正后的实体部位，`hardware_sensor` 保留厂商日志原值。
+- 触摸接线按设备序列号选择：`7c2b63fd4a128` 使用 identity 映射；旧设备
+  `7c2b63fd4a138` 使用 `nose <-> head`、`back <-> left_foot` 的
+  `legacy_swapped` 映射，右爪不变。业务元数据保留 `hardware_sensor`、修正后的
+  `sensor` 和 `sensor_mapping`。
+- 触摸语音按实体部位独立执行 3 秒防刷并使用串行播放锁；它与电机 3 秒冷却解耦，
+  因此电机因冷却跳过时，新的部位仍可播放对应本地短语。
 - 实体左右爪在映射后分别做防误触确认：默认同一只爪 3 秒内连续触摸 2 次才导入
   一次业务事件；头部、鼻部和背部保持单次触发。相关环境变量为
   `AI_CAT_PAW_TOUCH_CONFIRMATION_COUNT` 和

@@ -30,6 +30,7 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_ENABLE_TOUCH_MOTION": "false",
             "AI_CAT_TOUCH_MOTION_COOLDOWN_SECONDS": "4.5",
             "AI_CAT_ENABLE_TOUCH_SPEECH": "true",
+            "AI_CAT_TOUCH_SPEECH_COOLDOWN_SECONDS": "2.5",
             "AI_CAT_TOUCH_SPEECH_ASSET_ROOT": "/tmp/touch-assets",
             "AI_CAT_TOUCH_SPEECH_MARKER_PATH": "/tmp/touch-marker",
             "AI_CAT_TOUCH_SPEECH_PLAYER_PATH": "/bin/paplay",
@@ -60,6 +61,7 @@ def test_environment_values_are_parsed() -> None:
     assert settings.enable_touch_motion is False
     assert settings.touch_motion_cooldown_seconds == 4.5
     assert settings.enable_touch_speech is True
+    assert settings.touch_speech_cooldown_seconds == 2.5
     assert str(settings.touch_speech_asset_root) == "/tmp/touch-assets"
     assert str(settings.touch_speech_marker_path) == "/tmp/touch-marker"
     assert str(settings.touch_speech_player_path) == "/bin/paplay"

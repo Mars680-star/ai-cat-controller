@@ -65,14 +65,16 @@ intimacy points through the same idempotent daily-cap rules as browser events.
 The monitor starts at the end of the file, so historical touches are not
 replayed after a FastAPI restart. The service account must be able to read
 `AI_CAT_TOUCH_EVENT_LOG_PATH`; the current K1 lab deployment uses `root`.
-The current sample's verified wiring swaps the vendor labels `nose`/`head` and
-`back`/`left_foot`; `right_foot` is unchanged. The monitor exposes the corrected
-physical location as `sensor` and keeps the raw log label as `hardware_sensor`.
+Touch wiring is selected by device serial. Device `7c2b63fd4a128` uses identity
+mapping. Legacy device `7c2b63fd4a138` swaps the vendor labels `nose`/`head` and
+`back`/`left_foot`; `right_foot` is unchanged. The monitor exposes the physical
+location as `sensor` and keeps `hardware_sensor` plus `sensor_mapping` for audit.
 Touch feedback is submitted through the same serialized motion service used by
 the REST API: head/back touches nod, while nose/foot touches shake. Dialog-busy,
 motor-busy and cooldown cases keep the intimacy event but skip motor movement.
-When touch speech is enabled, the controller waits for the accepted motion to
-finish and plays only the shared allowlisted local WAV for that sensor. The five
+When touch speech is enabled, the controller serializes playback and applies a
+per-sensor cooldown. It still plays the shared allowlisted local WAV when motor
+movement is skipped by its separate cooldown. The five
 `assets/local-speech/shared/touch-*.wav` files must exist before enabling the
 flag; no cloud fallback is used when an asset is unavailable.
 

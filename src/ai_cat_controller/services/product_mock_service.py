@@ -83,8 +83,10 @@ class ProductMockService:
         self._finalizers: set[asyncio.Task[None]] = set()
         self._dialog_sync_lock = asyncio.Lock()
         self._touch_motion_lock = asyncio.Lock()
+        self._touch_speech_lock = asyncio.Lock()
         self._product_data_reset_lock = asyncio.Lock()
         self._last_touch_motion_at = 0.0
+        self._last_touch_speech_at: dict[str, float] = {}
         self._dialog_source_signatures: dict[
             tuple[str, str], tuple[int, int]
         ] = {}
@@ -1020,8 +1022,6 @@ class ProductMockService:
         action_id = TOUCH_ACTION_BY_SENSOR.get(sensor)
         if duplicate:
             return {"status": "skipped", "reason": "duplicate_touch"}
-        if not self._settings.enable_touch_motion:
-            return {"status": "skipped", "reason": "touch_motion_disabled"}
         if action_id is None:
             return {"status": "skipped", "reason": "unknown_sensor"}
 
@@ -1038,13 +1038,26 @@ class ProductMockService:
                 "dialog_state": dialog_state,
             }
 
+        if not self._settings.enable_touch_motion:
+            result: dict[str, Any] = {
+                "status": "skipped",
+                "reason": "touch_motion_disabled",
+            }
+            self._add_touch_speech_status(result, sensor, request_id)
+            return result
+
         async with self._touch_motion_lock:
             now = time.monotonic()
             if (
                 now - self._last_touch_motion_at
                 < self._settings.touch_motion_cooldown_seconds
             ):
-                return {"status": "skipped", "reason": "touch_motion_cooldown"}
+                result = {
+                    "status": "skipped",
+                    "reason": "touch_motion_cooldown",
+                }
+                self._add_touch_speech_status(result, sensor, request_id)
+                return result
             try:
                 result = await self.execute_action(
                     user_id=user_id,
@@ -1054,27 +1067,23 @@ class ProductMockService:
                 )
             except AiCatError as exc:
                 LOGGER.info("touch motion skipped: %s", exc.message)
-                return {
+                result = {
                     "status": "skipped",
                     "reason": exc.code,
                     "message": exc.message,
                 }
+                self._add_touch_speech_status(result, sensor, request_id)
+                return result
             except Exception as exc:
                 LOGGER.exception("touch motion failed")
-                return {
+                result = {
                     "status": "failed",
                     "reason": type(exc).__name__,
                 }
+                self._add_touch_speech_status(result, sensor, request_id)
+                return result
             self._last_touch_motion_at = now
-            speech_scheduled = False
-            if self._settings.enable_touch_speech:
-                speech_task = asyncio.create_task(
-                    self._play_touch_phrase_after_motion(sensor),
-                    name=f"touch-speech-{request_id}",
-                )
-                self._finalizers.add(speech_task)
-                speech_task.add_done_callback(self._finalizers.discard)
-                speech_scheduled = True
+            speech_scheduled = self._schedule_touch_speech(sensor, request_id)
             return {
                 "status": "started",
                 "action_id": action_id,
@@ -1082,28 +1091,60 @@ class ProductMockService:
                 "speech_scheduled": speech_scheduled,
             }
 
+    def _add_touch_speech_status(
+        self,
+        result: dict[str, Any],
+        sensor: str,
+        request_id: str,
+    ) -> None:
+        if self._settings.enable_touch_speech:
+            result["speech_scheduled"] = self._schedule_touch_speech(
+                sensor,
+                request_id,
+            )
+
+    def _schedule_touch_speech(self, sensor: str, request_id: str) -> bool:
+        if not self._settings.enable_touch_speech:
+            return False
+        now = time.monotonic()
+        if (
+            now - self._last_touch_speech_at.get(sensor, 0.0)
+            < self._settings.touch_speech_cooldown_seconds
+        ):
+            LOGGER.info("touch phrase suppressed by sensor cooldown: %s", sensor)
+            return False
+        self._last_touch_speech_at[sensor] = now
+        speech_task = asyncio.create_task(
+            self._play_touch_phrase_after_motion(sensor),
+            name=f"touch-speech-{request_id}",
+        )
+        self._finalizers.add(speech_task)
+        speech_task.add_done_callback(self._finalizers.discard)
+        return True
+
     async def _play_touch_phrase_after_motion(
         self,
         sensor: str,
     ) -> None:
         try:
-            await self._motion.wait_until_idle(
-                timeout=self._settings.command_timeout_seconds + 5.0
-            )
-            dialog_status = await self._adapter.get_dialog_status()
-            if (
-                dialog_status.get("session_active")
-                or dialog_status.get("stale")
-                or str(dialog_status.get("state", "unavailable"))
-                not in TOUCH_MOTION_READY_STATES
-            ):
-                LOGGER.info("touch phrase skipped because dialog became busy")
-                return
-            path = await asyncio.to_thread(
-                self._touch_phrase_player.play_touch,
-                sensor,
-            )
-            LOGGER.info("touch phrase played: %s", path)
+            async with self._touch_speech_lock:
+                await self._motion.wait_until_idle(
+                    timeout=self._settings.command_timeout_seconds + 5.0
+                )
+                dialog_status = await self._adapter.get_dialog_status()
+                if (
+                    dialog_status.get("session_active")
+                    or dialog_status.get("stale")
+                    or str(dialog_status.get("state", "unavailable"))
+                    not in TOUCH_MOTION_READY_STATES
+                ):
+                    LOGGER.info("touch phrase skipped because dialog became busy")
+                    return
+                path = await asyncio.to_thread(
+                    self._touch_phrase_player.play_touch,
+                    sensor,
+                )
+                LOGGER.info("touch phrase played: %s", path)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1241,6 +1282,7 @@ class ProductMockService:
             self._sessions.clear()
             self._dialog_source_signatures.clear()
             self._last_touch_motion_at = 0.0
+            self._last_touch_speech_at.clear()
             LOGGER.warning(
                 "product experience data reset by %s; backup=%s",
                 user_id,

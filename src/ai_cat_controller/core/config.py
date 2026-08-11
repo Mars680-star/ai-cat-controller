@@ -43,6 +43,7 @@ class Settings(BaseModel):
     enable_touch_motion: bool = True
     touch_motion_cooldown_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     enable_touch_speech: bool = False
+    touch_speech_cooldown_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
     touch_speech_asset_root: Path = Path("/opt/ai-cat-controller/assets/local-speech")
     touch_speech_marker_path: Path = Path("/run/ai-cat/local-speech-active")
     touch_speech_player_path: Path = Path("/usr/bin/paplay")
@@ -180,6 +181,9 @@ class Settings(BaseModel):
             ),
             "enable_touch_speech": source.get(
                 "AI_CAT_ENABLE_TOUCH_SPEECH", "false"
+            ),
+            "touch_speech_cooldown_seconds": source.get(
+                "AI_CAT_TOUCH_SPEECH_COOLDOWN_SECONDS", "3.0"
             ),
             "touch_speech_asset_root": source.get(
                 "AI_CAT_TOUCH_SPEECH_ASSET_ROOT",

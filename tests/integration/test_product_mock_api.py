@@ -541,11 +541,36 @@ def test_physical_touch_plays_local_phrase_after_motion(
             sensor="back",
         )
         assert event["touch_action"]["speech_scheduled"] is True
+        services = test_client.app.state.services
+        assert test_client.portal is not None
+        test_client.portal.call(services.motion.wait_until_idle)
+        during_motion_cooldown = _add_device_touch(
+            test_client,
+            serial="K1-TOUCH-SPEECH",
+            request_id="touch-speech-2",
+            sensor="nose",
+        )
+        repeated_sensor = _add_device_touch(
+            test_client,
+            serial="K1-TOUCH-SPEECH",
+            request_id="touch-speech-3",
+            sensor="nose",
+        )
+        assert during_motion_cooldown["touch_action"] == {
+            "status": "skipped",
+            "reason": "touch_motion_cooldown",
+            "speech_scheduled": True,
+        }
+        assert repeated_sensor["touch_action"] == {
+            "status": "skipped",
+            "reason": "touch_motion_cooldown",
+            "speech_scheduled": False,
+        }
         deadline = time.monotonic() + 2.0
-        while not played and time.monotonic() < deadline:
+        while len(played) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)
 
-    assert played == ["back"]
+    assert played == ["back", "nose"]
 
 
 def test_action_catalog_rejects_locked_and_tracks_idempotency(

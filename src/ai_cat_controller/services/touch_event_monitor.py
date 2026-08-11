@@ -22,16 +22,28 @@ TOUCH_PATTERN = re.compile(
     r"(?P<gesture>SHORT|LONG)_TOUCH detected\s*$"
 )
 
-# The current K1 sample's touch wiring does not match toy_main's labels.
-# Normalize it at the input boundary so every consumer uses physical locations.
-K1_TOUCH_SENSOR_MAP = {
+IDENTITY_TOUCH_SENSOR_MAP = {
+    "head": "head",
+    "nose": "nose",
+    "back": "back",
+    "left_foot": "left_foot",
+    "right_foot": "right_foot",
+}
+LEGACY_SWAPPED_TOUCH_SENSOR_MAP = {
     "head": "nose",
     "nose": "head",
     "back": "left_foot",
     "left_foot": "back",
     "right_foot": "right_foot",
 }
+LEGACY_SWAPPED_TOUCH_SERIALS = frozenset({"7c2b63fd4a138"})
 PAW_SENSORS = frozenset({"left_foot", "right_foot"})
+
+
+def touch_sensor_map_for_serial(serial: str) -> tuple[dict[str, str], str]:
+    if serial in LEGACY_SWAPPED_TOUCH_SERIALS:
+        return LEGACY_SWAPPED_TOUCH_SENSOR_MAP, "legacy_swapped"
+    return IDENTITY_TOUCH_SENSOR_MAP, "identity"
 
 
 class TouchEventMonitor:
@@ -152,13 +164,14 @@ class TouchEventMonitor:
 
         lines = self._pending_events + await asyncio.to_thread(self._read_new_lines)
         self._pending_events = []
+        sensor_map, sensor_mapping = touch_sensor_map_for_serial(serial)
         imported = 0
         for epoch, offset, line in lines:
             match = TOUCH_PATTERN.match(line)
             if match is None:
                 continue
             hardware_sensor = match.group("sensor").lower()
-            sensor = K1_TOUCH_SENSOR_MAP[hardware_sensor]
+            sensor = sensor_map[hardware_sensor]
             digest = hashlib.sha256(
                 f"{serial}:{epoch}:{offset}:{line}".encode()
             ).hexdigest()[:32]
@@ -174,6 +187,7 @@ class TouchEventMonitor:
                         "source": "k1_touch_log",
                         "sensor": sensor,
                         "hardware_sensor": hardware_sensor,
+                        "sensor_mapping": sensor_mapping,
                         "gesture": match.group("gesture").lower(),
                     },
                 )
@@ -186,10 +200,11 @@ class TouchEventMonitor:
             if event is not None:
                 imported += 1
                 LOGGER.info(
-                    "K1 touch imported: hardware_sensor=%s sensor=%s gesture=%s "
-                    "points_delta=%s action=%s",
+                    "K1 touch imported: hardware_sensor=%s sensor=%s mapping=%s "
+                    "gesture=%s points_delta=%s action=%s",
                     hardware_sensor,
                     sensor,
+                    sensor_mapping,
                     match.group("gesture").lower(),
                     event.get("points_delta"),
                     event.get("touch_action"),
