@@ -63,6 +63,7 @@
     homeAddress: $("#home-address"),
     actionGrid: $("#action-grid"),
     actionExecutions: $("#action-executions"),
+    actionExecutionCount: $("#action-execution-count"),
     stopMotion: $("#stop-motion"),
     refreshActions: $("#refresh-actions"),
     growthLevel: $("#growth-level"),
@@ -75,6 +76,7 @@
     nextUnlocks: $("#next-unlocks"),
     interactionButtons: $$(".interaction-button"),
     interactionHistory: $("#interaction-history"),
+    interactionHistoryCount: $("#interaction-history-count"),
     growthTags: $("#growth-tags"),
     growthV1Status: $("#growth-v1-status"),
     growthTendencies: $("#growth-tendencies"),
@@ -197,6 +199,14 @@
     discipline: "自律",
   };
 
+  const growthBandLevels = {
+    "普通": 0,
+    "初显": 1,
+    "成长中": 2,
+    "明显": 3,
+    "突出": 4,
+  };
+
   function showToast(message, level = "info") {
     window.clearTimeout(state.toastTimer);
     ui.toast.textContent = message;
@@ -267,14 +277,21 @@
       view.classList.toggle("active", view.dataset.viewPanel === viewName);
     });
     ui.navButtons.forEach((button) => {
-      button.classList.toggle("active", button.dataset.view === viewName);
+      const active = button.dataset.view === viewName;
+      button.classList.toggle("active", active);
+      if (active) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
     });
     if (state.petId) {
       if (viewName === "motion") {
         refreshActions().catch(reportError);
       } else if (viewName === "growth") {
-        Promise.all([refreshIntimacy(), refreshGrowthPersonality()])
-          .catch(reportError);
+        refreshIntimacy().catch(reportError);
+      } else if (viewName === "personality") {
+        refreshGrowthPersonality().catch(reportError);
       } else if (viewName === "history") {
         Promise.all([refreshDialogs(), refreshVoiceStatus()]).catch(reportError);
       }
@@ -411,14 +428,14 @@
     ui.deviceStatusForm.classList.toggle("hidden", isLocalK1);
     ui.reconnect.classList.toggle("hidden", isLocalK1);
     ui.deviceStatusTitle.textContent = isLocalK1
-      ? "真机电源状态"
-      : "设备状态模拟";
+      ? "连接与电源"
+      : "连接与电源";
     ui.deviceStatusDescription.textContent = isLocalK1
-      ? "直接读取 K1 电池与充电芯片，每 5 秒更新"
-      : "用于验证断网、重连和电量显示";
+      ? "电量与充电状态会自动更新"
+      : "查看并更新设备的连接、电量与充电情况";
     ui.connectionLastSeenSource.textContent = isLocalK1
-      ? "真机实时状态"
-      : "Mock 状态";
+      ? "设备实时状态"
+      : "设备状态";
 
     if (!isLocalK1) {
       return;
@@ -580,6 +597,7 @@
   }
 
   function renderExecutions(executions) {
+    ui.actionExecutionCount.textContent = `${executions.length} 条`;
     ui.actionExecutions.replaceChildren();
     ui.actionExecutions.classList.toggle("empty-state", executions.length === 0);
     if (executions.length === 0) {
@@ -657,6 +675,7 @@
   }
 
   function renderInteractionHistory(history) {
+    ui.interactionHistoryCount.textContent = `${history.length} 条`;
     ui.interactionHistory.replaceChildren();
     ui.interactionHistory.classList.toggle("empty-state", history.length === 0);
     if (history.length === 0) {
@@ -713,7 +732,7 @@
       ? "已达到最高等级"
       : `${data.points} / ${data.progress.next_level}`;
     ui.growthDailyCap.textContent = data.debug_unlimited_touch_intimacy
-      ? "触摸计分不限（调试）"
+      ? "今日触摸成长不设上限"
       : `每日增长上限 ${data.daily_growth_cap}`;
     fillList(ui.currentUnlocks, data.current_unlocks, "暂无");
     fillList(ui.nextUnlocks, data.next_unlocks, "已全部解锁");
@@ -746,10 +765,11 @@
   }
 
   function renderGrowthPersonality(data, {notifyTags = false} = {}) {
-    ui.growthV1Status.textContent = data.enabled ? "已启用" : "未启用";
+    ui.growthV1Status.textContent = data.enabled ? "持续成长中" : "成长已暂停";
+    ui.growthV1Status.classList.toggle("offline", !data.enabled);
     ui.growthV1Status.title = data.enabled
-      ? "成长事件会更新长期人格和运行时提示词"
-      : "成长数据只读，不记录新事件，也不修改运行时提示词";
+      ? "每一次相处都可能带来新的性格变化"
+      : "现有成长记录仍会保留";
     const activeTagIds = data.active_tags.map((tag) => tag.tag_id);
     if (notifyTags && state.growthTagIds !== null) {
       const newTags = data.active_tags.filter(
@@ -778,16 +798,33 @@
     }
 
     ui.growthTendencies.replaceChildren();
-    Object.values(data.attributes).forEach((attribute) => {
+    Object.entries(data.attributes).forEach(([attributeId, attribute]) => {
       const row = document.createElement("div");
       row.className = "tendency-row";
+      const copy = document.createElement("div");
+      copy.className = "tendency-copy";
       const label = document.createElement("span");
       label.textContent = attribute.label;
       const tendency = document.createElement("strong");
       tendency.textContent = attribute.value === undefined
         ? attribute.tendency
         : `${attribute.tendency} · ${attribute.value.toFixed(2)}`;
-      row.append(label, tendency);
+      copy.append(label, tendency);
+
+      const meter = document.createElement("span");
+      meter.className = `tendency-meter tendency-${attributeId}`;
+      meter.setAttribute("role", "img");
+      meter.setAttribute(
+        "aria-label",
+        `${attribute.label}倾向：${attribute.tendency}`,
+      );
+      const level = growthBandLevels[attribute.tendency] ?? 0;
+      for (let index = 0; index < 5; index += 1) {
+        const segment = document.createElement("i");
+        segment.classList.toggle("active", index <= level);
+        meter.append(segment);
+      }
+      row.append(copy, meter);
       ui.growthTendencies.append(row);
     });
 
@@ -889,7 +926,7 @@
       return;
     }
     if (!sync.source_available && sync.message_count === 0) {
-      ui.dialogSyncState.textContent = "等待真机字幕";
+      ui.dialogSyncState.textContent = "等待对话内容";
       return;
     }
     ui.dialogSyncState.textContent = `已同步 ${formatClock(sync.synced_at)}`;
@@ -908,7 +945,7 @@
     ui.conversationList.replaceChildren();
     ui.conversationList.classList.toggle("empty-state", conversations.length === 0);
     if (conversations.length === 0) {
-      ui.conversationList.textContent = "暂无真实语音会话";
+      ui.conversationList.textContent = "暂无语音会话";
       return;
     }
     conversations.forEach((conversation) => {
@@ -968,7 +1005,7 @@
   function renderDialogDetail(data) {
     const {conversation, messages} = data;
     ui.conversationDetailTitle.textContent = conversation.preview || "会话详情";
-    const source = conversation.source === "device" ? "真机语音" : "网页 Mock";
+    const source = conversation.source === "device" ? "语音互动" : "文字互动";
     const duration = conversation.duration_seconds > 0
       ? ` · ${conversation.duration_seconds} 秒`
       : "";
@@ -992,7 +1029,7 @@
       content.textContent = message.content;
       const meta = document.createElement("small");
       meta.textContent = message.role === "assistant"
-        ? `${formatDate(message.created_at)} · ${message.voice_id || "Mock 音色"}`
+        ? `${formatDate(message.created_at)} · ${message.voice_id || "默认音色"}`
         : formatDate(message.created_at);
       block.append(content, meta);
       ui.dialogList.append(block);
@@ -1235,7 +1272,7 @@
 
   async function resetProductData() {
     const confirmed = window.confirm(
-      "确认格式化全部体验数据？系统会先自动备份，然后清除账号、绑定、性格、亲密度、动作、对话和反馈记录。此操作不能在网页中撤销。",
+      "确认重置全部数据？系统会先保留恢复副本，然后清除账号、绑定、性格、亲密度、动作、对话和反馈记录。此操作不能在页面中撤销。",
     );
     if (!confirmed) {
       return;
@@ -1249,8 +1286,8 @@
       });
       const backupId = payload.data.backup_id;
       logout();
-      setTopStatus("体验数据已格式化", false);
-      window.alert(`格式化完成。备份编号：${backupId}\n请重新登录并从性格盲盒开始测试。`);
+      setTopStatus("数据已重置", false);
+      window.alert(`重置完成。恢复编号：${backupId}\n请重新登录并从性格盲盒开始。`);
     } finally {
       ui.resetData.disabled = false;
     }
@@ -1383,10 +1420,9 @@
     try {
       await refreshDashboard();
       if (state.activeView === "growth") {
-        await Promise.all([
-          refreshIntimacy({notifyChange: true}),
-          refreshGrowthPersonality({notifyTags: true}),
-        ]);
+        await refreshIntimacy({notifyChange: true});
+      } else if (state.activeView === "personality") {
+        await refreshGrowthPersonality({notifyTags: true});
       }
     } catch (error) {
       if (error.status === 401) {

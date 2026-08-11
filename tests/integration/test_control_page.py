@@ -16,8 +16,8 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert "AI 猫伴侣" in response.text
     assert "停止当前动作" in response.text
     assert "性格盲盒" in response.text
-    assert "安全预设动作" in response.text
-    assert "真机语音状态" in response.text
+    assert "陪它动一动" in response.text
+    assert "语音互动状态" in response.text
     assert "开始或继续聆听" in response.text
     assert 'id="real-device-status"' in response.text
     assert 'id="real-battery-percent"' in response.text
@@ -27,10 +27,20 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="dialog-sync-state"' in response.text
     assert 'id="reset-data-button"' in response.text
     assert 'id="growth-personality-title"' in response.text
+    assert 'id="view-personality"' in response.text
+    assert 'data-view-panel="personality"' in response.text
     assert 'id="growth-v1-status"' in response.text
     assert 'id="growth-tendencies"' in response.text
     assert 'id="growth-debug-form"' in response.text
-    assert "格式化体验数据" in response.text
+    assert 'id="interaction-history-count"' in response.text
+    assert 'id="action-execution-count"' in response.text
+    assert response.text.count('data-view="personality"') == 2
+    assert response.text.count('class="record-disclosure') == 2
+    assert "重置全部数据" in response.text
+    for engineering_term in (
+        "真机", "Mock", "调试", "测试", "开发", "API", "SDK", "License",
+    ):
+        assert engineering_term not in response.text
     assert "https://" not in response.text
     assert "cdn" not in response.text.lower()
 
@@ -53,6 +63,8 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert 'confirmation: "RESET_PRODUCT_DATA"' in script.text
     assert "/growth/debug" in script.text
     assert "renderGrowthPersonality" in script.text
+    assert 'viewName === "personality"' in script.text
+    assert "growthBandLevels" in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>AI 猫伴侣</title>
-  <link rel="stylesheet" href="/static/control.css?v=20260803-1">
+  <link rel="stylesheet" href="/static/control.css?v=20260811-2">
 </head>
 <body>
   <header class="topbar">
@@ -13,7 +13,7 @@
       <span class="brand-mark" aria-hidden="true">A</span>
       <div>
         <h1>AI 猫伴侣</h1>
-        <p id="top-subtitle">产品体验 Mock</p>
+        <p id="top-subtitle">陪伴你的智能宠物</p>
       </div>
     </div>
     <div class="top-status">
@@ -28,12 +28,12 @@
         <img src="/static/ai-cat-avatar.png" alt="米色布偶猫">
       </div>
       <div class="login-content">
-        <p class="eyebrow">浏览器测试入口</p>
-        <h2 id="login-title">登录体验账号</h2>
+        <p class="eyebrow">欢迎回来</p>
+        <h2 id="login-title">登录猫咪空间</h2>
         <form id="login-form" class="form-stack">
           <label>
-            <span>Mock 登录码</span>
-            <input id="login-code" name="login_code" value="browser-demo-user"
+            <span>账号标识</span>
+            <input id="login-code" name="login_code" value="aicat-user"
                    minlength="3" maxlength="64" required>
           </label>
           <label>
@@ -42,11 +42,11 @@
                    minlength="1" maxlength="32" required>
           </label>
           <label>
-            <span>服务 API Key <small>仅服务启用鉴权时填写</small></span>
+            <span>访问密钥 <small>仅在需要时填写</small></span>
             <input id="login-api-key" type="password" autocomplete="off"
-                   placeholder="默认 Mock 模式留空">
+                   placeholder="未设置时可留空">
           </label>
-          <button class="button primary" type="submit">进入控制台</button>
+          <button class="button primary" type="submit">进入猫咪空间</button>
         </form>
       </div>
     </section>
@@ -74,6 +74,9 @@
         <button class="nav-button" data-view="growth" type="button">
           <span aria-hidden="true">↑</span>培养
         </button>
+        <button class="nav-button" data-view="personality" type="button">
+          <span aria-hidden="true">◇</span>性格
+        </button>
         <button class="nav-button" data-view="history" type="button">
           <span aria-hidden="true">◫</span>对话
         </button>
@@ -82,7 +85,7 @@
         </button>
       </nav>
       <button id="logout-button" class="button quiet logout-button" type="button">
-        退出体验账号
+        退出当前账号
       </button>
     </aside>
 
@@ -100,7 +103,7 @@
           <form id="bind-form" class="form-grid">
             <label>
               <span>设备序列号</span>
-              <input id="device-serial" value="K1-MOCK-0001"
+              <input id="device-serial" value="K1-0001"
                      minlength="4" maxlength="64" required>
             </label>
             <label>
@@ -132,22 +135,22 @@
             <article class="metric">
               <span>最后在线</span>
               <strong id="connection-last-seen">--</strong>
-              <small id="connection-last-seen-source">Mock 状态</small>
+              <small id="connection-last-seen-source">设备状态</small>
             </article>
           </div>
 
           <div class="section-heading">
             <div>
-              <h3 id="device-status-title">设备状态模拟</h3>
-              <p id="device-status-description">用于验证断网、重连和电量显示</p>
+              <h3 id="device-status-title">连接与电源</h3>
+              <p id="device-status-description">查看设备的连接、电量与充电情况</p>
             </div>
-            <button id="reconnect-button" class="button secondary" type="button">模拟重连</button>
+            <button id="reconnect-button" class="button secondary" type="button">重新连接</button>
           </div>
           <div id="real-device-status" class="metric-grid hidden">
             <article class="metric accent-yellow">
               <span>实时电量</span>
               <strong id="real-battery-percent">--</strong>
-              <small id="real-battery-availability">等待真机数据</small>
+              <small id="real-battery-availability">等待设备数据</small>
             </article>
             <article class="metric">
               <span>电池状态</span>
@@ -181,7 +184,7 @@
               <span>正在充电</span>
               <input id="mock-charging" type="checkbox">
             </label>
-            <button class="button secondary" type="submit">应用状态</button>
+            <button class="button secondary" type="submit">更新状态</button>
           </form>
         </section>
       </section>
@@ -232,46 +235,60 @@
         <div class="page-heading">
           <div>
             <p class="eyebrow">运动控制</p>
-            <h2>安全预设动作</h2>
+            <h2>陪它动一动</h2>
           </div>
           <button id="stop-motion" class="button danger" type="button">停止当前动作</button>
         </div>
         <div id="action-grid" class="action-catalog" aria-live="polite"></div>
-        <div class="section-heading compact">
+        <div class="section-heading compact record-heading">
           <div>
-            <h3>执行记录</h3>
-            <p>最近 20 条</p>
+            <h3>动作记录</h3>
+            <p>回顾最近的活动</p>
           </div>
           <button id="refresh-actions" class="icon-button" type="button"
                   title="刷新执行记录" aria-label="刷新执行记录">↻</button>
         </div>
-        <div id="action-executions" class="timeline empty-state">暂无动作记录</div>
+        <details class="record-disclosure">
+          <summary>
+            <span>最近动作</span>
+            <span id="action-execution-count" class="record-count">0 条</span>
+          </summary>
+          <div id="action-executions" class="timeline empty-state">暂无动作记录</div>
+        </details>
       </section>
 
       <section id="view-growth" class="view" data-view-panel="growth">
         <div class="page-heading">
           <div>
             <p class="eyebrow">宠物培养</p>
-            <h2 id="growth-level">初次相遇</h2>
+            <h2>陪伴与亲密度</h2>
           </div>
-          <span id="growth-badge" class="level-badge">NEW</span>
+          <div class="level-heading-status">
+            <strong id="growth-level">初次相遇</strong>
+            <span id="growth-badge" class="level-badge">NEW</span>
+          </div>
         </div>
-        <div class="growth-score">
-          <strong id="growth-points">0</strong>
-          <span>亲密度</span>
-        </div>
-        <div class="progress-track" aria-label="亲密度升级进度">
-          <span id="growth-progress"></span>
-        </div>
-        <div class="progress-copy">
-          <span id="growth-progress-copy">0 / 20</span>
-          <span id="growth-daily-cap">每日上限 50</span>
-        </div>
+        <section class="relationship-band" aria-label="亲密度成长概览">
+          <div class="growth-score">
+            <span>当前亲密度</span>
+            <strong id="growth-points">0</strong>
+          </div>
+          <div class="growth-progress-block">
+            <div class="progress-copy">
+              <span>距离下一阶段</span>
+              <strong id="growth-progress-copy">0 / 20</strong>
+            </div>
+            <div class="progress-track" aria-label="亲密度升级进度">
+              <span id="growth-progress"></span>
+            </div>
+            <span id="growth-daily-cap" class="daily-cap">每日增长上限 50</span>
+          </div>
+        </section>
 
         <div class="section-heading compact">
           <div>
-            <h3>互动记录</h3>
-            <p>同一请求不会重复计分</p>
+            <h3>今日互动</h3>
+            <p>每一次陪伴都会被妥善记录</p>
           </div>
         </div>
         <div class="interaction-grid">
@@ -279,86 +296,113 @@
             <strong>每日见面</strong><span>+3</span>
           </button>
           <button class="interaction-button" data-event="touch" type="button">
-            <strong>触摸反馈</strong><span>+1</span>
+            <strong>摸摸它</strong><span>+1</span>
           </button>
           <button class="interaction-button" data-event="completed_task" type="button">
-            <strong>完成任务</strong><span>+5</span>
+            <strong>一起完成任务</strong><span>+5</span>
           </button>
           <button class="interaction-button subtract" data-event="ignored_greeting" type="button">
-            <strong>忽略问候</strong><span>-1</span>
+            <strong>错过问候</strong><span>-1</span>
           </button>
         </div>
 
-        <div class="unlock-grid">
+        <div class="unlock-grid" aria-label="等级解锁进度">
           <section>
+            <p class="section-kicker">当前能力</p>
             <h3>已解锁</h3>
             <ul id="current-unlocks" class="plain-list"></ul>
           </section>
           <section>
+            <p class="section-kicker">成长预告</p>
             <h3>下一级解锁</h3>
             <ul id="next-unlocks" class="plain-list"></ul>
           </section>
         </div>
-        <div id="interaction-history" class="timeline empty-state">暂无培养记录</div>
+        <details class="record-disclosure interaction-history-disclosure">
+          <summary>
+            <span>最近互动</span>
+            <span id="interaction-history-count" class="record-count">0 条</span>
+          </summary>
+          <div id="interaction-history" class="timeline empty-state">暂无培养记录</div>
+        </details>
+      </section>
 
-        <section class="growth-personality" aria-labelledby="growth-personality-title">
-          <div class="section-heading compact">
-            <div>
-              <h3 id="growth-personality-title">成长人格</h3>
-              <p>长期互动形成的稳定倾向，不改变出生性格</p>
-            </div>
-            <span id="growth-v1-status" class="level-badge" title="成长人格运行状态">
-              未启用
-            </span>
+      <section id="view-personality" class="view" data-view-panel="personality">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">性格成长</p>
+            <h2 id="growth-personality-title">它正在成为独一无二的伙伴</h2>
+          </div>
+          <span id="growth-v1-status" class="state-label" title="成长人格运行状态">
+            未启用
+          </span>
+        </div>
+
+        <section class="personality-overview-band" aria-label="成长人格概览">
+          <div>
+            <p class="section-kicker">成长标签</p>
+            <h3>从长期互动中自然形成</h3>
+            <p>成长不会改变它最初的性格，只会逐步丰富表达倾向与陪伴方式。</p>
           </div>
           <div id="growth-tags" class="growth-tags" aria-label="当前成长标签">
             <span class="muted">尚未形成成长标签</span>
           </div>
-          <div class="growth-personality-grid">
-            <section>
-              <h3>成长倾向</h3>
-              <div id="growth-tendencies" class="tendency-list"></div>
-            </section>
-            <section>
-              <h3>当前行为画像</h3>
-              <ul id="growth-behavior-summary" class="plain-list"></ul>
-            </section>
-          </div>
-
-          <div class="section-heading compact">
-            <div>
-              <h3>最近成长</h3>
-              <p>记录互动如何影响长期人格</p>
-            </div>
-          </div>
-          <div id="growth-event-history" class="timeline empty-state">
-            暂无成长记录
-          </div>
-
-          <form id="growth-debug-form" class="growth-debug-form hidden">
-            <div>
-              <h3>Mock 快速养成</h3>
-              <p>仅用于开发验证；重复请求 ID 不会重复成长</p>
-            </div>
-            <label>
-              <span>事件类型</span>
-              <select id="growth-debug-event">
-                <option value="knowledge_discussion">知识讨论</option>
-                <option value="question">提出问题</option>
-                <option value="emotional_sharing">情绪分享</option>
-                <option value="encouragement">鼓励互动</option>
-                <option value="joke">轻松玩笑</option>
-                <option value="planning">计划讨论</option>
-                <option value="casual_chat">日常闲聊</option>
-              </select>
-            </label>
-            <label>
-              <span>次数</span>
-              <input id="growth-debug-count" type="number" min="1" max="500" value="20">
-            </label>
-            <button class="button secondary" type="submit">生成成长事件</button>
-          </form>
         </section>
+
+        <div class="personality-insight-grid">
+          <section class="insight-section">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>六维成长倾向</h3>
+                <p>好奇、共情、求知、活力、淘气与自律</p>
+              </div>
+            </div>
+            <div id="growth-tendencies" class="tendency-list"></div>
+          </section>
+          <section class="insight-section behavior-section">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>当前行为画像</h3>
+                <p>稳定的成长倾向会逐渐体现在日常交流中</p>
+              </div>
+            </div>
+            <ul id="growth-behavior-summary" class="plain-list behavior-list"></ul>
+          </section>
+        </div>
+
+        <div class="section-heading compact">
+          <div>
+            <h3>最近成长</h3>
+            <p>看看你们的相处如何塑造它的性格</p>
+          </div>
+        </div>
+        <div id="growth-event-history" class="timeline growth-timeline empty-state">
+          暂无成长记录
+        </div>
+
+        <form id="growth-debug-form" class="growth-debug-form hidden">
+          <div>
+            <h3>成长体验加速</h3>
+            <p>快速体验长期陪伴后形成的性格变化</p>
+          </div>
+          <label>
+            <span>事件类型</span>
+            <select id="growth-debug-event">
+              <option value="knowledge_discussion">知识讨论</option>
+              <option value="question">提出问题</option>
+              <option value="emotional_sharing">情绪分享</option>
+              <option value="encouragement">鼓励互动</option>
+              <option value="joke">轻松玩笑</option>
+              <option value="planning">计划讨论</option>
+              <option value="casual_chat">日常闲聊</option>
+            </select>
+          </label>
+          <label>
+            <span>次数</span>
+            <input id="growth-debug-count" type="number" min="1" max="500" value="20">
+          </label>
+          <button class="button secondary" type="submit">生成成长事件</button>
+        </form>
       </section>
 
       <section id="view-history" class="view" data-view-panel="history">
@@ -374,7 +418,7 @@
             <span id="voice-state-dot" class="voice-state-dot unavailable"
                   aria-hidden="true"></span>
             <div>
-              <span>真机语音状态</span>
+              <span>语音互动状态</span>
               <h3 id="voice-debug-title" role="status" aria-live="polite">
                 等待状态
               </h3>
@@ -419,7 +463,7 @@
         </section>
         <form id="dialog-form" class="dialog-composer">
           <input id="dialog-input" maxlength="500" required
-                 placeholder="输入问题，AI 将通过真机回答">
+                 placeholder="输入想问它的问题">
           <button class="button primary" type="submit">文字提问</button>
         </form>
       </section>
@@ -428,50 +472,67 @@
         <div class="page-heading">
           <div>
             <p class="eyebrow">基础设置</p>
-            <h2>宠物与服务</h2>
+            <h2>偏好与账号</h2>
           </div>
         </div>
-        <form id="settings-form" class="form-stack settings-form">
-          <label>
-            <span>宠物名称</span>
-            <input id="settings-name" minlength="1" maxlength="20" required>
-          </label>
-          <label>
-            <span>音量 <output id="settings-volume-value">60%</output></span>
-            <input id="settings-volume" type="range" min="0" max="100" value="60">
-          </label>
-          <label>
-            <span>免唤醒追问时间 <output id="settings-follow-up-value">30 秒</output></span>
-            <input id="settings-follow-up" type="range"
-                   min="5" max="120" step="5" value="30">
-          </label>
-          <label>
-            <span>服务 API Key <small>仅当前页面内存</small></span>
-            <input id="settings-api-key" type="password" autocomplete="off"
-                   placeholder="默认 Mock 模式留空">
-          </label>
-          <button class="button primary" type="submit">保存设置</button>
-        </form>
+        <div class="settings-layout">
+          <section class="settings-section">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>宠物偏好</h3>
+                <p>名称、音量和连续聊天</p>
+              </div>
+            </div>
+            <form id="settings-form" class="form-stack settings-form">
+              <label>
+                <span>宠物名称</span>
+                <input id="settings-name" minlength="1" maxlength="20" required>
+              </label>
+              <label>
+                <span>音量 <output id="settings-volume-value">60%</output></span>
+                <input id="settings-volume" type="range" min="0" max="100" value="60">
+              </label>
+              <label>
+                <span>连续聊天时间 <output id="settings-follow-up-value">30 秒</output></span>
+                <input id="settings-follow-up" type="range"
+                       min="5" max="120" step="5" value="30">
+              </label>
+              <label>
+                <span>访问密钥 <small>关闭页面后不会保留</small></span>
+                <input id="settings-api-key" type="password" autocomplete="off"
+                       placeholder="未设置时可留空">
+              </label>
+              <button class="button primary" type="submit">保存设置</button>
+            </form>
+          </section>
 
-        <form id="feedback-form" class="form-stack feedback-form">
-          <h3>异常反馈</h3>
-          <label>
-            <span>问题类型</span>
-            <select id="feedback-category">
-              <option value="device">设备</option>
-              <option value="dialog">对话</option>
-              <option value="motion">动作</option>
-              <option value="account">账号</option>
-              <option value="other">其他</option>
-            </select>
-          </label>
-          <label>
-            <span>问题描述</span>
-            <textarea id="feedback-content" minlength="2" maxlength="500"
-                      rows="4" required></textarea>
-          </label>
-          <button class="button secondary" type="submit">提交反馈</button>
-        </form>
+          <section class="settings-section">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>异常反馈</h3>
+                <p>记录设备、对话或动作问题</p>
+              </div>
+            </div>
+            <form id="feedback-form" class="form-stack feedback-form">
+              <label>
+                <span>问题类型</span>
+                <select id="feedback-category">
+                  <option value="device">设备</option>
+                  <option value="dialog">对话</option>
+                  <option value="motion">动作</option>
+                  <option value="account">账号</option>
+                  <option value="other">其他</option>
+                </select>
+              </label>
+              <label>
+                <span>问题描述</span>
+                <textarea id="feedback-content" minlength="2" maxlength="500"
+                          rows="4" required></textarea>
+              </label>
+              <button class="button secondary" type="submit">提交反馈</button>
+            </form>
+          </section>
+        </div>
 
         <section class="danger-zone">
           <div>
@@ -483,11 +544,11 @@
 
         <section class="danger-zone critical">
           <div>
-            <h3>格式化体验数据</h3>
-            <p>自动备份后清除账号、设备绑定、性格、亲密度、动作、对话和反馈记录；火山鉴权、License、SDK 与系统配置不受影响。</p>
+            <h3>重新开始</h3>
+            <p>清除当前账号、设备绑定、性格、亲密度、动作、对话和反馈记录。云端授权与设备设置不会改变。</p>
           </div>
           <button id="reset-data-button" class="button danger" type="button">
-            格式化全部体验数据
+            重置全部数据
           </button>
         </section>
       </section>
@@ -498,6 +559,7 @@
       <button class="nav-button" data-view="home" type="button"><span>⌂</span>主页</button>
       <button class="nav-button" data-view="motion" type="button"><span>↔</span>运动</button>
       <button class="nav-button" data-view="growth" type="button"><span>↑</span>培养</button>
+      <button class="nav-button" data-view="personality" type="button"><span>◇</span>性格</button>
       <button class="nav-button" data-view="history" type="button"><span>◫</span>对话</button>
       <button class="nav-button" data-view="settings" type="button"><span>⚙</span>设置</button>
     </nav>
@@ -513,6 +575,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260810-3" defer></script>
+  <script src="/static/control.js?v=20260811-2" defer></script>
 </body>
 </html>

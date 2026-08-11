@@ -78,13 +78,13 @@ class MockAiCatAdapter(AiCatAdapter):
     async def get_dialog_status(self) -> dict[str, Any]:
         async with self._state_lock:
             state_map = {
-                "idle": ("ready", "等待开始语音测试"),
-                "awake": ("listening", "Mock 正在聆听"),
-                "interrupted": ("interrupted", "Mock 回答已打断"),
+                "idle": ("ready", "等待唤醒"),
+                "awake": ("listening", "正在聆听"),
+                "interrupted": ("interrupted", "回答已结束"),
             }
             state, message = state_map.get(
                 self.dialog_state,
-                (self.dialog_state, "Mock 对话状态"),
+                (self.dialog_state, "语音互动状态"),
             )
             return {
                 "state": state,
