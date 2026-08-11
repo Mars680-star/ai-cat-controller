@@ -72,10 +72,15 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 - 本地唤醒服务新增云端无关的命名打断词：对话状态仅在允许打断时监听“小安停下”，
   并兼容“小安别说了、小安安静、小安暂停”，命中后复用固定 `SIGUSR2`，不会把
   打断词提交给模型。普通收音和连续追问阶段继续释放第二路录音，通用词“停”不会
-  触发，降低扬声器回声误停风险。K1 已完成单线程增量编译并稳定启动，实体口令仍待
-  现场确认；旧二进制恢复点为
-  `/root/ai-cat-backups/before-wake-interrupt-20260811T2211`。自动化测试为
-  `221 passed`。
+  触发，降低扬声器回声误停风险。K1 已连续完成两轮实体打断测试，长回答均可重复
+  停止；受本地录音窗口和离线识别耗时影响，当前从说完口令到停止约 3 秒。旧二进制
+  恢复点为 `/root/ai-cat-backups/before-wake-interrupt-20260811T2211`。
+- AI 回答期间新增低幅度轻侧头或轻点头，每次回答最多执行一次；聆听、思考、连续
+  追问、触摸播报和电机忙碌期间不触发。两种固定轨迹均已在 K1 现场确认自然，动作
+  继续经过既有互斥锁、冷却和固定命令白名单，网页参数不能转换为原始电机参数。
+  实际语音回答联动已确认按回答状态各执行一次，部署恢复点为
+  `/root/ai-cat-backups/before-conversation-motion-20260811T145519Z`。自动化测试为
+  `227 passed`。
 
 ### 2026-08-10
 
@@ -519,6 +524,10 @@ export AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
 export AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true
 export AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
 export AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS=2.2
+export AI_CAT_CONVERSATION_MOTION_ENABLED=true
+export AI_CAT_CONVERSATION_MOTION_PROBABILITY=1.0
+export AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS=1.0
+export AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS=0.5
 ```
 
 首次部署应确认私有仓库内的 20 个 WAV 已同步：

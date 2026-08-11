@@ -58,17 +58,25 @@ The FastAPI and voice paths derive their fixed command from this profile. HTTP
 intensity, angle and duration fields never become raw GPIO or speed arguments.
 `AI_CAT_ENABLE_TAIL_MOTION` remains a separate gate and defaults to `false`.
 
-Four product actions use additional fixed presets on this profile:
+Product actions and conversation animation use additional fixed presets on this
+profile:
 
 | Preset | Fixed behavior | Physical status |
 |---|---|---|
+| `conversation_tilt` | Move the left/right head axis from center 90 to 108 degrees at speed 1, then return | Accepted |
+| `conversation_nod` | Move the up/down head axis from center 90 to 108 degrees at speed 1, then return | Accepted |
 | `proud_pose` | Hold head to one side for 1.2 s, wag tail once, return to center over 0.6 s | Accepted |
 | `quiet_companion` | Shallow head-down target at speed 1, then return to center | Accepted |
 | `greeting_combo` | Standard nod at speed 2, then one standard tail gesture | Pending |
 | `celebration_combo` | Standard head shake, nod, then one standard tail gesture | Pending |
 
 All names and trajectories are compiled into `/usr/bin/ai-toy_app`; HTTP cannot
-provide motion parameters. The three standard axes, `proud_pose`, and
-`quiet_companion` have passed physical acceptance on device `7c2b63fd4a128`.
-Keep the remaining two combination presets out of autonomous behavior until
-their individual physical checks are complete.
+provide raw motion parameters. Intensity `0.2` selects the two conversation
+presets through the fixed adapter allowlist; larger values keep using the
+accepted standard gestures. Each AI answer can schedule at most one
+conversation motion after a one-second delay. Listening, thinking, follow-up,
+touch speech, and an already-busy motor never start one.
+
+The three standard axes, `proud_pose`, and `quiet_companion` have passed
+physical acceptance on device `7c2b63fd4a128`. Keep pending presets out of
+unattended behavior until their individual physical checks are complete.

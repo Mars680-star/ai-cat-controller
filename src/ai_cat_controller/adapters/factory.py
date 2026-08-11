@@ -23,6 +23,8 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
     if smooth_profile:
         hardware_commands.update(
             {
+                ("motor", "preset", "conversation_tilt"),
+                ("motor", "preset", "conversation_nod"),
                 ("motor", "preset", "quiet_companion"),
             }
         )

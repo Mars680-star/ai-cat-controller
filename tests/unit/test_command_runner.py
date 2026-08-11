@@ -306,11 +306,15 @@ async def test_factory_allowlists_only_selected_vendor_smooth_commands(
 
     await adapter.shake_head(0.5, 600)
     await adapter.nod_head(0.5, 600)
+    await adapter.shake_head(0.2, 900)
+    await adapter.nod_head(0.2, 900)
     await adapter.run_motion_preset("quiet_companion", 1300)
 
     assert captured == [
         ("motor", "head_lr", "3"),
         ("motor", "head_ud", "3"),
+        ("motor", "preset", "conversation_tilt"),
+        ("motor", "preset", "conversation_nod"),
         ("motor", "preset", "quiet_companion"),
     ]
     with pytest.raises(CommandNotAllowedError):

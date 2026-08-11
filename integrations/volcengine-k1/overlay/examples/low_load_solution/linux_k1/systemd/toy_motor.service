@@ -21,6 +21,10 @@ Environment=AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false
 Environment=AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true
 Environment=AI_CAT_AUTONOMY_LOCAL_SPEECH_ASSET_ROOT=/opt/ai-cat-controller/assets/local-speech
 Environment=AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS=2.2
+Environment=AI_CAT_CONVERSATION_MOTION_ENABLED=true
+Environment=AI_CAT_CONVERSATION_MOTION_PROBABILITY=1.0
+Environment=AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS=1.0
+Environment=AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS=0.5
 ExecStartPre=/usr/bin/rm -f /run/ai-cat/local-speech-active
 ExecStart=/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.autonomy
 ExecStopPost=/usr/bin/rm -f /run/ai-cat/local-speech-active

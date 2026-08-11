@@ -152,7 +152,7 @@ static void print_usage(const char *prog)
     printf("  %s wifi <scan|state|info|list|on|off|connect|disconnect|remove|mac> [args...]\n", prog);
     printf("  %s nfc [count]\n", prog);
     printf("  %s motor [all|head_lr|head_ud|tail_lr] [speed]\n", prog);
-    printf("  %s motor preset <proud_pose|quiet_companion|greeting_combo|celebration_combo>\n", prog);
+    printf("  %s motor preset <conversation_tilt|conversation_nod|proud_pose|quiet_companion|greeting_combo|celebration_combo>\n", prog);
     printf("  %s motor stop\n", prog);
     printf("  %s fan [speed_percent] [seconds]\n", prog);
     printf("  %s light_sensor [count]\n", prog);
@@ -582,6 +582,8 @@ static const struct fixed_rohs_motor *find_rohs_motor(const char *name)
 static bool known_motor_preset(const char *name)
 {
     static const char *presets[] = {
+        "conversation_tilt",
+        "conversation_nod",
         "proud_pose",
         "quiet_companion",
         "greeting_combo",
@@ -651,12 +653,26 @@ static int run_motor_preset(const char *name)
     const struct fixed_rohs_motor *head_lr = find_rohs_motor("head_lr");
     const struct fixed_rohs_motor *head_ud = find_rohs_motor("head_ud");
     const struct fixed_rohs_motor *tail_lr = find_rohs_motor("tail_lr");
+    const struct motor_waypoint conversation_motion[] = {
+        {108.0f, 450000U},
+        {90.0f, 300000U},
+    };
     const struct motor_waypoint quiet_companion[] = {
         {135.0f, 900000U},
         {90.0f, 400000U},
     };
 
     printf("[motor] preset=%s\n", name);
+    if (strcmp(name, "conversation_tilt") == 0) {
+        return run_rohs_motor_waypoints(
+            head_lr, 1.0f, conversation_motion,
+            ARRAY_SIZE(conversation_motion));
+    }
+    if (strcmp(name, "conversation_nod") == 0) {
+        return run_rohs_motor_waypoints(
+            head_ud, 1.0f, conversation_motion,
+            ARRAY_SIZE(conversation_motion));
+    }
     if (strcmp(name, "proud_pose") == 0) {
         return run_proud_pose(head_lr, tail_lr);
     }

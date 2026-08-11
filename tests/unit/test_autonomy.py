@@ -1,4 +1,5 @@
 import random
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ class FakeClient:
                 ],
             },
         }
-        self.actions: list[tuple[str, str]] = []
+        self.actions: list[tuple[str, str, float, int]] = []
         self.phrases: list[tuple[str, str]] = []
 
     def dialog_status(self) -> dict[str, object]:
@@ -39,8 +40,15 @@ class FakeClient:
     def personality_profile(self) -> dict[str, object]:
         return self.personality
 
-    def start_head_action(self, action: str, request_id: str) -> None:
-        self.actions.append((action, request_id))
+    def start_head_action(
+        self,
+        action: str,
+        request_id: str,
+        *,
+        intensity: float = 0.35,
+        duration_ms: int = 1800,
+    ) -> None:
+        self.actions.append((action, request_id, intensity, duration_ms))
 
     def speak(self, content: str, request_id: str) -> None:
         self.phrases.append((content, request_id))
@@ -92,7 +100,7 @@ def test_autonomy_submits_only_safe_head_motion_and_allowlisted_phrase() -> None
     assert result["executed"] is True
     assert client.actions[0][0] in SAFE_ACTIONS
     assert client.phrases[0][0] in SHORT_PHRASES
-    assert all("tail" not in action for action, _ in client.actions)
+    assert all("tail" not in action for action, *_ in client.actions)
 
 
 def test_autonomy_plays_personality_phrase_locally_without_cloud() -> None:
@@ -250,3 +258,90 @@ def test_autonomy_runs_motion_offline_without_starting_cloud_speech() -> None:
     assert result == {"executed": True, "action": "head/nod", "phrase": None}
     assert len(client.actions) == 1
     assert client.phrases == []
+
+
+def test_conversation_motion_runs_once_per_answer_with_small_amplitude() -> None:
+    now_ms = int(time.time() * 1000)
+    client = FakeClient(
+        {
+            "state": "answering",
+            "session_active": True,
+            "can_interrupt": True,
+            "stale": False,
+            "sequence": 12,
+            "updated_at_ms": now_ms - 1500,
+        }
+    )
+    worker = AutonomyWorker(
+        autonomy_config(conversation_motion_enabled=True),
+        client,  # type: ignore[arg-type]
+        random_source=random.Random(7),
+    )
+
+    first = worker.run_conversation_motion_once()
+    second = worker.run_conversation_motion_once()
+
+    assert first["executed"] is True
+    assert second == {"executed": False, "reason": "already_considered"}
+    assert len(client.actions) == 1
+    action, request_id, intensity, duration_ms = client.actions[0]
+    assert action in SAFE_ACTIONS
+    assert request_id.startswith("dialog-motion-")
+    assert intensity == 0.2
+    assert duration_ms == 900
+
+
+def test_conversation_motion_waits_for_answer_and_configured_delay() -> None:
+    now_ms = int(time.time() * 1000)
+    client = FakeClient(
+        {
+            "state": "answering",
+            "session_active": True,
+            "can_interrupt": True,
+            "stale": False,
+            "sequence": 20,
+            "updated_at_ms": now_ms - 100,
+        }
+    )
+    worker = AutonomyWorker(
+        autonomy_config(
+            conversation_motion_enabled=True,
+            conversation_motion_delay_seconds=1.0,
+        ),
+        client,  # type: ignore[arg-type]
+    )
+
+    waiting = worker.run_conversation_motion_once()
+    client.status = {
+        **client.status,
+        "state": "followup_listening",
+        "updated_at_ms": now_ms - 2000,
+    }
+    listening = worker.run_conversation_motion_once()
+
+    assert waiting == {"executed": False, "reason": "waiting_for_delay"}
+    assert listening == {"executed": False, "reason": "not_answering"}
+    assert client.actions == []
+
+
+def test_conversation_motion_config_is_bounded_and_disabled_by_default() -> None:
+    assert AutonomyConfig.from_env({}).conversation_motion_enabled is False
+
+    config = AutonomyConfig.from_env(
+        {
+            "AI_CAT_CONVERSATION_MOTION_ENABLED": "true",
+            "AI_CAT_CONVERSATION_MOTION_PROBABILITY": "0.75",
+            "AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS": "1.2",
+            "AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS": "0.4",
+        }
+    )
+
+    assert config.conversation_motion_enabled is True
+    assert config.conversation_motion_probability == 0.75
+    assert config.conversation_motion_delay_seconds == 1.2
+    assert config.conversation_poll_interval_seconds == 0.4
+
+    with pytest.raises(ValueError, match="POLL_INTERVAL"):
+        AutonomyConfig.from_env(
+            {"AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS": "0.1"}
+        )

@@ -166,7 +166,7 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
     runner = FakeRunner()
     adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
 
-    await adapter.shake_head(0.1, 100)
+    await adapter.shake_head(0.3, 100)
     await adapter.nod_head(1.0, 3000)
     stopped = await adapter.stop_motion()
 
@@ -179,6 +179,23 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vendor_smooth_profile_uses_small_conversation_presets() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={"motion_profile": "k1_vendor_smooth"}
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.shake_head(0.2, 900)
+    await adapter.nod_head(0.2, 900)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "conversation_tilt")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "conversation_nod")),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_local_head_actions_use_recorded_vendor_smooth_profile() -> None:
     runner = FakeRunner()
     settings = local_settings().model_copy(
@@ -186,7 +203,7 @@ async def test_local_head_actions_use_recorded_vendor_smooth_profile() -> None:
     )
     adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
 
-    await adapter.shake_head(0.1, 100)
+    await adapter.shake_head(0.3, 100)
     await adapter.nod_head(1.0, 3000)
 
     assert runner.calls == [
@@ -247,6 +264,8 @@ async def test_local_vendor_smooth_profile_uses_named_product_presets() -> None:
     adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
 
     for preset in (
+        "conversation_tilt",
+        "conversation_nod",
         "proud_pose",
         "quiet_companion",
         "greeting_combo",
@@ -256,6 +275,8 @@ async def test_local_vendor_smooth_profile_uses_named_product_presets() -> None:
         await adapter.run_motion_preset(preset, 1800)
 
     assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "conversation_tilt")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "conversation_nod")),
         ("/usr/bin/ai-toy_app", ("motor", "preset", "proud_pose")),
         ("/usr/bin/ai-toy_app", ("motor", "preset", "quiet_companion")),
         ("/usr/bin/ai-toy_app", ("motor", "preset", "greeting_combo")),

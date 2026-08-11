@@ -35,7 +35,9 @@ class LocalK1Adapter(AiCatAdapter):
             Capability.SPEAK_TEXT,
         }
     )
-    _HEAD_MOTION_PRESETS = frozenset({"quiet_companion"})
+    _HEAD_MOTION_PRESETS = frozenset(
+        {"conversation_tilt", "conversation_nod", "quiet_companion"}
+    )
     _TAIL_MOTION_PRESETS = frozenset(
         {"proud_pose", "greeting_combo", "celebration_combo"}
     )
@@ -547,6 +549,12 @@ class LocalK1Adapter(AiCatAdapter):
     ) -> None:
         if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
             raise ValueError("头部动作参数超出安全预设范围")
+        if self._settings.motion_profile == "k1_vendor_smooth" and intensity <= 0.25:
+            preset = (
+                "conversation_tilt" if actuator == "head_lr" else "conversation_nod"
+            )
+            await self.run_motion_preset(preset, duration_ms)
+            return
         speed = (
             "3"
             if self._settings.motion_profile == "k1_vendor_smooth"

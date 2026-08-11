@@ -32,6 +32,7 @@ MAX_RESPONSE_BYTES = 65_536
 SAFE_ACTIONS = ("head/nod", "head/shake")
 AUTONOMY_READY_STATES = frozenset({"ready", "interrupted"})
 AUTONOMY_OFFLINE_STATES = frozenset({"offline", "unavailable"})
+CONVERSATION_MOTION_STATE = "answering"
 SHORT_PHRASES = tuple(
     dict.fromkeys(
         phrase
@@ -70,6 +71,10 @@ class AutonomyConfig:
     minimum_interval_seconds: float
     maximum_interval_seconds: float
     phrase_probability: float
+    conversation_motion_enabled: bool = False
+    conversation_motion_probability: float = 1.0
+    conversation_motion_delay_seconds: float = 1.0
+    conversation_poll_interval_seconds: float = 0.5
     cloud_speech_enabled: bool = False
     local_speech_enabled: bool = False
     local_speech_asset_root: Path = DEFAULT_ASSET_ROOT
@@ -140,6 +145,31 @@ class AutonomyConfig:
                 1.0,
                 0.0,
                 1.0,
+            ),
+            conversation_motion_enabled=(
+                source.get("AI_CAT_CONVERSATION_MOTION_ENABLED", "false").lower()
+                == "true"
+            ),
+            conversation_motion_probability=_bounded_float(
+                source,
+                "AI_CAT_CONVERSATION_MOTION_PROBABILITY",
+                1.0,
+                0.0,
+                1.0,
+            ),
+            conversation_motion_delay_seconds=_bounded_float(
+                source,
+                "AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS",
+                1.0,
+                0.0,
+                5.0,
+            ),
+            conversation_poll_interval_seconds=_bounded_float(
+                source,
+                "AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS",
+                0.5,
+                0.2,
+                5.0,
             ),
             cloud_speech_enabled=cloud_speech_enabled,
             local_speech_enabled=local_speech_enabled,
@@ -228,15 +258,22 @@ class LocalControllerClient:
     def personality_profile(self) -> dict[str, Any]:
         return self._request("GET", "/personality/runtime")
 
-    def start_head_action(self, action: str, request_id: str) -> None:
+    def start_head_action(
+        self,
+        action: str,
+        request_id: str,
+        *,
+        intensity: float = 0.35,
+        duration_ms: int = 1800,
+    ) -> None:
         if action not in SAFE_ACTIONS:
             raise ValueError("autonomy action is not allowlisted")
         self._request(
             "POST",
             f"/motion/{action}",
             {
-                "intensity": 0.35,
-                "duration_ms": 1800,
+                "intensity": intensity,
+                "duration_ms": duration_ms,
                 "request_id": request_id,
             },
         )
@@ -270,6 +307,7 @@ class AutonomyWorker:
             marker_path=config.local_speech_marker_path,
             player_path=config.local_speech_player_path,
         )
+        self._last_conversation_token: tuple[int, int] | None = None
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -372,32 +410,111 @@ class AutonomyWorker:
         LOGGER.info("autonomous behavior submitted: %s", result)
         return result
 
+    def run_conversation_motion_once(self) -> dict[str, Any]:
+        status = self._client.dialog_status()
+        state = str(status.get("state", "unavailable"))
+        if (
+            not self._config.conversation_motion_enabled
+            or state != CONVERSATION_MOTION_STATE
+            or not status.get("session_active")
+            or not status.get("can_interrupt")
+            or status.get("stale")
+        ):
+            return {"executed": False, "reason": "not_answering"}
+
+        sequence = int(status.get("sequence", 0) or 0)
+        updated_at_ms = int(status.get("updated_at_ms", 0) or 0)
+        token = (sequence, updated_at_ms)
+        if token == self._last_conversation_token:
+            return {"executed": False, "reason": "already_considered"}
+
+        age_ms = max(int(time.time() * 1000) - updated_at_ms, 0)
+        delay_ms = int(self._config.conversation_motion_delay_seconds * 1000)
+        if updated_at_ms > 0 and age_ms < delay_ms:
+            return {"executed": False, "reason": "waiting_for_delay"}
+
+        self._last_conversation_token = token
+        if self._random.random() >= self._config.conversation_motion_probability:
+            return {"executed": False, "reason": "probability_skip"}
+
+        personality = self._client.personality_profile()
+        autonomy = personality.get("autonomy")
+        action_weights = (
+            autonomy.get("action_weights") if isinstance(autonomy, dict) else None
+        )
+        if not personality.get("active") or not isinstance(action_weights, dict):
+            return {"executed": False, "reason": "personality_not_ready"}
+
+        actions: list[str] = []
+        weights: list[float] = []
+        for action, weight in action_weights.items():
+            if (
+                action in SAFE_ACTIONS
+                and isinstance(weight, (int, float))
+                and weight > 0
+            ):
+                actions.append(action)
+                weights.append(float(weight))
+        if not actions:
+            return {"executed": False, "reason": "no_safe_action"}
+
+        action = self._random.choices(actions, weights=weights, k=1)[0]
+        event_id = f"dialog-motion-{int(time.time())}-{uuid.uuid4().hex[:10]}"
+        self._client.start_head_action(
+            action,
+            event_id,
+            intensity=0.2,
+            duration_ms=900,
+        )
+        result = {"executed": True, "action": action, "token": token}
+        LOGGER.info("conversation motion submitted: %s", result)
+        return result
+
     def run_forever(self) -> None:
         LOGGER.info(
             "safe autonomy started; initial_delay=%.1fs interval=%.1f..%.1fs "
-            "local_speech=%s cloud_speech=%s phrase_probability=%.2f",
+            "local_speech=%s cloud_speech=%s phrase_probability=%.2f "
+            "conversation_motion=%s",
             self._config.initial_delay_seconds,
             self._config.minimum_interval_seconds,
             self._config.maximum_interval_seconds,
             self._config.local_speech_enabled,
             self._config.cloud_speech_enabled,
             self._config.phrase_probability,
+            self._config.conversation_motion_enabled,
         )
-        if self._stop_event.wait(self._config.initial_delay_seconds):
-            return
+        next_autonomy_at = time.monotonic() + self._config.initial_delay_seconds
         while not self._stop_event.is_set():
-            try:
-                self.run_once()
-            except ControllerApiError as exc:
-                LOGGER.warning("autonomous behavior skipped: %s", exc)
-            except Exception:
-                LOGGER.exception("unexpected autonomous behavior failure")
-            delay = self._random.uniform(
-                self._config.minimum_interval_seconds,
-                self._config.maximum_interval_seconds,
-            )
-            LOGGER.info("next autonomous behavior in %.1f seconds", delay)
-            self._stop_event.wait(delay)
+            if self._config.conversation_motion_enabled:
+                try:
+                    self.run_conversation_motion_once()
+                except ControllerApiError as exc:
+                    LOGGER.warning("conversation motion skipped: %s", exc)
+                except Exception:
+                    LOGGER.exception("unexpected conversation motion failure")
+
+            now = time.monotonic()
+            if now >= next_autonomy_at:
+                try:
+                    self.run_once()
+                except ControllerApiError as exc:
+                    LOGGER.warning("autonomous behavior skipped: %s", exc)
+                except Exception:
+                    LOGGER.exception("unexpected autonomous behavior failure")
+                delay = self._random.uniform(
+                    self._config.minimum_interval_seconds,
+                    self._config.maximum_interval_seconds,
+                )
+                next_autonomy_at = time.monotonic() + delay
+                LOGGER.info("next autonomous behavior in %.1f seconds", delay)
+
+            wait_seconds = max(next_autonomy_at - time.monotonic(), 0.05)
+            if self._config.conversation_motion_enabled:
+                wait_seconds = min(
+                    wait_seconds,
+                    self._config.conversation_poll_interval_seconds,
+                )
+            self._stop_event.wait(wait_seconds)
 
 
 def main() -> None:
