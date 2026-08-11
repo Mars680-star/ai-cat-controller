@@ -54,6 +54,12 @@ class FakeLocalPlayer:
         self.plays.append((personality_id, phrase))
         return Path("/fixed/local/phrase.wav")
 
+    def validate_personality_assets(self) -> tuple[Path, ...]:
+        return tuple(
+            Path(f"/fixed/local/phrase-{index:02d}.wav")
+            for index in range(15)
+        )
+
 
 def autonomy_config(**overrides: object) -> AutonomyConfig:
     values = {
@@ -106,6 +112,31 @@ def test_autonomy_plays_personality_phrase_locally_without_cloud() -> None:
     assert result["phrase"] in SHORT_PHRASES
     assert player.plays == [("sunny_explorer", result["phrase"])]
     assert client.phrases == []
+
+
+def test_autonomy_validates_all_local_assets_when_local_speech_is_enabled() -> None:
+    player = FakeLocalPlayer()
+    worker = AutonomyWorker(
+        autonomy_config(local_speech_enabled=True),
+        FakeClient(
+            {"state": "offline", "session_active": False, "stale": True}
+        ),  # type: ignore[arg-type]
+        local_player=player,  # type: ignore[arg-type]
+    )
+
+    assert worker.validate_startup() == 15
+
+
+def test_autonomy_skips_asset_validation_when_local_speech_is_disabled() -> None:
+    worker = AutonomyWorker(
+        autonomy_config(local_speech_enabled=False),
+        FakeClient(
+            {"state": "offline", "session_active": False, "stale": True}
+        ),  # type: ignore[arg-type]
+        local_player=object(),  # type: ignore[arg-type]
+    )
+
+    assert worker.validate_startup() == 0
 
 
 def test_autonomy_can_resume_after_user_ends_dialog() -> None:

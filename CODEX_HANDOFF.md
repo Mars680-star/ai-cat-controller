@@ -121,6 +121,10 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
   旧设备默认继续使用 `legacy_safe`。部署前阅读 `docs/k1-motion-profiles.md`。
 - 安全自主行为服务：云端离线时按性格执行已验收头部动作，每 3 分钟最多播放
   一条对应的本地缓存短语，不消耗火山语音时长。
+- K1 的 `toy_motor.service` 必须保持
+  `AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true`、`Group=pulse-access` 并依赖
+  `volc-pulseaudio.service`；进程启动时会校验 `paplay` 与全部 15 条性格 WAV，
+  任一资源缺失都应使服务明确失败，不能改回只执行动作的静默降级。
 - 旧 DDS 电机执行入口已替换；触摸动作只经过 FastAPI `MotionService`，不恢复
   原厂 DDS 电机消费者，尾部仍保持禁用。
 - 双眼可显示 `932 x 466` GIF/PNG，但现用 `toy_ui 1.1.10` 的 DDS IDL 未入库，

@@ -9,6 +9,7 @@ FASTAPI_UNIT = (
     Path(__file__).parents[2]
     / "deploy/systemd/ai-cat-controller.service.example"
 )
+ENV_EXAMPLE = Path(__file__).parents[2] / ".env.example"
 
 
 def test_fastapi_unit_can_control_system_pulseaudio() -> None:
@@ -51,12 +52,21 @@ def test_toy_motor_unit_runs_only_safe_autonomy_worker() -> None:
     assert "Group=pulse-access" in unit
     assert "PULSE_SERVER=unix:/var/run/pulse/native" in unit
     assert "Requires=ai-cat-controller.service volc-pulseaudio.service" in unit
+    assert "StartLimitIntervalSec=60" in unit
+    assert "StartLimitBurst=3" in unit
     assert unit.count("/run/ai-cat/local-speech-active") == 2
     assert "AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180" in unit
     assert "AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180" in unit
     assert "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false" in unit
     assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true" in unit
     assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_MOTION_SETTLE_SECONDS=2.2" in unit
+
+
+def test_k1_environment_example_keeps_local_autonomy_speech_enabled() -> None:
+    environment = ENV_EXAMPLE.read_text(encoding="utf-8")
+
+    assert "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false" in environment
+    assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true" in environment
 
 
 def test_wake_word_service_does_not_pull_in_cloud_dialog() -> None:

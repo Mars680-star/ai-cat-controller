@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import wave
 from pathlib import Path
@@ -113,6 +114,50 @@ def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
             assert stream.getsampwidth() == 2
             assert stream.getframerate() == 48_000
             assert stream.getnframes() > 48_000
+
+
+def test_local_player_validates_all_personality_assets(tmp_path: Path) -> None:
+    player = LocalPhrasePlayer(
+        asset_root=REPOSITORY_ASSETS,
+        marker_path=tmp_path / "marker",
+        player_path=Path("/bin/true"),
+    )
+
+    paths = player.validate_personality_assets()
+
+    assert len(paths) == 15
+    assert all(path.is_file() for path in paths)
+
+
+def test_local_player_startup_validation_reports_missing_asset(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    player = LocalPhrasePlayer(
+        asset_root=assets,
+        marker_path=tmp_path / "marker",
+        player_path=Path("/bin/true"),
+    )
+
+    with pytest.raises(LocalSpeechError, match="asset is unavailable"):
+        player.validate_personality_assets()
+
+
+def test_local_player_startup_validation_rejects_corrupt_wav(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    shutil.copytree(REPOSITORY_ASSETS, assets)
+    phrase_asset_path(
+        assets,
+        PERSONALITIES[0].personality_id,
+        PERSONALITIES[0].proactive_phrases[0],
+    ).write_bytes(b"not-a-wave-file")
+    player = LocalPhrasePlayer(
+        asset_root=assets,
+        marker_path=tmp_path / "marker",
+        player_path=Path("/bin/true"),
+    )
+
+    with pytest.raises(LocalSpeechError, match="not a readable WAV"):
+        player.validate_personality_assets()
 
 
 def test_repository_contains_five_shared_touch_voice_assets() -> None:

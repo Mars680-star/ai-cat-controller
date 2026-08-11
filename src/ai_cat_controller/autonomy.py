@@ -274,6 +274,13 @@ class AutonomyWorker:
     def stop(self) -> None:
         self._stop_event.set()
 
+    def validate_startup(self) -> int:
+        if not self._config.local_speech_enabled:
+            return 0
+        paths = self._local_player.validate_personality_assets()
+        LOGGER.info("validated %s local autonomy phrase assets", len(paths))
+        return len(paths)
+
     def run_once(self) -> dict[str, Any]:
         status = self._client.dialog_status()
         dialog_state = str(status.get("state", "unavailable"))
@@ -358,7 +365,7 @@ class AutonomyWorker:
                 else:
                     self._client.speak(phrase, f"{event_id}-speech")
             except (ControllerApiError, LocalSpeechError) as exc:
-                LOGGER.info("autonomous phrase skipped after motion start: %s", exc)
+                LOGGER.warning("autonomous phrase failed after motion start: %s", exc)
                 phrase = None
 
         result = {"executed": True, "action": action, "phrase": phrase}
@@ -367,10 +374,14 @@ class AutonomyWorker:
 
     def run_forever(self) -> None:
         LOGGER.info(
-            "safe autonomy started; initial_delay=%.1fs interval=%.1f..%.1fs",
+            "safe autonomy started; initial_delay=%.1fs interval=%.1f..%.1fs "
+            "local_speech=%s cloud_speech=%s phrase_probability=%.2f",
             self._config.initial_delay_seconds,
             self._config.minimum_interval_seconds,
             self._config.maximum_interval_seconds,
+            self._config.local_speech_enabled,
+            self._config.cloud_speech_enabled,
+            self._config.phrase_probability,
         )
         if self._stop_event.wait(self._config.initial_delay_seconds):
             return
@@ -403,6 +414,7 @@ def main() -> None:
     )
     config = AutonomyConfig.from_env()
     worker = AutonomyWorker(config, LocalControllerClient(config))
+    worker.validate_startup()
     if args.once:
         worker.run_once()
         return

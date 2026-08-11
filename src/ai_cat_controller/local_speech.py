@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import wave
 from collections.abc import Callable
 from pathlib import Path
 
-from ai_cat_controller.domain.personalities import PERSONALITY_BY_ID
+from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
 
 DEFAULT_ASSET_ROOT = Path("/opt/ai-cat-controller/assets/local-speech")
 DEFAULT_MARKER_PATH = Path("/run/ai-cat/local-speech-active")
@@ -83,18 +84,50 @@ class LocalPhrasePlayer:
         )
         return self._play_asset(expected_path, f"touch-{sensor}")
 
-    def _play_asset(self, expected_path: Path, stream_name: str) -> Path:
+    def validate_personality_assets(self) -> tuple[Path, ...]:
         try:
-            root = self._asset_root.resolve(strict=True)
-            asset = expected_path.resolve(strict=True)
+            player = self._player_path.resolve(strict=True)
         except OSError as exc:
-            raise LocalSpeechError(f"local phrase asset is unavailable: {expected_path}") from exc
-        if (
-            not asset.is_relative_to(root)
-            or not asset.is_file()
-            or expected_path.is_symlink()
-        ):
-            raise LocalSpeechError("local phrase asset failed path validation")
+            raise LocalSpeechError(
+                f"local phrase player is unavailable: {self._player_path}"
+            ) from exc
+        if not player.is_file() or not os.access(player, os.X_OK):
+            raise LocalSpeechError(
+                f"local phrase player is not executable: {self._player_path}"
+            )
+
+        paths = tuple(
+            self._resolve_asset(
+                phrase_asset_path(
+                    self._asset_root,
+                    personality.personality_id,
+                    phrase,
+                )
+            )
+            for personality in PERSONALITIES
+            for phrase in personality.proactive_phrases
+        )
+        for path in paths:
+            try:
+                with wave.open(str(path), "rb") as stream:
+                    audio_format = (
+                        stream.getnchannels(),
+                        stream.getsampwidth(),
+                        stream.getframerate(),
+                        stream.getnframes(),
+                    )
+            except (OSError, wave.Error) as exc:
+                raise LocalSpeechError(
+                    f"local phrase asset is not a readable WAV: {path}"
+                ) from exc
+            if audio_format[:3] != (2, 2, 48_000) or audio_format[3] <= 0:
+                raise LocalSpeechError(
+                    f"local phrase asset has an unsupported format: {path}"
+                )
+        return paths
+
+    def _play_asset(self, expected_path: Path, stream_name: str) -> Path:
+        asset = self._resolve_asset(expected_path)
 
         self._marker_path.parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -132,4 +165,20 @@ class LocalPhrasePlayer:
                 )
         finally:
             self._marker_path.unlink(missing_ok=True)
+        return asset
+
+    def _resolve_asset(self, expected_path: Path) -> Path:
+        try:
+            root = self._asset_root.resolve(strict=True)
+            asset = expected_path.resolve(strict=True)
+        except OSError as exc:
+            raise LocalSpeechError(
+                f"local phrase asset is unavailable: {expected_path}"
+            ) from exc
+        if (
+            not asset.is_relative_to(root)
+            or not asset.is_file()
+            or expected_path.is_symlink()
+        ):
+            raise LocalSpeechError("local phrase asset failed path validation")
         return asset
