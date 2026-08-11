@@ -56,6 +56,12 @@ class Settings(BaseModel):
     pulse_server: str = "unix:/var/run/pulse/native"
     touch_event_log_path: Path = Path("/root/.log/main_log")
     touch_monitor_poll_seconds: float = Field(default=0.5, ge=0.1, le=10.0)
+    paw_touch_confirmation_count: int = Field(default=2, ge=1, le=5)
+    paw_touch_confirmation_window_seconds: float = Field(
+        default=3.0,
+        ge=0.5,
+        le=10.0,
+    )
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
     dialog_text_request_path: Path = Path(
@@ -204,6 +210,12 @@ class Settings(BaseModel):
             ),
             "touch_monitor_poll_seconds": source.get(
                 "AI_CAT_TOUCH_MONITOR_POLL_SECONDS", "0.5"
+            ),
+            "paw_touch_confirmation_count": source.get(
+                "AI_CAT_PAW_TOUCH_CONFIRMATION_COUNT", "2"
+            ),
+            "paw_touch_confirmation_window_seconds": source.get(
+                "AI_CAT_PAW_TOUCH_CONFIRMATION_WINDOW_SECONDS", "3.0"
             ),
             "dialog_status_path": source.get(
                 "AI_CAT_DIALOG_STATUS_PATH", "/run/ai-cat/dialog-status.json"

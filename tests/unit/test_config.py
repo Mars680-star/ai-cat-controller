@@ -43,6 +43,8 @@ def test_environment_values_are_parsed() -> None:
             "AI_CAT_PULSE_SERVER": "unix:/var/run/pulse/native",
             "AI_CAT_TOUCH_EVENT_LOG_PATH": "/tmp/main-log",
             "AI_CAT_TOUCH_MONITOR_POLL_SECONDS": "0.25",
+            "AI_CAT_PAW_TOUCH_CONFIRMATION_COUNT": "3",
+            "AI_CAT_PAW_TOUCH_CONFIRMATION_WINDOW_SECONDS": "4.0",
         }
     )
 
@@ -71,6 +73,8 @@ def test_environment_values_are_parsed() -> None:
     assert settings.pulse_server == "unix:/var/run/pulse/native"
     assert str(settings.touch_event_log_path) == "/tmp/main-log"
     assert settings.touch_monitor_poll_seconds == 0.25
+    assert settings.paw_touch_confirmation_count == 3
+    assert settings.paw_touch_confirmation_window_seconds == 4.0
 
 
 def test_local_k1_requires_api_key() -> None:

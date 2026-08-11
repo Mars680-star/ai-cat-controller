@@ -28,13 +28,17 @@ class FakeProduct:
         return event
 
 
-def monitor_settings(tmp_path) -> Settings:
+def monitor_settings(tmp_path, **overrides: Any) -> Settings:
     serial_path = tmp_path / "serial-number"
     serial_path.write_bytes(b"K1-TOUCH-001\0")
+    values = {
+        "device_serial_path": serial_path,
+        "touch_event_log_path": tmp_path / "main_log",
+        "touch_monitor_poll_seconds": 10.0,
+    }
+    values.update(overrides)
     return Settings(
-        device_serial_path=serial_path,
-        touch_event_log_path=tmp_path / "main_log",
-        touch_monitor_poll_seconds=10.0,
+        **values,
     )
 
 
@@ -58,6 +62,11 @@ async def test_touch_monitor_ignores_history_and_imports_appended_event(
                 "[Right Foot Touch Handler] RIGHT_FOOT_LONG_TOUCH detected\n"
             )
 
+        assert await monitor.poll_once() == 0
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "[Right Foot Touch Handler] RIGHT_FOOT_SHORT_TOUCH detected\n"
+            )
         assert await monitor.poll_once() == 1
     finally:
         await monitor.close()
@@ -69,7 +78,7 @@ async def test_touch_monitor_ignores_history_and_imports_appended_event(
         "source": "k1_touch_log",
         "sensor": "right_foot",
         "hardware_sensor": "right_foot",
-        "gesture": "long",
+        "gesture": "short",
     }
 
 
@@ -120,9 +129,7 @@ async def test_touch_monitor_reads_new_log_created_after_start(tmp_path) -> None
     [
         ("Head", "HEAD", "nose"),
         ("Nose", "NOSE", "head"),
-        ("Back", "BACK", "left_foot"),
         ("Left Foot", "LEFT_FOOT", "back"),
-        ("Right Foot", "RIGHT_FOOT", "right_foot"),
     ],
 )
 @pytest.mark.asyncio
@@ -152,3 +159,87 @@ async def test_touch_monitor_normalizes_k1_physical_sensor_mapping(
         "hardware_sensor": hardware_sensor.lower(),
         "gesture": "short",
     }
+
+
+@pytest.mark.parametrize(
+    ("handler", "hardware_sensor", "sensor"),
+    [
+        ("Back", "BACK", "left_foot"),
+        ("Right Foot", "RIGHT_FOOT", "right_foot"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_paw_touch_requires_two_touches_within_confirmation_window(
+    tmp_path,
+    handler: str,
+    hardware_sensor: str,
+    sensor: str,
+) -> None:
+    settings = monitor_settings(tmp_path)
+    settings.touch_event_log_path.touch()
+    product = FakeProduct()
+    now = [100.0]
+    monitor = TouchEventMonitor(
+        settings,
+        product,  # type: ignore[arg-type]
+        clock=lambda: now[0],
+    )
+    await monitor.start()
+    try:
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"[{handler} Touch Handler] {hardware_sensor}_SHORT_TOUCH detected\n"
+            )
+        assert await monitor.poll_once() == 0
+        assert product.events == []
+
+        now[0] += 1.0
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"[{handler} Touch Handler] {hardware_sensor}_SHORT_TOUCH detected\n"
+            )
+        assert await monitor.poll_once() == 1
+    finally:
+        await monitor.close()
+
+    assert len(product.events) == 1
+    assert product.events[0]["metadata"]["sensor"] == sensor
+
+
+@pytest.mark.asyncio
+async def test_paw_confirmation_is_separate_per_paw_and_expires(tmp_path) -> None:
+    settings = monitor_settings(
+        tmp_path,
+        paw_touch_confirmation_window_seconds=2.0,
+    )
+    settings.touch_event_log_path.touch()
+    product = FakeProduct()
+    now = [100.0]
+    monitor = TouchEventMonitor(
+        settings,
+        product,  # type: ignore[arg-type]
+        clock=lambda: now[0],
+    )
+    await monitor.start()
+    try:
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write("[Back Touch Handler] BACK_SHORT_TOUCH detected\n")
+            stream.write(
+                "[Right Foot Touch Handler] RIGHT_FOOT_SHORT_TOUCH detected\n"
+            )
+        assert await monitor.poll_once() == 0
+
+        now[0] += 2.1
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write("[Back Touch Handler] BACK_SHORT_TOUCH detected\n")
+        assert await monitor.poll_once() == 0
+
+        now[0] += 0.5
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write("[Back Touch Handler] BACK_LONG_TOUCH detected\n")
+        assert await monitor.poll_once() == 1
+    finally:
+        await monitor.close()
+
+    assert len(product.events) == 1
+    assert product.events[0]["metadata"]["sensor"] == "left_foot"

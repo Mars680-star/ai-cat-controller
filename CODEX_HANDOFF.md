@@ -107,6 +107,10 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
 - 当前 K1 样机触摸接线需在日志输入层映射：`nose -> head`、`head -> nose`、
   `back -> left_foot`、`left_foot -> back`、`right_foot -> right_foot`。业务元数据
   的 `sensor` 是修正后的实体部位，`hardware_sensor` 保留厂商日志原值。
+- 实体左右爪在映射后分别做防误触确认：默认同一只爪 3 秒内连续触摸 2 次才导入
+  一次业务事件；头部、鼻部和背部保持单次触发。相关环境变量为
+  `AI_CAT_PAW_TOUCH_CONFIRMATION_COUNT` 和
+  `AI_CAT_PAW_TOUCH_CONFIRMATION_WINDOW_SECONDS`。
 - 真机语音字幕实时导入、对话历史同步、按会话查询和网页文字提问。
 - 本地“小安小安”唤醒常驻；命中后按需启动火山云端，云端就绪后自动聆听，
   空闲 90 秒正常断开。网页文字提问也按需启动云端。
