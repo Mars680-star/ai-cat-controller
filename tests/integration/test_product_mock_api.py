@@ -623,6 +623,43 @@ def test_physical_touch_starts_safe_action_and_preserves_cooldown(
     assert executions[0]["action_id"] == "head_nod"
 
 
+def test_physical_touch_is_ignored_while_managed_motion_is_active(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client, code="touch-motion-noise-user")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-TOUCH-MOTION-NOISE",
+    )["pet"]["pet_id"]
+    services = client.app.state.services
+    assert client.portal is not None
+    client.portal.call(
+        partial(
+            services.motion.nod_head,
+            intensity=0.35,
+            duration_ms=500,
+            request_id="managed-motion-noise",
+        )
+    )
+
+    event = _add_device_touch(
+        client,
+        serial="K1-TOUCH-MOTION-NOISE",
+        request_id="motion-induced-touch",
+        sensor="back",
+    )
+    client.portal.call(services.motion.wait_until_idle)
+    intimacy = client.get(
+        f"/api/v1/pets/{pet_id}/intimacy",
+        headers=headers,
+    ).json()["data"]
+
+    assert event is None
+    assert intimacy["points"] == 0
+    assert intimacy["history"] == []
+
+
 def test_physical_touch_does_not_move_during_dialog(client: TestClient) -> None:
     headers, _ = _login(client, code="touch-dialog-user")
     pet_id = _bind(client, headers, serial="K1-TOUCH-DIALOG")["pet"]["pet_id"]

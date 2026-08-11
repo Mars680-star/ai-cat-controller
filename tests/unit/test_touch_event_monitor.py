@@ -14,6 +14,7 @@ from ai_cat_controller.services.touch_event_monitor import (
 class FakeProduct:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
+        self.physical_touch_input_guard_active = False
 
     async def add_device_touch(
         self,
@@ -164,6 +165,33 @@ async def test_touch_monitor_debounces_a_continuous_sensor_event_cluster(
         "head",
         "head",
     ]
+
+
+@pytest.mark.asyncio
+async def test_touch_monitor_ignores_self_generated_sensor_noise(tmp_path) -> None:
+    marker_path = tmp_path / "local-speech-active"
+    settings = monitor_settings(
+        tmp_path,
+        touch_speech_marker_path=marker_path,
+    )
+    settings.touch_event_log_path.touch()
+    product = FakeProduct()
+    monitor = TouchEventMonitor(settings, product)  # type: ignore[arg-type]
+    await monitor.start()
+    try:
+        product.physical_touch_input_guard_active = True
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write("[Back Touch Handler] BACK_SHORT_TOUCH detected\n")
+        assert await monitor.poll_once() == 0
+
+        product.physical_touch_input_guard_active = False
+        with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+            stream.write("[Head Touch Handler] HEAD_SHORT_TOUCH detected\n")
+        assert await monitor.poll_once() == 1
+    finally:
+        await monitor.close()
+
+    assert [event["metadata"]["sensor"] for event in product.events] == ["head"]
 
 
 @pytest.mark.parametrize(

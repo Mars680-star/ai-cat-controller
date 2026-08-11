@@ -66,10 +66,12 @@ services=(
     volc-k1-wake-word.service
     volc-conv-ai.service
 )
+declare -A service_was_active=()
 : >"${BACKUP_DIR}/services.tsv"
 for unit in "${services[@]}"; do
     active=$(${SYSTEMCTL} is-active "${unit}" 2>/dev/null || true)
     enabled=$(${SYSTEMCTL} is-enabled "${unit}" 2>/dev/null || true)
+    service_was_active["${unit}"]=${active:-unknown}
     printf '%s\t%s\t%s\n' "${unit}" "${active:-unknown}" "${enabled:-unknown}" \
         >>"${BACKUP_DIR}/services.tsv"
 done
@@ -78,11 +80,24 @@ controller_was_active=$(${SYSTEMCTL} is-active "${SERVICE}" 2>/dev/null || true)
 controller_stopped=false
 backup_complete=false
 
+restore_active_services() {
+    local unit current restore_status=0
+
+    for unit in "${services[@]}"; do
+        [[ ${service_was_active["${unit}"]:-unknown} == active ]] || continue
+        current=$(${SYSTEMCTL} is-active "${unit}" 2>/dev/null || true)
+        if [[ ${current} != active ]] && ! ${SYSTEMCTL} start "${unit}"; then
+            echo "WARNING: failed to restore active service ${unit}" >&2
+            restore_status=1
+        fi
+    done
+    return "${restore_status}"
+}
+
 cleanup() {
     local status=$?
-    if [[ ${controller_stopped} == true && ${controller_was_active} == active ]]; then
-        if ! ${SYSTEMCTL} start "${SERVICE}"; then
-            echo "WARNING: failed to restart ${SERVICE}" >&2
+    if [[ ${controller_stopped} == true ]]; then
+        if ! restore_active_services; then
             status=1
         fi
     fi
@@ -153,8 +168,8 @@ fi
         | xargs -0 sha256sum >SHA256SUMS
 )
 
-if [[ ${controller_stopped} == true && ${controller_was_active} == active ]]; then
-    ${SYSTEMCTL} start "${SERVICE}"
+if [[ ${controller_stopped} == true ]]; then
+    restore_active_services
     ${SYSTEMCTL} is-active --quiet "${SERVICE}"
     controller_stopped=false
 fi

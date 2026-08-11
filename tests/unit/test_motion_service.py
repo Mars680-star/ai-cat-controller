@@ -66,6 +66,8 @@ async def test_motion_finishes_without_blocking_caller() -> None:
     assert result["state"] == "running"
     assert running == "tail_wag"
     assert service.current_action == "idle"
+    assert service.input_noise_guard_active is False
+    assert service.sensor_noise_guard_active is True
 
 
 @pytest.mark.asyncio

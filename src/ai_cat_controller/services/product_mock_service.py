@@ -91,6 +91,15 @@ class ProductMockService:
             tuple[str, str], tuple[int, int]
         ] = {}
 
+    @property
+    def physical_touch_input_guard_active(self) -> bool:
+        """Whether raw K1 touch logs should be treated as self-generated noise."""
+
+        return (
+            self._motion.sensor_noise_guard_active
+            or self._settings.touch_speech_marker_path.exists()
+        )
+
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
         await self._initialize_personality()
@@ -1002,6 +1011,12 @@ class ProductMockService:
         request_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any] | None:
+        if self._motion.input_noise_guard_active:
+            LOGGER.info(
+                "ignoring touch while managed motion is active: sensor=%s",
+                metadata.get("sensor"),
+            )
+            return None
         pet = await asyncio.to_thread(
             self._repository.get_pet_by_serial,
             device_serial,

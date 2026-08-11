@@ -28,6 +28,8 @@ def test_release_backup_and_rollback_have_integrity_guards() -> None:
     assert "sha256sum" in backup
     assert "product-data.db" in backup
     assert "services.tsv" in backup
+    assert "service_was_active" in backup
+    assert "restore_active_services" in backup
     assert 'touch "${BACKUP_DIR}/.complete"' in backup
     assert "sha256sum -c SHA256SUMS" in rollback
     assert "--check" in rollback

@@ -182,6 +182,13 @@ class TouchEventMonitor:
                 continue
             hardware_sensor = match.group("sensor").lower()
             sensor = sensor_map[hardware_sensor]
+            if self._product.physical_touch_input_guard_active:
+                LOGGER.info(
+                    "K1 touch ignored during managed motion or local speech: "
+                    "sensor=%s",
+                    sensor,
+                )
+                continue
             digest = hashlib.sha256(
                 f"{serial}:{epoch}:{offset}:{line}".encode()
             ).hexdigest()[:32]

@@ -85,6 +85,7 @@
 #define DIALOG_TEXT_REQUEST_ID_MAX_LEN 64
 #define DIALOG_REQUEST_KIND_MAX_LEN 16
 #define PROACTIVE_SPEECH_ACK_TIMEOUT_MS 3000
+#define CLOUD_SESSION_READY_TIMEOUT_MS 15000
 #define CLOUD_IDLE_TIMEOUT_MS 90000
 #define PERSONALITY_RUNTIME_MAX_BYTES (32 * 1024)
 #define PERSONALITY_ID_MAX_LEN 64
@@ -168,6 +169,7 @@ static uint64_t cloud_idle_deadline_ms = 0;                    /* 无会话时�
 static volatile sig_atomic_t proactive_speech_pending = false;
 static volatile sig_atomic_t proactive_speech_active = false;
 static volatile sig_atomic_t proactive_speech_finish_request = false;
+static volatile sig_atomic_t cloud_session_created = false;  /* session.created 已到达 */
 static bool local_speech_detected = false;                    /* 本地保底 VAD 已确认人声 */
 static unsigned int local_speech_frames = 0;
 static unsigned int local_silence_frames = 0;
@@ -1275,6 +1277,7 @@ static void _on_volc_event(volc_engine_t handle, volc_event_t* event, void* user
             break;
         case VOLC_EV_DISCONNECTED:
             is_ready = false;
+            cloud_session_created = false;
             printf("Volc Engine disconnected\n");
             session_active = false;
             __write_dialog_status("offline", "云端连接已断开，服务正在重连");
@@ -2468,6 +2471,12 @@ static void __handle_ws_message(realtime_ws_demo_t* demo, const void* message, s
     type = cJSON_GetStringValue(type_obj);
     if (
         type != NULL &&
+        strcmp(type, "session.created") == 0
+    ) {
+        cloud_session_created = true;
+        printf("cloud session created; requests may proceed\n");
+    } else if (
+        type != NULL &&
         strcmp(type, "conversation.item.input_audio_transcription.completed") == 0
     ) {
         transcript_obj = cJSON_GetObjectItem(root, "transcript");
@@ -2696,10 +2705,11 @@ static int _ws_response_cancel(realtime_ws_demo_t* demo) {
 }
 
 int main(int argc, const char* argv[]){
-	char* config_data = NULL;
+    char* config_data = NULL;
     int error = 0;
     uint64_t last_time_ms = 0;
     uint64_t diff_time_ms = 0;
+	uint64_t cloud_session_ready_deadline_ms = 0;
 	realtime_ws_demo_t demo = {0};
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -2813,11 +2823,23 @@ int main(int argc, const char* argv[]){
 
     opt.bot_id = demo.bot_id;
     __write_dialog_status("connecting", "正在连接火山引擎");
+    cloud_session_created = false;
+    cloud_session_ready_deadline_ms =
+        __get_time_ms() + CLOUD_SESSION_READY_TIMEOUT_MS;
     volc_start(demo.engine, &opt);
 
-    /* 阶段 3：等待云端 session 就绪后再接受唤醒，避免丢失首轮音频。 */
-    while (!is_ready && !exit_request) {
-        sleep(1);
+    /*
+     * 阶段 3：WebSocket 连接成功不等于 realtime session 已创建。必须等到
+     * session.created 后再发布 ready，避免首轮 response.create 被欢迎语抢占。
+     */
+    while ((!is_ready || !cloud_session_created) && !exit_request) {
+        if (__get_time_ms() >= cloud_session_ready_deadline_ms) {
+            __write_dialog_status("offline", "云端会话创建超时，服务正在重连");
+            printf("cloud session creation timeout\n");
+            exit_request = true;
+            break;
+        }
+        usleep(100000);
         printf("waiting for volc realtime to be ready...\n");
     }
     if (exit_request) {

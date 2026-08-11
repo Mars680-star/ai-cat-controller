@@ -16,6 +16,7 @@ from ai_cat_controller.core.errors import (
 )
 
 LOGGER = logging.getLogger(__name__)
+MOTION_INPUT_NOISE_SETTLE_SECONDS = 1.0
 
 
 class MotionService:
@@ -35,6 +36,7 @@ class MotionService:
         self._current_request_id: str | None = None
         self._generation = 0
         self._cooldown_until = 0.0
+        self._input_noise_guard_until = 0.0
         self._stopping = False
         self._last_error: str | None = None
         self._completion_futures: dict[str, asyncio.Future[str]] = {}
@@ -46,6 +48,23 @@ class MotionService:
     @property
     def last_error(self) -> str | None:
         return self._last_error
+
+    @property
+    def input_noise_guard_active(self) -> bool:
+        """Whether managed motor activity can produce false touch input."""
+
+        return self._stopping or (
+            self._task is not None and not self._task.done()
+        )
+
+    @property
+    def sensor_noise_guard_active(self) -> bool:
+        """Whether raw sensor input can still contain managed-motion noise."""
+
+        return (
+            self.input_noise_guard_active
+            or time.monotonic() < self._input_noise_guard_until
+        )
 
     def supports(self, capability: Capability) -> bool:
         return self._adapter.supports(capability)
@@ -111,6 +130,9 @@ class MotionService:
                     self._task = None
                     self._current_action = "idle"
                     self._current_request_id = None
+                    self._input_noise_guard_until = (
+                        time.monotonic() + MOTION_INPUT_NOISE_SETTLE_SECONDS
+                    )
                     self._cooldown_until = time.monotonic() + self._cooldown_seconds
 
     async def _start(
@@ -292,6 +314,9 @@ class MotionService:
                 self._stopping = False
                 self._current_action = "idle"
                 self._current_request_id = None
+                self._input_noise_guard_until = (
+                    time.monotonic() + MOTION_INPUT_NOISE_SETTLE_SECONDS
+                )
                 self._cooldown_until = time.monotonic() + self._cooldown_seconds
         return {
             "stopped": task_was_active or adapter_stopped,

@@ -54,6 +54,16 @@ def test_native_dialog_accepts_fixed_file_text_requests() -> None:
     assert "text dialog response.create sent" in source
 
 
+def test_native_dialog_waits_for_session_created_before_first_request() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "#define CLOUD_SESSION_READY_TIMEOUT_MS 15000" in source
+    assert 'strcmp(type, "session.created") == 0' in source
+    assert "cloud_session_created = true;" in source
+    assert "(!is_ready || !cloud_session_created)" in source
+    assert "cloud session creation timeout" in source
+
+
 def test_native_dialog_supports_low_priority_proactive_tts() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 
