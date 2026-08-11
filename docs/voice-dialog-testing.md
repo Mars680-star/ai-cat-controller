@@ -68,6 +68,14 @@ interruption keywords during the basic test, because that would restrict
 interruption to those words. Restart `volc-conv-ai.service` after saving the
 bot so the device creates a new cloud session.
 
+The K1 also provides a local, cloud-independent interruption keyword. While the
+status is `thinking` or `answering`, say “小安停下”; “小安别说了”, “小安安静” and
+“小安暂停” are accepted aliases. The local wake process then sends the same
+fixed `SIGUSR2` path used by the browser interrupt button. It does not recognize
+generic “停” because the speaker output could otherwise stop itself. Verify the
+log contains `Interrupt matched` and `Conversation interrupted by local keyword`,
+then confirm `/run/ai-cat/dialog-status.json` changes to `interrupted`.
+
 The explicit subtitle settings are required for real browser history. The K1
 stores final user and assistant transcripts in
 `/var/lib/ai-cat-controller/dialog-events.jsonl`; FastAPI imports them

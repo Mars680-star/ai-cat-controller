@@ -42,6 +42,12 @@ constexpr const char* kDialogService = "volc-conv-ai.service";
 constexpr size_t kMaxDialogStatusBytes = 16 * 1024;
 constexpr auto kCloudReadyTimeout = std::chrono::seconds(30);
 
+enum class CaptureMode {
+    Paused,
+    Wake,
+    Interrupt,
+};
+
 volatile std::sig_atomic_t exit_requested = 0;
 
 void handleSignal(int) {
@@ -79,6 +85,30 @@ bool matchesWakePhrase(const std::string& text, const std::string& wake_phrase) 
     };
     for (const char* alias : aliases) {
         if (text.find(alias) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool matchesInterruptPhrase(const std::string& text) {
+    /*
+     * Keep interruption phrases name-prefixed. The detector is active while
+     * the speaker is playing, so generic words such as "停" would make the
+     * assistant's own audio much too easy to mistake for a user command.
+     */
+    static const char* phrases[] = {
+        "小安停下",
+        "小安停止",
+        "小安别说了",
+        "小安安静",
+        "小安暂停",
+        "晓安停下",
+        "小岸停下",
+        "下安停下",
+    };
+    for (const char* phrase : phrases) {
+        if (text.find(phrase) != std::string::npos) {
             return true;
         }
     }
@@ -142,6 +172,68 @@ bool fileVersionChanged(const FileVersion& before, const FileVersion& after) {
         before.size != after.size;
 }
 
+bool readDialogStatus(std::string& status, FileVersion* version = nullptr) {
+    const FileVersion current_version = readFileVersion(kDialogStatusPath);
+    if (!current_version.exists || current_version.size <= 0 ||
+        current_version.size > static_cast<off_t>(kMaxDialogStatusBytes)) {
+        return false;
+    }
+
+    FILE* file = std::fopen(kDialogStatusPath, "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    std::vector<char> buffer(static_cast<size_t>(current_version.size) + 1, '\0');
+    const size_t bytes_read = std::fread(
+        buffer.data(),
+        1,
+        static_cast<size_t>(current_version.size),
+        file);
+    const bool read_ok = bytes_read == static_cast<size_t>(current_version.size);
+    std::fclose(file);
+    if (!read_ok) {
+        return false;
+    }
+    status.assign(buffer.data(), bytes_read);
+    if (version != nullptr) {
+        *version = current_version;
+    }
+    return true;
+}
+
+bool dialogStatusProcessIsAlive(const std::string& status) {
+    const size_t pid_key = status.find("\"pid\":");
+    if (pid_key == std::string::npos) {
+        return false;
+    }
+    const char* pid_start = status.c_str() + pid_key + 6;
+    char* pid_end = nullptr;
+    errno = 0;
+    const long dialog_pid = std::strtol(pid_start, &pid_end, 10);
+    return errno == 0 && pid_end != pid_start && dialog_pid > 1 &&
+        (::kill(static_cast<pid_t>(dialog_pid), 0) == 0 || errno == EPERM);
+}
+
+struct DialogRuntimeState {
+    bool session_active = false;
+    bool can_interrupt = false;
+};
+
+DialogRuntimeState readDialogRuntimeState() {
+    DialogRuntimeState state;
+    std::string status;
+
+    state.session_active = access(kDialogSessionMarker, F_OK) == 0;
+    if (!readDialogStatus(status) || !dialogStatusProcessIsAlive(status)) {
+        return state;
+    }
+    state.session_active = state.session_active ||
+        status.find("\"session_active\":true") != std::string::npos;
+    state.can_interrupt =
+        status.find("\"can_interrupt\":true") != std::string::npos;
+    return state;
+}
+
 int runSystemctl(std::vector<std::string> arguments) {
     arguments.insert(arguments.begin(), "systemctl");
     std::vector<char*> argv;
@@ -179,42 +271,15 @@ bool dialogStatusIsReady(
     const FileVersion& previous_version,
     bool require_new_status
 ) {
-    const FileVersion current_version = readFileVersion(kDialogStatusPath);
-    if (!current_version.exists || current_version.size <= 0 ||
-        current_version.size > static_cast<off_t>(kMaxDialogStatusBytes) ||
+    FileVersion current_version;
+    std::string status;
+    if (!readDialogStatus(status, &current_version) ||
         (require_new_status && !fileVersionChanged(previous_version, current_version))) {
         return false;
     }
-
-    FILE* file = std::fopen(kDialogStatusPath, "rb");
-    if (file == nullptr) {
-        return false;
-    }
-    std::vector<char> buffer(static_cast<size_t>(current_version.size) + 1, '\0');
-    const size_t bytes_read = std::fread(
-        buffer.data(),
-        1,
-        static_cast<size_t>(current_version.size),
-        file);
-    const bool read_ok = bytes_read == static_cast<size_t>(current_version.size);
-    std::fclose(file);
-    if (!read_ok) {
-        return false;
-    }
-
-    const std::string status(buffer.data(), bytes_read);
     const bool ready = status.find("\"state\":\"ready\"") != std::string::npos ||
         status.find("\"state\":\"interrupted\"") != std::string::npos;
-    const size_t pid_key = status.find("\"pid\":");
-    if (!ready || pid_key == std::string::npos) {
-        return false;
-    }
-    const char* pid_start = status.c_str() + pid_key + 6;
-    char* pid_end = nullptr;
-    errno = 0;
-    const long dialog_pid = std::strtol(pid_start, &pid_end, 10);
-    return errno == 0 && pid_end != pid_start && dialog_pid > 1 &&
-        (::kill(static_cast<pid_t>(dialog_pid), 0) == 0 || errno == EPERM);
+    return ready && dialogStatusProcessIsAlive(status);
 }
 
 bool triggerConversation() {
@@ -248,6 +313,22 @@ bool triggerConversation() {
         return false;
     }
     std::cout << "[WakeWord] Conversation triggered" << std::endl;
+    return true;
+}
+
+bool triggerInterruption() {
+    if (runSystemctl({"is-active", "--quiet", kDialogService}) != 0) {
+        std::cerr << "[WakeWord] Interrupt ignored because dialog is offline"
+                  << std::endl;
+        return false;
+    }
+    if (runSystemctl({"kill", "--signal=SIGUSR2", kDialogService}) != 0) {
+        std::cerr << "[WakeWord] Failed to interrupt " << kDialogService
+                  << std::endl;
+        return false;
+    }
+    std::cout << "[WakeWord] Conversation interrupted by local keyword"
+              << std::endl;
     return true;
 }
 
@@ -294,8 +375,18 @@ int main(int argc, char** argv) {
         std::cerr << "[WakeWord] Failed to initialize SenseVoice" << std::endl;
         return 1;
     }
-    model.setHotwords({wake_phrase, "小安"}, 5.0f);
-    std::cout << "[WakeWord] SenseVoice ready, phrase=\"" << wake_phrase << "\"" << std::endl;
+    model.setHotwords(
+        {
+            wake_phrase,
+            "小安",
+            "小安停下",
+            "小安别说了",
+            "小安安静",
+            "小安暂停",
+        },
+        5.0f);
+    std::cout << "[WakeWord] SenseVoice ready, phrase=\"" << wake_phrase
+              << "\", interrupt=\"小安停下\"" << std::endl;
 
     ten_vad_handle_t vad = nullptr;
     if (ten_vad_create(&vad, kHopSize, kVadThreshold) != 0) {
@@ -335,26 +426,47 @@ int main(int argc, char** argv) {
     int speech_run = 0;
     int silence_run = 0;
     auto resume_not_before = std::chrono::steady_clock::time_point::min();
+    CaptureMode capture_mode = CaptureMode::Wake;
 
     std::cout << "[WakeWord] Listening" << std::endl;
     while (!exit_requested) {
-        const bool dialog_active = access(kDialogSessionMarker, F_OK) == 0;
+        const DialogRuntimeState dialog_state = readDialogRuntimeState();
         const bool local_speech_active = access(kLocalSpeechMarker, F_OK) == 0;
-        if (dialog_active || local_speech_active) {
+        CaptureMode desired_mode = CaptureMode::Wake;
+        if (local_speech_active) {
+            desired_mode = CaptureMode::Paused;
+        } else if (dialog_state.can_interrupt) {
+            desired_mode = CaptureMode::Interrupt;
+        } else if (dialog_state.session_active) {
+            desired_mode = CaptureMode::Paused;
+        }
+
+        if (desired_mode != capture_mode) {
             if (capture != nullptr) {
                 pa_simple_free(capture);
                 capture = nullptr;
-                recording = false;
-                speech_run = 0;
-                silence_run = 0;
-                utterance.clear();
-                pre_speech.clear();
-                std::cout
-                    << (dialog_active
-                            ? "[WakeWord] Capture paused for active conversation"
-                            : "[WakeWord] Capture paused for local speech")
-                    << std::endl;
             }
+            recording = false;
+            speech_run = 0;
+            silence_run = 0;
+            utterance.clear();
+            pre_speech.clear();
+            capture_mode = desired_mode;
+            if (capture_mode == CaptureMode::Interrupt) {
+                std::cout << "[WakeWord] Listening for interruption keyword"
+                          << std::endl;
+            } else if (capture_mode == CaptureMode::Paused) {
+                std::cout
+                    << (local_speech_active
+                            ? "[WakeWord] Capture paused for local speech"
+                            : "[WakeWord] Capture paused for active conversation")
+                    << std::endl;
+            } else {
+                std::cout << "[WakeWord] Wake listening mode" << std::endl;
+            }
+        }
+
+        if (capture_mode == CaptureMode::Paused) {
             usleep(50 * 1000);
             continue;
         }
@@ -423,12 +535,16 @@ int main(int argc, char** argv) {
             const std::vector<float> audio = normalizeAudio(utterance);
             const std::string recognized = model.recognize(audio);
             const std::string normalized = normalizeText(recognized);
-            const bool matched = matchesWakePhrase(normalized, wake_phrase);
+            const bool wake_matched = capture_mode == CaptureMode::Wake &&
+                matchesWakePhrase(normalized, wake_phrase);
+            const bool interrupt_matched = capture_mode == CaptureMode::Interrupt &&
+                matchesInterruptPhrase(normalized);
+            const bool matched = wake_matched || interrupt_matched;
 
             if (debug_transcripts || matched) {
                 std::cout << "[WakeWord] ASR: " << recognized << std::endl;
             }
-            if (matched) {
+            if (wake_matched) {
                 std::cout << "[WakeWord] Matched: " << wake_phrase << std::endl;
                 pa_simple_free(capture);
                 capture = nullptr;
@@ -441,6 +557,13 @@ int main(int argc, char** argv) {
                     resume_not_before =
                         std::chrono::steady_clock::now() + kTriggerSettleDelay;
                 }
+            } else if (interrupt_matched) {
+                std::cout << "[WakeWord] Interrupt matched: 小安停下" << std::endl;
+                pa_simple_free(capture);
+                capture = nullptr;
+                triggerInterruption();
+                resume_not_before =
+                    std::chrono::steady_clock::now() + kTriggerSettleDelay;
             }
         }
 

@@ -105,8 +105,33 @@ def test_local_wake_word_pauses_capture_during_local_speech() -> None:
     source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'kLocalSpeechMarker = "/run/ai-cat/local-speech-active"' in source
-    assert "dialog_active || local_speech_active" in source
+    assert "if (local_speech_active)" in source
     assert "Capture paused for local speech" in source
+
+
+def test_local_wake_word_listens_only_for_named_interrupt_phrases() -> None:
+    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '"小安停下"' in source
+    assert '"小安别说了"' in source
+    assert "matchesInterruptPhrase" in source
+    assert "dialog_state.can_interrupt" in source
+    assert "CaptureMode::Interrupt" in source
+    assert 'runSystemctl({"kill", "--signal=SIGUSR2", kDialogService})' in source
+    assert "Conversation interrupted by local keyword" in source
+
+
+def test_local_wake_word_keeps_conversation_capture_separate() -> None:
+    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "local_speech_active" in source
+    assert "dialog_state.session_active" in source
+    assert source.index("if (local_speech_active)") < source.index(
+        "else if (dialog_state.can_interrupt)"
+    )
+    assert source.index("else if (dialog_state.can_interrupt)") < source.index(
+        "else if (dialog_state.session_active)"
+    )
 
 
 def test_native_dialog_uses_fixed_motion_commands() -> None:
