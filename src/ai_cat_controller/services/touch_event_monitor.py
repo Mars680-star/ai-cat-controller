@@ -65,7 +65,17 @@ class TouchEventMonitor:
         self._pending_events: list[tuple[str, int, str]] = []
         self._confirmed_pending_ids: set[str] = set()
         self._paw_confirmations: dict[str, tuple[int, float]] = {}
+        self._last_touch_observed_at: dict[str, float] = {}
         self._task: asyncio.Task[None] | None = None
+
+    def _touch_event_is_debounced(self, sensor: str) -> bool:
+        now = self._clock()
+        previous = self._last_touch_observed_at.get(sensor)
+        self._last_touch_observed_at[sensor] = now
+        return (
+            previous is not None
+            and now - previous < self._settings.touch_event_debounce_seconds
+        )
 
     def _paw_touch_is_confirmed(self, sensor: str) -> bool:
         if sensor not in PAW_SENSORS:
@@ -177,8 +187,12 @@ class TouchEventMonitor:
             ).hexdigest()[:32]
             request_id = f"k1-touch-{digest}"
             was_confirmed = request_id in self._confirmed_pending_ids
-            if not was_confirmed and not self._paw_touch_is_confirmed(sensor):
-                continue
+            if not was_confirmed:
+                if not self._paw_touch_is_confirmed(sensor):
+                    continue
+                if self._touch_event_is_debounced(sensor):
+                    LOGGER.debug("K1 touch event debounced: sensor=%s", sensor)
+                    continue
             try:
                 event = await self._product.add_device_touch(
                     device_serial=serial,

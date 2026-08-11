@@ -98,7 +98,7 @@ LocalK1Adapter -> 固定 systemd 信号/固定电机命令/板端状态文件和
   标签、行为画像和最近成长；Mock 可快速模拟，Local K1 默认禁止 Debug 写入。
   总开关 `AI_CAT_ENABLE_GROWTH_PERSONALITY_V1` 默认关闭；关闭期间不写成长、不修改
   Prompt，重新开启也不会追溯处理关闭期间已导入的真机对话。软件层全量回归为
-  `215 passed`。
+  `216 passed`。
 - K1 发布前可运行 `scripts/k1_backup_release.sh`，回滚前可先用
   `scripts/k1_rollback_release.sh BACKUP --check` 校验；五部位实体触摸使用
   `scripts/k1_verify_touch_mapping.sh` 验收。完整流程见

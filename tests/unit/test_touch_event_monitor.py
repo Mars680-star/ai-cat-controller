@@ -134,6 +134,38 @@ async def test_touch_monitor_reads_new_log_created_after_start(tmp_path) -> None
     assert product.events[0]["metadata"]["sensor_mapping"] == "identity"
 
 
+@pytest.mark.asyncio
+async def test_touch_monitor_debounces_a_continuous_sensor_event_cluster(
+    tmp_path,
+) -> None:
+    settings = monitor_settings(tmp_path, touch_event_debounce_seconds=1.5)
+    settings.touch_event_log_path.touch()
+    product = FakeProduct()
+    now = [100.0]
+    monitor = TouchEventMonitor(
+        settings,
+        product,  # type: ignore[arg-type]
+        clock=lambda: now[0],
+    )
+    await monitor.start()
+    try:
+        for expected_count, elapsed in ((1, 0.0), (1, 0.5), (1, 1.0), (2, 2.6)):
+            now[0] += elapsed
+            with settings.touch_event_log_path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    "[Head Touch Handler] HEAD_SHORT_TOUCH detected\n"
+                )
+            await monitor.poll_once()
+            assert len(product.events) == expected_count
+    finally:
+        await monitor.close()
+
+    assert [event["metadata"]["sensor"] for event in product.events] == [
+        "head",
+        "head",
+    ]
+
+
 @pytest.mark.parametrize(
     ("handler", "hardware_sensor", "sensor"),
     [

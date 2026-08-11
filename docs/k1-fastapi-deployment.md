@@ -32,6 +32,7 @@ AI_CAT_TOUCH_SPEECH_PLAYER_PATH=/usr/bin/paplay
 AI_CAT_PULSEAUDIO_CTL_BINARY=/usr/bin/pactl
 AI_CAT_PULSE_SERVER=unix:/var/run/pulse/native
 AI_CAT_TOUCH_EVENT_LOG_PATH=/root/.log/main_log
+AI_CAT_TOUCH_EVENT_DEBOUNCE_SECONDS=1.5
 AI_CAT_DIALOG_STATUS_PATH=/run/ai-cat/dialog-status.json
 AI_CAT_DIALOG_CONFIG_PATH=/var/lib/ai-cat-controller/dialog-runtime-config.json
 ```
