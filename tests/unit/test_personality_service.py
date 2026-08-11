@@ -5,11 +5,51 @@ import pytest
 
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.domain.personalities import (
+    IntimacyVoiceStyle,
     PERSONALITIES,
     VOLCENGINE_CONSOLE_VOICE_ID,
     VOLCENGINE_CONSOLE_VOICE_NAME,
 )
 from ai_cat_controller.services.personality_service import PersonalityService
+
+
+EXPECTED_ADDRESSES = {
+    "sunny_explorer": (
+        "新朋友",
+        "搭档",
+        "冒险伙伴",
+        "最佳拍档",
+        "我最信任的伙伴",
+    ),
+    "gentle_companion": (
+        "新朋友",
+        "朋友",
+        "亲爱的朋友",
+        "我在意的人",
+        "最珍贵的家人",
+    ),
+    "proud_star": (
+        "这位人类",
+        "熟人",
+        "专属助理",
+        "本猫认可的人",
+        "最特别的你",
+    ),
+    "curious_scholar": (
+        "新同学",
+        "同学",
+        "研究搭档",
+        "首席搭档",
+        "终身学习伙伴",
+    ),
+    "calm_guardian": (
+        "访客",
+        "朋友",
+        "可信伙伴",
+        "重要伙伴",
+        "我守护的家人",
+    ),
+}
 
 
 def _pet(personality_id: str, *, points: int = 0) -> dict[str, object]:
@@ -53,6 +93,31 @@ def test_five_personalities_share_console_voice_and_keep_distinct_profiles() -> 
             "SubtitleMode": 1,
         }
         assert "TTSConfig" not in update_config
+
+
+def test_all_personality_levels_use_valid_forms_of_address() -> None:
+    assert {item.personality_id for item in PERSONALITIES} == set(EXPECTED_ADDRESSES)
+
+    for personality in PERSONALITIES:
+        styles = personality.intimacy_styles
+        assert tuple(style.level for style in styles) == (0, 1, 2, 3, 4)
+        assert tuple(style.address for style in styles) == EXPECTED_ADDRESSES[
+            personality.personality_id
+        ]
+        assert all(
+            f"使用称呼“{style.address}”" in style.response_style
+            for style in styles
+        )
+
+
+def test_greeting_cannot_be_configured_as_an_address() -> None:
+    with pytest.raises(ValueError, match="not a greeting"):
+        IntimacyVoiceStyle(
+            level=0,
+            address="你好！",
+            tone="礼貌",
+            response_style="测试",
+        )
 
 
 def test_intimacy_level_changes_address_prompt_and_revision() -> None:

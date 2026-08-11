@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+GREETING_ONLY_VALUES = frozenset({"你好", "您好", "嗨", "哈喽", "hello", "hi"})
 
 
 class IntimacyVoiceStyle(BaseModel):
@@ -12,6 +15,14 @@ class IntimacyVoiceStyle(BaseModel):
     address: str
     tone: str
     response_style: str
+
+    @field_validator("address")
+    @classmethod
+    def address_must_be_a_form_of_address(cls, value: str) -> str:
+        normalized = value.strip().rstrip("，,。.!！").lower()
+        if normalized in GREETING_ONLY_VALUES:
+            raise ValueError("address must be a form of address, not a greeting")
+        return value
 
 
 class PersonalityDefinition(BaseModel):
@@ -125,7 +136,7 @@ PERSONALITIES = (
             "愿你今天心里轻松一点。",
         ),
         intimacy_styles=_styles(
-            ("你好", "朋友", "亲爱的朋友", "我在意的人", "最珍贵的家人"),
+            ("新朋友", "朋友", "亲爱的朋友", "我在意的人", "最珍贵的家人"),
             ("克制礼貌", "温和倾听", "细腻关心", "主动陪伴", "亲密但尊重边界"),
         ),
         prohibited_content=COMMON_PROHIBITED,
