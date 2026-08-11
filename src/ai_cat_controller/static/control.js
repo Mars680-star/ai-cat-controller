@@ -142,6 +142,7 @@
     dialogConfig: null,
     intimacyPoints: null,
     growthTagIds: null,
+    settingsVolumeDirty: false,
   };
 
   const statusLabels = {
@@ -378,7 +379,7 @@
     }
   }
 
-  function renderDashboard(data) {
+  function renderDashboard(data, {syncSettingsVolume = true} = {}) {
     state.dashboard = data;
     const pet = data.pet;
     const personality = data.personality;
@@ -405,8 +406,10 @@
     ui.homeAddress.textContent = intimacy.address;
     ui.dialogVoice.textContent = personality.voice_name || personality.voice_id;
     ui.settingsName.value = pet.name;
-    ui.settingsVolume.value = pet.volume;
-    ui.settingsVolumeValue.textContent = `${pet.volume}%`;
+    if (syncSettingsVolume && !state.settingsVolumeDirty) {
+      ui.settingsVolume.value = pet.volume;
+      ui.settingsVolumeValue.textContent = `${pet.volume}%`;
+    }
 
     ui.connectionDeviceId.textContent = pet.device_id;
     ui.connectionSerial.textContent = pet.serial_number;
@@ -421,7 +424,7 @@
     setTopStatus(pet.online ? "设备在线" : "设备离线", pet.online);
   }
 
-  function renderHardwareStatus(status) {
+  function renderHardwareStatus(status, {syncSettingsVolume = true} = {}) {
     state.hardwareStatus = status;
     const isLocalK1 = status.adapter_mode === "local_k1";
     ui.realDeviceStatus.classList.toggle("hidden", !isLocalK1);
@@ -442,6 +445,8 @@
     }
 
     if (
+      syncSettingsVolume &&
+      !state.settingsVolumeDirty &&
       status.output_volume_available &&
       status.output_volume_percent !== null
     ) {
@@ -489,15 +494,29 @@
       return;
     }
     state.refreshing = true;
+    const settingsVolumeSyncAllowed = !state.settingsVolumeDirty;
     try {
-      const payload = await apiRequest(
-        `/api/v1/pets/${encodeURIComponent(state.petId)}/dashboard`,
-      );
-      renderDashboard(payload.data);
-      try {
-        const devicePayload = await apiRequest("/api/v1/device/status");
-        renderHardwareStatus(devicePayload.data);
-      } catch (error) {
+      const [dashboardResult, deviceResult] = await Promise.allSettled([
+        apiRequest(
+          `/api/v1/pets/${encodeURIComponent(state.petId)}/dashboard`,
+        ),
+        apiRequest("/api/v1/device/status"),
+      ]);
+      if (dashboardResult.status === "rejected") {
+        throw dashboardResult.reason;
+      }
+      const deviceStatus = deviceResult.status === "fulfilled"
+        ? deviceResult.value.data
+        : null;
+      renderDashboard(dashboardResult.value.data, {
+        syncSettingsVolume: settingsVolumeSyncAllowed
+          && deviceStatus?.adapter_mode !== "local_k1",
+      });
+      if (deviceStatus) {
+        renderHardwareStatus(deviceStatus, {
+          syncSettingsVolume: settingsVolumeSyncAllowed,
+        });
+      } else {
         state.hardwareStatus = null;
       }
     } finally {
@@ -1227,6 +1246,8 @@
         }),
       }),
     ]);
+    state.settingsVolumeDirty = false;
+    ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%`;
     await Promise.all([refreshDashboard(), refreshDialogConfig()]);
     showToast("设置已保存");
   }
@@ -1261,6 +1282,7 @@
     state.intimacyPoints = null;
     state.growthTagIds = null;
     state.dashboard = null;
+    state.settingsVolumeDirty = false;
     state.actions = [];
     ui.navPetName.textContent = "等待绑定";
     ui.navPersonality.textContent = "暂无性格";
@@ -1300,6 +1322,7 @@
     state.intimacyPoints = null;
     state.growthTagIds = null;
     state.dashboard = null;
+    state.settingsVolumeDirty = false;
     window.sessionStorage.removeItem("aiCatMockIdentity");
     ui.appShell.classList.add("hidden");
     ui.loginScreen.classList.remove("hidden");
@@ -1371,7 +1394,8 @@
     controlVoice("/api/v1/dialog/interrupt").catch(reportError);
   });
   ui.settingsVolume.addEventListener("input", () => {
-    ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%`;
+    state.settingsVolumeDirty = true;
+    ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%（待保存）`;
   });
   ui.settingsFollowUp.addEventListener("input", () => {
     ui.settingsFollowUpValue.textContent = `${ui.settingsFollowUp.value} 秒`;

@@ -65,6 +65,10 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert "renderGrowthPersonality" in script.text
     assert 'viewName === "personality"' in script.text
     assert "growthBandLevels" in script.text
+    assert "settingsVolumeDirty" in script.text
+    assert "settingsVolumeSyncAllowed = !state.settingsVolumeDirty" in script.text
+    assert "syncSettingsVolume: settingsVolumeSyncAllowed" in script.text
+    assert "%（待保存）" in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 
