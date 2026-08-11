@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -444,29 +445,6 @@ def test_growth_does_not_backfill_native_dialogs_imported_while_disabled(
 ) -> None:
     data_path = tmp_path / "growth-no-backfill.db"
     event_path = tmp_path / "dialog-events.jsonl"
-    created_at_ms = int(time.time() * 1000) + 100
-    events = (
-        {
-            "event_id": "disabled-user",
-            "conversation_id": "native-disabled-1",
-            "device_serial": "K1-GROWTH-NO-BACKFILL",
-            "role": "user",
-            "content": "为什么天空是蓝色的？",
-            "created_at_ms": created_at_ms,
-        },
-        {
-            "event_id": "disabled-assistant",
-            "conversation_id": "native-disabled-1",
-            "device_serial": "K1-GROWTH-NO-BACKFILL",
-            "role": "assistant",
-            "content": "主要与瑞利散射有关。",
-            "created_at_ms": created_at_ms + 1,
-        },
-    )
-    event_path.write_text(
-        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
-        encoding="utf-8",
-    )
 
     disabled = Settings(
         hardware_driver="mock",
@@ -477,11 +455,39 @@ def test_growth_does_not_backfill_native_dialogs_imported_while_disabled(
     )
     with TestClient(create_app(disabled)) as test_client:
         headers, _ = _login(test_client, code="growth-no-backfill")
-        pet_id = _bind(
+        bound = _bind(
             test_client,
             headers,
             serial="K1-GROWTH-NO-BACKFILL",
-        )["pet"]["pet_id"]
+        )
+        pet_id = bound["pet"]["pet_id"]
+        created_at_ms = int(
+            datetime.fromisoformat(bound["pet"]["bound_at"]).timestamp() * 1000
+        ) + 1
+        events = (
+            {
+                "event_id": "disabled-user",
+                "conversation_id": "native-disabled-1",
+                "device_serial": "K1-GROWTH-NO-BACKFILL",
+                "role": "user",
+                "content": "为什么天空是蓝色的？",
+                "created_at_ms": created_at_ms,
+            },
+            {
+                "event_id": "disabled-assistant",
+                "conversation_id": "native-disabled-1",
+                "device_serial": "K1-GROWTH-NO-BACKFILL",
+                "role": "assistant",
+                "content": "主要与瑞利散射有关。",
+                "created_at_ms": created_at_ms + 1,
+            },
+        )
+        event_path.write_text(
+            "".join(
+                json.dumps(event, ensure_ascii=False) + "\n" for event in events
+            ),
+            encoding="utf-8",
+        )
         history = test_client.get(
             f"/api/v1/pets/{pet_id}/dialog-conversations",
             headers=headers,
