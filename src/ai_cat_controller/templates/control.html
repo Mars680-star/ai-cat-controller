@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>AI 猫伴侣</title>
-  <link rel="stylesheet" href="/static/control.css?v=20260811-2">
+  <link rel="stylesheet" href="/static/control.css?v=20260811-4">
 </head>
 <body>
   <header class="topbar">
@@ -370,15 +370,18 @@
           </section>
         </div>
 
-        <div class="section-heading compact">
-          <div>
-            <h3>最近成长</h3>
-            <p>看看你们的相处如何塑造它的性格</p>
+        <details class="record-disclosure growth-history-disclosure">
+          <summary>
+            <span>最近成长</span>
+            <span id="growth-event-count" class="record-count">0 条</span>
+          </summary>
+          <p class="record-disclosure-description">
+            看看你们的相处如何塑造它的性格
+          </p>
+          <div id="growth-event-history" class="timeline growth-timeline empty-state">
+            暂无成长记录
           </div>
-        </div>
-        <div id="growth-event-history" class="timeline growth-timeline empty-state">
-          暂无成长记录
-        </div>
+        </details>
 
         <form id="growth-debug-form" class="growth-debug-form hidden">
           <div>
@@ -575,6 +578,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260811-3" defer></script>
+  <script src="/static/control.js?v=20260811-4" defer></script>
 </body>
 </html>

@@ -82,6 +82,7 @@
     growthTendencies: $("#growth-tendencies"),
     growthBehaviorSummary: $("#growth-behavior-summary"),
     growthEventHistory: $("#growth-event-history"),
+    growthEventCount: $("#growth-event-count"),
     growthDebugForm: $("#growth-debug-form"),
     growthDebugEvent: $("#growth-debug-event"),
     growthDebugCount: $("#growth-debug-count"),
@@ -858,6 +859,7 @@
 
   function renderGrowthEvents(events) {
     ui.growthEventHistory.replaceChildren();
+    ui.growthEventCount.textContent = `${events.length} 条`;
     ui.growthEventHistory.classList.toggle("empty-state", events.length === 0);
     if (events.length === 0) {
       ui.growthEventHistory.textContent = "暂无成长记录";

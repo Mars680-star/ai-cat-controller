@@ -1699,6 +1699,17 @@ textarea:hover {
   font-weight: 600;
 }
 
+.record-disclosure-description {
+  margin: 0;
+  padding: 14px 2px 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.growth-history-disclosure {
+  margin-top: 30px;
+}
+
 .level-heading-status {
   display: flex;
   align-items: center;

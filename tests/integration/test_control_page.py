@@ -34,8 +34,9 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="growth-debug-form"' in response.text
     assert 'id="interaction-history-count"' in response.text
     assert 'id="action-execution-count"' in response.text
+    assert 'id="growth-event-count"' in response.text
     assert response.text.count('data-view="personality"') == 2
-    assert response.text.count('class="record-disclosure') == 2
+    assert response.text.count('<details class="record-disclosure') == 3
     assert "重置全部数据" in response.text
     for engineering_term in (
         "真机", "Mock", "调试", "测试", "开发", "API", "SDK", "License",
