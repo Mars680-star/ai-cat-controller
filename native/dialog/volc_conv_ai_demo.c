@@ -3409,11 +3409,20 @@ int main(int argc, const char* argv[]){
             }
         }
         if (interrupt) {
-            /* 打断前清空本地 TTS 缓冲，避免继续播放上一轮残留音频。 */
+            /* 同时清空应用和 PulseAudio 缓冲，避免信号命中后仍延迟播完。 */
+            int flush_error = 0;
             interrupt = false;
             pthread_mutex_lock(&demo.ring_buf_mutex);
             volc_ringbuf_clear(demo.ring_buf);
             pthread_mutex_unlock(&demo.ring_buf_mutex);
+            pthread_mutex_lock(&demo.playback_mutex);
+            if (pa_simple_flush(demo.p_playback, &flush_error) < 0) {
+                printf(
+                    "interrupt playback flush failed: %s\n",
+                    pa_strerror(flush_error)
+                );
+            }
+            pthread_mutex_unlock(&demo.playback_mutex);
             volc_interrupt(demo.engine);
             if (start_after_interrupt) {
                 start_after_interrupt = false;

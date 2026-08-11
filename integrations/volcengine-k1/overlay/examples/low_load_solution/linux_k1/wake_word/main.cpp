@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <spawn.h>
@@ -30,6 +31,7 @@ constexpr int kSampleRate = 16000;
 constexpr int kHopSize = 256;
 constexpr int kSpeechStartFrames = 3;
 constexpr int kSilenceFrames = 18;
+constexpr int kInterruptSilenceFrames = 18;
 constexpr size_t kPreSpeechSamples = 8000;
 constexpr size_t kMinUtteranceSamples = 8000;
 constexpr size_t kMaxUtteranceSamples = 80000;
@@ -41,6 +43,7 @@ constexpr const char* kDialogStatusPath = "/run/ai-cat/dialog-status.json";
 constexpr const char* kDialogService = "volc-conv-ai.service";
 constexpr size_t kMaxDialogStatusBytes = 16 * 1024;
 constexpr auto kCloudReadyTimeout = std::chrono::seconds(30);
+constexpr auto kInterruptContinuationWindow = std::chrono::seconds(2);
 
 enum class CaptureMode {
     Paused,
@@ -109,6 +112,37 @@ bool matchesInterruptPhrase(const std::string& text) {
     };
     for (const char* phrase : phrases) {
         if (text.find(phrase) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool matchesInterruptPrefix(const std::string& text) {
+    static const char* prefixes[] = {
+        "小安",
+        "晓安",
+        "小岸",
+        "下安",
+    };
+    for (const char* prefix : prefixes) {
+        if (text.find(prefix) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool matchesInterruptSuffix(const std::string& text) {
+    static const char* suffixes[] = {
+        "停下",
+        "停止",
+        "别说了",
+        "安静",
+        "暂停",
+    };
+    for (const char* suffix : suffixes) {
+        if (text.find(suffix) != std::string::npos) {
             return true;
         }
     }
@@ -201,22 +235,30 @@ bool readDialogStatus(std::string& status, FileVersion* version = nullptr) {
     return true;
 }
 
-bool dialogStatusProcessIsAlive(const std::string& status) {
+pid_t dialogStatusPid(const std::string& status) {
     const size_t pid_key = status.find("\"pid\":");
     if (pid_key == std::string::npos) {
-        return false;
+        return -1;
     }
     const char* pid_start = status.c_str() + pid_key + 6;
     char* pid_end = nullptr;
     errno = 0;
     const long dialog_pid = std::strtol(pid_start, &pid_end, 10);
-    return errno == 0 && pid_end != pid_start && dialog_pid > 1 &&
-        (::kill(static_cast<pid_t>(dialog_pid), 0) == 0 || errno == EPERM);
+    if (errno != 0 || pid_end == pid_start || dialog_pid <= 1) {
+        return -1;
+    }
+    const pid_t pid = static_cast<pid_t>(dialog_pid);
+    return (::kill(pid, 0) == 0 || errno == EPERM) ? pid : -1;
+}
+
+bool dialogStatusProcessIsAlive(const std::string& status) {
+    return dialogStatusPid(status) > 1;
 }
 
 struct DialogRuntimeState {
     bool session_active = false;
     bool can_interrupt = false;
+    pid_t dialog_pid = -1;
 };
 
 DialogRuntimeState readDialogRuntimeState() {
@@ -224,7 +266,11 @@ DialogRuntimeState readDialogRuntimeState() {
     std::string status;
 
     state.session_active = access(kDialogSessionMarker, F_OK) == 0;
-    if (!readDialogStatus(status) || !dialogStatusProcessIsAlive(status)) {
+    if (!readDialogStatus(status)) {
+        return state;
+    }
+    state.dialog_pid = dialogStatusPid(status);
+    if (state.dialog_pid <= 1) {
         return state;
     }
     state.session_active = state.session_active ||
@@ -317,14 +363,15 @@ bool triggerConversation() {
 }
 
 bool triggerInterruption() {
-    if (runSystemctl({"is-active", "--quiet", kDialogService}) != 0) {
+    const DialogRuntimeState dialog_state = readDialogRuntimeState();
+    if (!dialog_state.can_interrupt || dialog_state.dialog_pid <= 1) {
         std::cerr << "[WakeWord] Interrupt ignored because dialog is offline"
                   << std::endl;
         return false;
     }
-    if (runSystemctl({"kill", "--signal=SIGUSR2", kDialogService}) != 0) {
+    if (::kill(dialog_state.dialog_pid, SIGUSR2) != 0) {
         std::cerr << "[WakeWord] Failed to interrupt " << kDialogService
-                  << std::endl;
+                  << ": " << std::strerror(errno) << std::endl;
         return false;
     }
     std::cout << "[WakeWord] Conversation interrupted by local keyword"
@@ -426,6 +473,8 @@ int main(int argc, char** argv) {
     int speech_run = 0;
     int silence_run = 0;
     auto resume_not_before = std::chrono::steady_clock::time_point::min();
+    auto interrupt_prefix_deadline =
+        std::chrono::steady_clock::time_point::min();
     CaptureMode capture_mode = CaptureMode::Wake;
 
     std::cout << "[WakeWord] Listening" << std::endl;
@@ -451,6 +500,8 @@ int main(int argc, char** argv) {
             silence_run = 0;
             utterance.clear();
             pre_speech.clear();
+            interrupt_prefix_deadline =
+                std::chrono::steady_clock::time_point::min();
             capture_mode = desired_mode;
             if (capture_mode == CaptureMode::Interrupt) {
                 std::cout << "[WakeWord] Listening for interruption keyword"
@@ -525,7 +576,10 @@ int main(int argc, char** argv) {
 
         utterance.insert(utterance.end(), frame.begin(), frame.end());
         silence_run = speech ? 0 : silence_run + 1;
-        const bool utterance_finished = silence_run >= kSilenceFrames;
+        const int silence_frames = capture_mode == CaptureMode::Interrupt
+            ? kInterruptSilenceFrames
+            : kSilenceFrames;
+        const bool utterance_finished = silence_run >= silence_frames;
         const bool utterance_full = utterance.size() >= kMaxUtteranceSamples;
         if (!utterance_finished && !utterance_full) {
             continue;
@@ -537,8 +591,21 @@ int main(int argc, char** argv) {
             const std::string normalized = normalizeText(recognized);
             const bool wake_matched = capture_mode == CaptureMode::Wake &&
                 matchesWakePhrase(normalized, wake_phrase);
-            const bool interrupt_matched = capture_mode == CaptureMode::Interrupt &&
-                matchesInterruptPhrase(normalized);
+            bool interrupt_matched = false;
+            if (capture_mode == CaptureMode::Interrupt) {
+                const auto now = std::chrono::steady_clock::now();
+                interrupt_matched = matchesInterruptPhrase(normalized) ||
+                    (now <= interrupt_prefix_deadline &&
+                     matchesInterruptSuffix(normalized));
+                if (!interrupt_matched && matchesInterruptPrefix(normalized)) {
+                    interrupt_prefix_deadline =
+                        now + kInterruptContinuationWindow;
+                } else if (interrupt_matched ||
+                           now > interrupt_prefix_deadline) {
+                    interrupt_prefix_deadline =
+                        std::chrono::steady_clock::time_point::min();
+                }
+            }
             const bool matched = wake_matched || interrupt_matched;
 
             if (debug_transcripts || matched) {

@@ -117,8 +117,23 @@ def test_local_wake_word_listens_only_for_named_interrupt_phrases() -> None:
     assert "matchesInterruptPhrase" in source
     assert "dialog_state.can_interrupt" in source
     assert "CaptureMode::Interrupt" in source
-    assert 'runSystemctl({"kill", "--signal=SIGUSR2", kDialogService})' in source
+    assert "kInterruptSilenceFrames = 18" in source
+    assert "kInterruptContinuationWindow = std::chrono::seconds(2)" in source
+    assert "matchesInterruptPrefix" in source
+    assert "matchesInterruptSuffix" in source
+    assert "now <= interrupt_prefix_deadline" in source
+    assert "::kill(dialog_state.dialog_pid, SIGUSR2)" in source
     assert "Conversation interrupted by local keyword" in source
+
+
+def test_native_dialog_flushes_queued_playback_when_interrupted() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    ring_clear = source.index("volc_ringbuf_clear(demo.ring_buf);")
+    pulse_flush = source.index("pa_simple_flush(demo.p_playback", ring_clear)
+    cloud_interrupt = source.index("volc_interrupt(demo.engine);", pulse_flush)
+
+    assert ring_clear < pulse_flush < cloud_interrupt
 
 
 def test_local_wake_word_keeps_conversation_capture_separate() -> None:
