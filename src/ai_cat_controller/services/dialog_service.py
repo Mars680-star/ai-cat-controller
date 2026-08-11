@@ -1,4 +1,11 @@
-"""Serialized dialog state transitions."""
+"""Serialized cloud dialog lifecycle, text requests, and follow-up control.
+
+Maintenance notes:
+- Route every start, stop, interrupt, and text request through this service so
+  concurrent browser, wake-word, and timeout operations stay ordered.
+- K1 process signaling belongs in the adapter; product history belongs in the
+  persistence-backed product service.
+"""
 
 from __future__ import annotations
 

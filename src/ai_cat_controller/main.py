@@ -1,4 +1,10 @@
-"""FastAPI application entry point."""
+"""FastAPI application entry point and dependency wiring.
+
+Maintenance notes:
+- Keep this module limited to startup/shutdown and service construction.
+- Put device, dialog, motion, and growth behavior in their service modules.
+- Any new long-running worker must be started and stopped in ``lifespan``.
+"""
 
 from __future__ import annotations
 

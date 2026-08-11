@@ -1,4 +1,10 @@
-"""Conservative SpaceMIT K1 adapter with status and dialog signal control."""
+"""Conservative SpaceMIT K1 hardware and dialog-process adapter.
+
+Maintenance notes:
+- Translate product capabilities into fixed, allowlisted K1 commands here.
+- Never concatenate request data into shell commands or expose raw motor values.
+- Keep status-file parsing backward compatible with the deployed native dialog.
+"""
 
 from __future__ import annotations
 

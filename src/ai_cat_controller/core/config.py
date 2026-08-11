@@ -1,4 +1,12 @@
-"""Environment-backed application settings."""
+"""Validated environment-backed settings for Mock and K1 deployments.
+
+Maintenance notes:
+- Add tunable runtime values here instead of reading environment variables in
+  request handlers.
+- Mirror user-facing settings in ``.env.example`` and the deployment docs.
+- Service names and executable paths are security boundaries, not free-form
+  shell configuration.
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,12 @@
+/*
+ * Always-on offline wake-word and named-interruption process for K1.
+ *
+ * Maintenance notes:
+ * - This process must not keep a Volcengine session open while idle.
+ * - Wake/interruption phrases and VAD timing are maintained in this file.
+ * - Keep this source byte-for-byte synchronized with the SDK overlay copy.
+ * - Deploy by rebuilding the wake-word binary; do not edit only the K1 copy.
+ */
 #include <algorithm>
 #include <chrono>
 #include <cmath>

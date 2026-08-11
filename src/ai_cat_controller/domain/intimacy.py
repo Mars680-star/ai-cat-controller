@@ -1,4 +1,11 @@
-"""Intimacy levels, event rules, and unlock metadata."""
+"""Intimacy levels, event point rules, daily limits, and unlock metadata.
+
+Maintenance notes:
+- Keep level thresholds strictly increasing and action unlock levels aligned
+  with ``domain.actions``.
+- Event names are persisted in history; changing them requires compatibility
+  handling for existing data.
+"""
 
 from __future__ import annotations
 

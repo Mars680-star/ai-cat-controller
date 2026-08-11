@@ -1,3 +1,9 @@
+/*
+ * Product UI theme and responsive layout.
+ * Keep shared colors and dimensions in :root, preserve mobile layouts without
+ * horizontal overflow, and update the stylesheet version in control.html after
+ * a deployed visual change.
+ */
 :root {
   color: #20231f;
   background: #f3f5f1;

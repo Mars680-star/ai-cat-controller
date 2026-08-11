@@ -1,4 +1,10 @@
-"""Play allowlisted cached personality phrases on K1."""
+"""Play allowlisted cached phrases on K1 without opening a cloud session.
+
+Maintenance notes:
+- Phrase keys and touch mappings are maintained here; WAV files live under the
+  configured asset root and must be regenerated when spoken text changes.
+- Playback is intentionally restricted to validated local files and ``paplay``.
+"""
 
 from __future__ import annotations
 

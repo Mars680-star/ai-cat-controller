@@ -1,4 +1,10 @@
-"""Safe, low-frequency autonomous behavior for the K1 prototype."""
+"""Safe K1 autonomous behavior and answer-time micro-motion worker.
+
+Maintenance notes:
+- Tune intervals and probabilities through the documented environment values.
+- Submit all motion through the FastAPI motion endpoint; never drive GPIO here.
+- This module runs as ``toy_motor.service`` from the deployed project copy.
+"""
 
 from __future__ import annotations
 

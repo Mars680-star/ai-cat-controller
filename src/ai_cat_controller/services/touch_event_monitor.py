@@ -1,4 +1,11 @@
-"""Import physical K1 touch events without taking ownership of its GPIO lines."""
+"""Import K1 touch events without taking ownership of the GPIO lines.
+
+Maintenance notes:
+- The vendor touch service remains the only GPIO owner; this worker tails its
+  event output and translates sensor names into product interactions.
+- Update sensor mapping and debounce/repeat rules here, then verify every body
+  part on hardware before deployment.
+"""
 
 from __future__ import annotations
 

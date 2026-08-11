@@ -1,4 +1,10 @@
-"""Safe preset action catalogue used by the product Mock."""
+"""Product action catalogue shared by the web UI and hardware adapter.
+
+Maintenance notes:
+- This file describes product-level actions and unlock rules, not raw GPIO.
+- K1 trajectories must remain fixed in the native helper and allowlisted by the
+  adapter before an action is exposed here.
+"""
 
 from __future__ import annotations
 

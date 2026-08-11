@@ -1,4 +1,11 @@
-"""Serialized, cancellable motion scheduling."""
+"""Single-owner, cancellable motion scheduling for every action source.
+
+Maintenance notes:
+- Web, touch, autonomy, and AI function calls must pass through this lock and
+  cooldown boundary.
+- Keep raw motor angles and GPIO details out of this service; K1 uses fixed
+  presets selected by the adapter and native helper.
+"""
 
 from __future__ import annotations
 

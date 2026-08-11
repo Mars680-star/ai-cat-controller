@@ -1,4 +1,10 @@
-"""Five persistent pet personality definitions."""
+"""Five persistent pet personality definitions and behavior preferences.
+
+Maintenance notes:
+- Personality IDs are stored with pets; do not rename them without migration.
+- Edit prompts, address styles, action weights, and local phrase text here.
+- Cloud voice selection remains owned by the Volcengine bot configuration.
+"""
 
 from __future__ import annotations
 

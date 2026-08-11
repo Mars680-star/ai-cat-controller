@@ -1,3 +1,6 @@
+# Runs both low-frequency local autonomy and one-shot answer micro-motions.
+# Tune behavior with environment values; keep motor commands behind FastAPI's
+# motion lock and the native fixed-preset allowlist.
 [Unit]
 Description=AI Cat Safe Autonomous Head Motion and Speech
 After=ai-cat-controller.service volc-pulseaudio.service

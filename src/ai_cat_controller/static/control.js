@@ -1,3 +1,12 @@
+/*
+ * Browser application controller.
+ *
+ * Maintenance notes:
+ * - Keep selectors synchronized with templates/control.html.
+ * - API calls and periodic refresh state live here; avoid independent timers
+ *   that can overwrite unsaved form values.
+ * - User-visible labels belong in the template unless they are dynamic.
+ */
 (() => {
   "use strict";
 

@@ -3,6 +3,13 @@
 /*
  * Copyright (C) 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * AI Cat maintenance notes:
+ * - This is the native boundary for fixed, physically validated K1 motions.
+ * - Product requests may select a preset but must never supply GPIO, direction,
+ *   speed, or unrestricted angle values to this program.
+ * - Validate every changed trajectory on hardware before marking it accepted.
+ * - Deploy changes by rebuilding and installing /usr/bin/ai-toy_app on K1.
  */
 
 #include <errno.h>

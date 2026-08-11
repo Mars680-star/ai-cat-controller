@@ -1,4 +1,11 @@
-"""Persistence orchestration for non-blocking long-term personality growth."""
+"""Persistence orchestration for non-blocking long-term personality growth.
+
+Maintenance notes:
+- Keep growth idempotent: one source interaction must not create duplicate
+  events when services retry.
+- Classification and scoring failures must never block dialog, touch, or motion
+  behavior; persist through the repository rather than module globals.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""Adapter construction."""
+"""Construct Mock/K1 adapters and define the executable command allowlist.
+
+Maintenance notes:
+- Every new native motor preset must be added here explicitly and covered by a
+  command-runner test.
+- Do not replace exact argv tuples with command prefixes or free-form strings.
+"""
 
 from ai_cat_controller.adapters.base import AiCatAdapter
 from ai_cat_controller.adapters.command_runner import CommandRunner
