@@ -28,6 +28,12 @@ Environment=AI_CAT_CONVERSATION_MOTION_ENABLED=true
 Environment=AI_CAT_CONVERSATION_MOTION_PROBABILITY=1.0
 Environment=AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS=1.0
 Environment=AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS=0.5
+Environment=AI_CAT_CONVERSATION_HEAD_MIN_INTERVAL_SECONDS=7.0
+Environment=AI_CAT_CONVERSATION_HEAD_MAX_INTERVAL_SECONDS=10.0
+Environment=AI_CAT_CONVERSATION_TAIL_ENABLED=true
+Environment=AI_CAT_CONVERSATION_TAIL_DELAY_SECONDS=2.0
+Environment=AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS=3.0
+Environment=AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS=4.5
 ExecStartPre=/usr/bin/rm -f /run/ai-cat/local-speech-active
 ExecStart=/opt/ai-cat-controller/.venv/bin/python -m ai_cat_controller.autonomy
 ExecStopPost=/usr/bin/rm -f /run/ai-cat/local-speech-active

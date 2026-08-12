@@ -14,6 +14,19 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 
 ## 更新记录
 
+### 2026-08-12
+
+修改人：Mars
+
+- AI 播放回答期间由单次轻动作升级为持续的双节奏动作：头部使用已验收的低幅度
+  侧头/点头，每 `7–10` 秒尝试一次；尾部从回答约 2 秒后开始，每 `3–4.5` 秒尝试
+  一次。动作忙碌时直接跳过而不排队，回答结束、进入聆听或状态失效时立即清空本轮
+  调度，避免在用户说话时或回答结束后补动作。尾部节奏有独立开关，且仍要求设备的
+  `AI_CAT_ENABLE_TAIL_MOTION=true` 安全门已开放。K1 长回答现场验收中头部执行 4 次、
+  尾部执行 9 次，回答结束后未继续动作，体验符合预期。部署恢复点为
+  `/root/ai-cat-backups/before-repeating-dialog-motion-20260812T042426Z`，自动化测试为
+  `229 passed`。
+
 ### 2026-08-11
 
 修改人：Mars
@@ -532,6 +545,12 @@ export AI_CAT_CONVERSATION_MOTION_ENABLED=true
 export AI_CAT_CONVERSATION_MOTION_PROBABILITY=1.0
 export AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS=1.0
 export AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS=0.5
+export AI_CAT_CONVERSATION_HEAD_MIN_INTERVAL_SECONDS=7.0
+export AI_CAT_CONVERSATION_HEAD_MAX_INTERVAL_SECONDS=10.0
+export AI_CAT_CONVERSATION_TAIL_ENABLED=true
+export AI_CAT_CONVERSATION_TAIL_DELAY_SECONDS=2.0
+export AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS=3.0
+export AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS=4.5
 ```
 
 首次部署应确认私有仓库内的 20 个 WAV 已同步：

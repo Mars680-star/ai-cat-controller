@@ -36,6 +36,7 @@ from ai_cat_controller.local_speech import (
 LOGGER = logging.getLogger("ai_cat_controller.autonomy")
 MAX_RESPONSE_BYTES = 65_536
 SAFE_ACTIONS = ("head/nod", "head/shake")
+CONVERSATION_TAIL_ACTION = "tail/wag"
 AUTONOMY_READY_STATES = frozenset({"ready", "interrupted"})
 AUTONOMY_OFFLINE_STATES = frozenset({"offline", "unavailable"})
 CONVERSATION_MOTION_STATE = "answering"
@@ -81,6 +82,12 @@ class AutonomyConfig:
     conversation_motion_probability: float = 1.0
     conversation_motion_delay_seconds: float = 1.0
     conversation_poll_interval_seconds: float = 0.5
+    conversation_head_minimum_interval_seconds: float = 7.0
+    conversation_head_maximum_interval_seconds: float = 10.0
+    conversation_tail_enabled: bool = False
+    conversation_tail_delay_seconds: float = 2.0
+    conversation_tail_minimum_interval_seconds: float = 3.0
+    conversation_tail_maximum_interval_seconds: float = 4.5
     cloud_speech_enabled: bool = False
     local_speech_enabled: bool = False
     local_speech_asset_root: Path = DEFAULT_ASSET_ROOT
@@ -139,6 +146,44 @@ class AutonomyConfig:
         )
         if cloud_speech_enabled and local_speech_enabled:
             raise ValueError("cloud and local autonomy speech cannot both be enabled")
+        conversation_head_minimum_interval = _bounded_float(
+            source,
+            "AI_CAT_CONVERSATION_HEAD_MIN_INTERVAL_SECONDS",
+            7.0,
+            3.0,
+            60.0,
+        )
+        conversation_head_maximum_interval = _bounded_float(
+            source,
+            "AI_CAT_CONVERSATION_HEAD_MAX_INTERVAL_SECONDS",
+            10.0,
+            3.0,
+            60.0,
+        )
+        if conversation_head_maximum_interval < conversation_head_minimum_interval:
+            raise ValueError(
+                "AI_CAT_CONVERSATION_HEAD_MAX_INTERVAL_SECONDS must be greater "
+                "than or equal to AI_CAT_CONVERSATION_HEAD_MIN_INTERVAL_SECONDS"
+            )
+        conversation_tail_minimum_interval = _bounded_float(
+            source,
+            "AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS",
+            3.0,
+            1.5,
+            60.0,
+        )
+        conversation_tail_maximum_interval = _bounded_float(
+            source,
+            "AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS",
+            4.5,
+            1.5,
+            60.0,
+        )
+        if conversation_tail_maximum_interval < conversation_tail_minimum_interval:
+            raise ValueError(
+                "AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS must be greater "
+                "than or equal to AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS"
+            )
         return cls(
             api_port=api_port,
             api_key=api_key,
@@ -176,6 +221,29 @@ class AutonomyConfig:
                 0.5,
                 0.2,
                 5.0,
+            ),
+            conversation_head_minimum_interval_seconds=(
+                conversation_head_minimum_interval
+            ),
+            conversation_head_maximum_interval_seconds=(
+                conversation_head_maximum_interval
+            ),
+            conversation_tail_enabled=(
+                source.get("AI_CAT_CONVERSATION_TAIL_ENABLED", "false").lower()
+                == "true"
+            ),
+            conversation_tail_delay_seconds=_bounded_float(
+                source,
+                "AI_CAT_CONVERSATION_TAIL_DELAY_SECONDS",
+                2.0,
+                0.5,
+                10.0,
+            ),
+            conversation_tail_minimum_interval_seconds=(
+                conversation_tail_minimum_interval
+            ),
+            conversation_tail_maximum_interval_seconds=(
+                conversation_tail_maximum_interval
             ),
             cloud_speech_enabled=cloud_speech_enabled,
             local_speech_enabled=local_speech_enabled,
@@ -284,6 +352,23 @@ class LocalControllerClient:
             },
         )
 
+    def start_tail_action(
+        self,
+        request_id: str,
+        *,
+        intensity: float = 0.35,
+        duration_ms: int = 600,
+    ) -> None:
+        self._request(
+            "POST",
+            f"/motion/{CONVERSATION_TAIL_ACTION}",
+            {
+                "intensity": intensity,
+                "duration_ms": duration_ms,
+                "request_id": request_id,
+            },
+        )
+
     def speak(self, content: str, request_id: str) -> None:
         if content not in SHORT_PHRASES:
             raise ValueError("autonomy phrase is not allowlisted")
@@ -313,7 +398,9 @@ class AutonomyWorker:
             marker_path=config.local_speech_marker_path,
             player_path=config.local_speech_player_path,
         )
-        self._last_conversation_token: tuple[int, int] | None = None
+        self._conversation_token: tuple[int, int] | None = None
+        self._next_conversation_head_at = 0.0
+        self._next_conversation_tail_at = 0.0
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -426,22 +513,54 @@ class AutonomyWorker:
             or not status.get("can_interrupt")
             or status.get("stale")
         ):
+            self._conversation_token = None
+            self._next_conversation_head_at = 0.0
+            self._next_conversation_tail_at = 0.0
             return {"executed": False, "reason": "not_answering"}
 
         sequence = int(status.get("sequence", 0) or 0)
         updated_at_ms = int(status.get("updated_at_ms", 0) or 0)
         token = (sequence, updated_at_ms)
-        if token == self._last_conversation_token:
-            return {"executed": False, "reason": "already_considered"}
+        now = time.monotonic()
+        if token != self._conversation_token:
+            self._conversation_token = token
+            self._next_conversation_head_at = (
+                now + self._config.conversation_motion_delay_seconds
+            )
+            self._next_conversation_tail_at = (
+                now + self._config.conversation_tail_delay_seconds
+            )
 
-        age_ms = max(int(time.time() * 1000) - updated_at_ms, 0)
-        delay_ms = int(self._config.conversation_motion_delay_seconds * 1000)
-        if updated_at_ms > 0 and age_ms < delay_ms:
-            return {"executed": False, "reason": "waiting_for_delay"}
+        head_due = now >= self._next_conversation_head_at
+        tail_due = (
+            self._config.conversation_tail_enabled
+            and now >= self._next_conversation_tail_at
+        )
+        if not head_due and not tail_due:
+            return {"executed": False, "reason": "waiting_for_interval"}
 
-        self._last_conversation_token = token
         if self._random.random() >= self._config.conversation_motion_probability:
+            if tail_due:
+                self._schedule_next_conversation_tail(now)
+            else:
+                self._schedule_next_conversation_head(now)
             return {"executed": False, "reason": "probability_skip"}
+
+        if tail_due:
+            event_id = f"dialog-tail-{int(time.time())}-{uuid.uuid4().hex[:10]}"
+            self._client.start_tail_action(
+                event_id,
+                intensity=0.35,
+                duration_ms=600,
+            )
+            self._schedule_next_conversation_tail(now)
+            result = {
+                "executed": True,
+                "action": CONVERSATION_TAIL_ACTION,
+                "token": token,
+            }
+            LOGGER.info("conversation motion submitted: %s", result)
+            return result
 
         personality = self._client.personality_profile()
         autonomy = personality.get("autonomy")
@@ -449,6 +568,7 @@ class AutonomyWorker:
             autonomy.get("action_weights") if isinstance(autonomy, dict) else None
         )
         if not personality.get("active") or not isinstance(action_weights, dict):
+            self._schedule_next_conversation_head(now)
             return {"executed": False, "reason": "personality_not_ready"}
 
         actions: list[str] = []
@@ -462,6 +582,7 @@ class AutonomyWorker:
                 actions.append(action)
                 weights.append(float(weight))
         if not actions:
+            self._schedule_next_conversation_head(now)
             return {"executed": False, "reason": "no_safe_action"}
 
         action = self._random.choices(actions, weights=weights, k=1)[0]
@@ -472,15 +593,28 @@ class AutonomyWorker:
             intensity=0.2,
             duration_ms=900,
         )
+        self._schedule_next_conversation_head(now)
         result = {"executed": True, "action": action, "token": token}
         LOGGER.info("conversation motion submitted: %s", result)
         return result
+
+    def _schedule_next_conversation_head(self, now: float) -> None:
+        self._next_conversation_head_at = now + self._random.uniform(
+            self._config.conversation_head_minimum_interval_seconds,
+            self._config.conversation_head_maximum_interval_seconds,
+        )
+
+    def _schedule_next_conversation_tail(self, now: float) -> None:
+        self._next_conversation_tail_at = now + self._random.uniform(
+            self._config.conversation_tail_minimum_interval_seconds,
+            self._config.conversation_tail_maximum_interval_seconds,
+        )
 
     def run_forever(self) -> None:
         LOGGER.info(
             "safe autonomy started; initial_delay=%.1fs interval=%.1f..%.1fs "
             "local_speech=%s cloud_speech=%s phrase_probability=%.2f "
-            "conversation_motion=%s",
+            "conversation_motion=%s conversation_tail=%s",
             self._config.initial_delay_seconds,
             self._config.minimum_interval_seconds,
             self._config.maximum_interval_seconds,
@@ -488,6 +622,7 @@ class AutonomyWorker:
             self._config.cloud_speech_enabled,
             self._config.phrase_probability,
             self._config.conversation_motion_enabled,
+            self._config.conversation_tail_enabled,
         )
         next_autonomy_at = time.monotonic() + self._config.initial_delay_seconds
         while not self._stop_event.is_set():

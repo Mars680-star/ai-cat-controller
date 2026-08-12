@@ -64,6 +64,12 @@ def test_toy_motor_unit_runs_only_safe_autonomy_worker() -> None:
     assert "AI_CAT_CONVERSATION_MOTION_PROBABILITY=1.0" in unit
     assert "AI_CAT_CONVERSATION_MOTION_DELAY_SECONDS=1.0" in unit
     assert "AI_CAT_CONVERSATION_POLL_INTERVAL_SECONDS=0.5" in unit
+    assert "AI_CAT_CONVERSATION_HEAD_MIN_INTERVAL_SECONDS=7.0" in unit
+    assert "AI_CAT_CONVERSATION_HEAD_MAX_INTERVAL_SECONDS=10.0" in unit
+    assert "AI_CAT_CONVERSATION_TAIL_ENABLED=true" in unit
+    assert "AI_CAT_CONVERSATION_TAIL_DELAY_SECONDS=2.0" in unit
+    assert "AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS=3.0" in unit
+    assert "AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS=4.5" in unit
 
 
 def test_k1_environment_example_keeps_local_autonomy_speech_enabled() -> None:
@@ -72,6 +78,7 @@ def test_k1_environment_example_keeps_local_autonomy_speech_enabled() -> None:
     assert "AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false" in environment
     assert "AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true" in environment
     assert "AI_CAT_CONVERSATION_MOTION_ENABLED=true" in environment
+    assert "AI_CAT_CONVERSATION_TAIL_ENABLED=false" in environment
 
 
 def test_wake_word_service_does_not_pull_in_cloud_dialog() -> None:

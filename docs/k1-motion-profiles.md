@@ -73,9 +73,11 @@ profile:
 All names and trajectories are compiled into `/usr/bin/ai-toy_app`; HTTP cannot
 provide raw motion parameters. Intensity `0.2` selects the two conversation
 presets through the fixed adapter allowlist; larger values keep using the
-accepted standard gestures. Each AI answer can schedule at most one
-conversation motion after a one-second delay. Listening, thinking, follow-up,
-touch speech, and an already-busy motor never start one.
+accepted standard gestures. While an AI answer is playing, light head motion is
+scheduled every 7-10 seconds and the accepted tail gesture is scheduled every
+3-4.5 seconds. The first head and tail attempts wait one and two seconds
+respectively. Listening, thinking, follow-up, touch speech, and an already-busy
+motor never start or queue a motion.
 
 The three standard axes, `proud_pose`, and `quiet_companion` have passed
 physical acceptance on device `7c2b63fd4a128`. Keep pending presets out of
