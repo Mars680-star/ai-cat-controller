@@ -351,15 +351,13 @@ class GrowthService:
             attribute.value: {
                 "label": GROWTH_ATTRIBUTE_LABELS[attribute],
                 "tendency": behavior["attribute_bands"][attribute.value],
+                "value": round(
+                    attributes[attribute.value] / ATTRIBUTE_SCALE,
+                    2,
+                ),
             }
             for attribute in GrowthAttribute
         }
-        if include_debug_values:
-            for attribute in GrowthAttribute:
-                public_attributes[attribute.value]["value"] = round(
-                    attributes[attribute.value] / ATTRIBUTE_SCALE,
-                    2,
-                )
         return {
             "attributes": public_attributes,
             "active_tags": [tag for tag in public_tags if tag["active"]],

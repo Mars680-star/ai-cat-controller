@@ -1906,9 +1906,24 @@ textarea:hover {
   font-weight: 650;
 }
 
-.tendency-copy strong {
+.tendency-summary {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tendency-summary strong {
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.tendency-value {
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .tendency-meter {
@@ -2144,6 +2159,10 @@ textarea:hover {
   .tendency-meter {
     width: 92px;
     flex-basis: 92px;
+  }
+
+  .tendency-summary {
+    gap: 6px;
   }
 
   .growth-event-delta {

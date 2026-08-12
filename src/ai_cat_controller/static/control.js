@@ -834,18 +834,23 @@
       copy.className = "tendency-copy";
       const label = document.createElement("span");
       label.textContent = attribute.label;
+      const summary = document.createElement("span");
+      summary.className = "tendency-summary";
       const tendency = document.createElement("strong");
-      tendency.textContent = attribute.value === undefined
-        ? attribute.tendency
-        : `${attribute.tendency} · ${attribute.value.toFixed(2)}`;
-      copy.append(label, tendency);
+      tendency.textContent = attribute.tendency;
+      const numericValue = Number(attribute.value ?? 0);
+      const value = document.createElement("span");
+      value.className = "tendency-value";
+      value.textContent = `${numericValue.toFixed(2)} / 100`;
+      summary.append(tendency, value);
+      copy.append(label, summary);
 
       const meter = document.createElement("span");
       meter.className = `tendency-meter tendency-${attributeId}`;
       meter.setAttribute("role", "img");
       meter.setAttribute(
         "aria-label",
-        `${attribute.label}倾向：${attribute.tendency}`,
+        `${attribute.label}倾向：${attribute.tendency}，${numericValue.toFixed(2)}分`,
       );
       const level = growthBandLevels[attribute.tendency] ?? 0;
       for (let index = 0; index < 5; index += 1) {

@@ -371,7 +371,8 @@ def test_local_k1_growth_debug_is_disabled_by_default(tmp_path) -> None:
         )
 
         assert state["debug_values_visible"] is False
-        assert all("value" not in item for item in state["attributes"].values())
+        assert all("value" in item for item in state["attributes"].values())
+        assert state["attributes"]["discipline"]["value"] > 0
         assert all(
             "attribute_delta" not in event for event in state["recent_events"]
         )
