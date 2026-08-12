@@ -161,6 +161,124 @@ def test_intimacy_idempotency_daily_cap_and_unlocks(client: TestClient) -> None:
     assert any(event["points_delta"] == 0 for event in intimacy["history"])
 
 
+def test_level_up_runs_one_celebration_and_local_phrase(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "level-up-celebration.db"
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            enable_growth_personality_v1=True,
+            enable_level_up_celebration=True,
+            enable_tail_motion=True,
+            motion_cooldown_seconds=0.0,
+            data_path=data_path,
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+    played: list[str] = []
+
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="level-up-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-LEVEL-UP",
+        )["pet"]["pet_id"]
+        with sqlite3.connect(data_path) as connection:
+            connection.execute(
+                "UPDATE pets SET intimacy_points = 19 WHERE pet_id = ?",
+                (pet_id,),
+            )
+
+        services = test_client.app.state.services
+        services.product._touch_phrase_player.play_event = played.append
+        first = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={
+                "event_type": "completed_task",
+                "request_id": "level-up-once",
+            },
+        )
+
+        assert first.status_code == 200
+        assert first.json()["data"]["level_up"] == {
+            "from_level": 0,
+            "to_level": 1,
+            "celebration_scheduled": True,
+        }
+
+        deadline = time.monotonic() + 4.0
+        executions: list[dict] = []
+        while time.monotonic() < deadline:
+            executions = test_client.get(
+                f"/api/v1/pets/{pet_id}/actions/executions",
+                headers=headers,
+            ).json()["data"]
+            if played and executions and executions[0]["status"] == "completed":
+                break
+            time.sleep(0.05)
+
+        duplicate = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={
+                "event_type": "completed_task",
+                "request_id": "level-up-once",
+            },
+        ).json()["data"]
+        time.sleep(0.1)
+
+        assert played == ["level_up"]
+        assert len(executions) == 1
+        assert executions[0]["action_id"] == "celebration_combo"
+        assert executions[0]["status"] == "completed"
+        assert duplicate["duplicate"] is True
+        assert "level_up" not in duplicate
+
+
+def test_level_up_celebration_is_disabled_by_default(tmp_path: Path) -> None:
+    data_path = tmp_path / "level-up-disabled.db"
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            motion_cooldown_seconds=0.0,
+            data_path=data_path,
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="level-up-disabled-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-LEVEL-UP-DISABLED",
+        )["pet"]["pet_id"]
+        with sqlite3.connect(data_path) as connection:
+            connection.execute(
+                "UPDATE pets SET intimacy_points = 19 WHERE pet_id = ?",
+                (pet_id,),
+            )
+
+        event = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={
+                "event_type": "completed_task",
+                "request_id": "level-up-disabled",
+            },
+        ).json()["data"]
+
+        assert event["level"]["level"] == 1
+        assert "level_up" not in event
+        assert test_client.get(
+            f"/api/v1/pets/{pet_id}/actions/executions",
+            headers=headers,
+        ).json()["data"] == []
+
+
 def test_growth_api_reuses_existing_interactions_and_dialogs(client: TestClient) -> None:
     headers, _ = _login(client, code="growth-events-user")
     pet_id = _bind(

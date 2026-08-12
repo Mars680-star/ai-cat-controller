@@ -19,6 +19,7 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import (
     AiCatError,
     ActionConflictError,
+    ActionTimeoutError,
     AdapterNotImplementedError,
     AuthenticationError,
     DeviceUnavailableError,
@@ -54,6 +55,8 @@ TOUCH_ACTION_BY_SENSOR = {
     "right_foot": "head_shake",
 }
 TOUCH_MOTION_READY_STATES = {"offline", "ready", "interrupted"}
+LEVEL_UP_READY_STATES = {"offline", "ready", "interrupted"}
+LEVEL_UP_READY_TIMEOUT_SECONDS = 90.0
 PRODUCT_DATA_RESET_READY_STATES = {"offline", "ready", "interrupted", "unavailable"}
 
 
@@ -84,6 +87,8 @@ class ProductMockService:
         self._dialog_sync_lock = asyncio.Lock()
         self._touch_motion_lock = asyncio.Lock()
         self._touch_speech_lock = asyncio.Lock()
+        self._level_up_celebration_lock = asyncio.Lock()
+        self._level_up_celebration_tasks: set[asyncio.Task[None]] = set()
         self._product_data_reset_lock = asyncio.Lock()
         self._last_touch_motion_at = 0.0
         self._last_touch_speech_at: dict[str, float] = {}
@@ -376,6 +381,27 @@ class ProductMockService:
         )
         event["level"] = level_for_points(event["points_after"]).model_dump()
         event["progress"] = level_progress(event["points_after"])
+        previous_points = max(
+            int(event["points_after"]) - int(event["points_delta"]),
+            0,
+        )
+        previous_level = level_for_points(previous_points).level
+        current_level = int(event["level"]["level"])
+        if (
+            self._settings.enable_level_up_celebration
+            and not event["duplicate"]
+            and current_level > previous_level
+        ):
+            event["level_up"] = {
+                "from_level": previous_level,
+                "to_level": current_level,
+                "celebration_scheduled": self._schedule_level_up_celebration(
+                    user_id=user_id,
+                    pet_id=pet_id,
+                    interaction_event_id=str(event["event_id"]),
+                    to_level=current_level,
+                ),
+            }
         event["growth"] = await self._safe_record_interaction_growth(
             user_id=user_id,
             pet_id=pet_id,
@@ -495,6 +521,8 @@ class ProductMockService:
         pet_id: str,
         action_id: str,
         request_id: str,
+        system_trigger: bool = False,
+        local_event_after_completion: str | None = None,
     ) -> dict[str, Any]:
         action = ACTION_BY_ID.get(action_id)
         if action is None:
@@ -503,7 +531,7 @@ class ProductMockService:
         if not bool(pet["online"]):
             raise DeviceUnavailableError("设备离线，无法执行动作")
         level = level_for_points(int(pet["intimacy_points"])).level
-        if not self._action_is_unlocked(
+        if not system_trigger and not self._action_is_unlocked(
             action, pet["personality_id"], level
         ):
             raise ActionConflictError("当前性格或亲密度尚未解锁该动作")
@@ -563,7 +591,11 @@ class ProductMockService:
         )
         token = result["execution_token"]
         finalizer = asyncio.create_task(
-            self._finalize_action(execution["execution_id"], token),
+            self._finalize_action(
+                execution["execution_id"],
+                token,
+                local_event_after_completion,
+            ),
             name=f"product-action-{execution['execution_id']}",
         )
         self._finalizers.add(finalizer)
@@ -574,7 +606,12 @@ class ProductMockService:
             "duplicate": False,
         }
 
-    async def _finalize_action(self, execution_id: str, token: str) -> None:
+    async def _finalize_action(
+        self,
+        execution_id: str,
+        token: str,
+        local_event_after_completion: str | None = None,
+    ) -> None:
         try:
             outcome = await self._motion.await_execution(token)
             status = {
@@ -590,6 +627,18 @@ class ProductMockService:
                 result="预设动作执行完成" if status == "completed" else None,
                 error=None if status == "completed" else f"动作结果: {status}",
             )
+            if status == "completed" and local_event_after_completion is not None:
+                try:
+                    async with self._touch_speech_lock:
+                        path = await asyncio.to_thread(
+                            self._touch_phrase_player.play_event,
+                            local_event_after_completion,
+                        )
+                    LOGGER.info("local event phrase played: %s", path)
+                except Exception:
+                    LOGGER.exception(
+                        "local event phrase playback skipped after completed action"
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -598,6 +647,96 @@ class ProductMockService:
                 execution_id,
                 status="failed",
                 error=str(exc),
+            )
+
+    def _schedule_level_up_celebration(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        interaction_event_id: str,
+        to_level: int,
+    ) -> bool:
+        task = asyncio.create_task(
+            self._run_level_up_celebration(
+                user_id=user_id,
+                pet_id=pet_id,
+                interaction_event_id=interaction_event_id,
+                to_level=to_level,
+            ),
+            name=f"level-up-celebration-{interaction_event_id}",
+        )
+        self._finalizers.add(task)
+        self._level_up_celebration_tasks.add(task)
+        task.add_done_callback(self._finalizers.discard)
+        task.add_done_callback(self._level_up_celebration_tasks.discard)
+        return True
+
+    async def _run_level_up_celebration(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        interaction_event_id: str,
+        to_level: int,
+    ) -> None:
+        try:
+            async with self._level_up_celebration_lock:
+                deadline = time.monotonic() + LEVEL_UP_READY_TIMEOUT_SECONDS
+                while time.monotonic() < deadline:
+                    try:
+                        await self._motion.wait_until_idle(
+                            timeout=min(
+                                self._settings.command_timeout_seconds + 5.0,
+                                max(deadline - time.monotonic(), 0.1),
+                            )
+                        )
+                    except ActionTimeoutError:
+                        continue
+                    dialog_status = await self._adapter.get_dialog_status()
+                    dialog_state = str(
+                        dialog_status.get("state", "unavailable")
+                    )
+                    if (
+                        not dialog_status.get("session_active")
+                        and not dialog_status.get("stale")
+                        and dialog_state in LEVEL_UP_READY_STATES
+                    ):
+                        break
+                    await asyncio.sleep(0.5)
+                else:
+                    LOGGER.warning(
+                        "level-up celebration expired while dialog was busy: level=%s",
+                        to_level,
+                    )
+                    return
+
+                # ``wait_until_idle`` can return just as the motion cooldown
+                # starts. Wait out that bounded safety interval before the
+                # one-shot celebration is submitted.
+                await asyncio.sleep(
+                    self._settings.motion_cooldown_seconds + 0.05
+                )
+                await self.execute_action(
+                    user_id=user_id,
+                    pet_id=pet_id,
+                    action_id="celebration_combo",
+                    request_id=f"level-up:{interaction_event_id}:celebration",
+                    system_trigger=True,
+                    local_event_after_completion="level_up",
+                )
+                LOGGER.info(
+                    "level-up celebration submitted: level=%s event=%s",
+                    to_level,
+                    interaction_event_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception(
+                "level-up celebration skipped: level=%s event=%s",
+                to_level,
+                interaction_event_id,
             )
 
     async def action_executions(
@@ -657,7 +796,7 @@ class ProductMockService:
             await self._sync_personality(pet)
 
         action_result: dict[str, Any] | None = None
-        if trigger_action:
+        if trigger_action and "level_up" not in intimacy_event:
             unlocked_defaults = [
                 action_id
                 for action_id in personality.default_actions
@@ -1049,13 +1188,19 @@ class ProductMockService:
             request_id=request_id,
             metadata=metadata,
         )
-        event["touch_action"] = await self._trigger_touch_action(
-            user_id=str(pet["owner_user_id"]),
-            pet_id=str(pet["pet_id"]),
-            request_id=request_id,
-            sensor=str(metadata.get("sensor", "")),
-            duplicate=bool(event.get("duplicate")),
-        )
+        if "level_up" in event:
+            event["touch_action"] = {
+                "status": "skipped",
+                "reason": "level_up_celebration",
+            }
+        else:
+            event["touch_action"] = await self._trigger_touch_action(
+                user_id=str(pet["owner_user_id"]),
+                pet_id=str(pet["pet_id"]),
+                request_id=request_id,
+                sensor=str(metadata.get("sensor", "")),
+                duplicate=bool(event.get("duplicate")),
+            )
         return event
 
     async def _trigger_touch_action(
@@ -1344,6 +1489,8 @@ class ProductMockService:
             }
 
     async def shutdown(self) -> None:
+        for task in tuple(self._level_up_celebration_tasks):
+            task.cancel()
         if self._finalizers:
             await asyncio.gather(*tuple(self._finalizers), return_exceptions=True)
 

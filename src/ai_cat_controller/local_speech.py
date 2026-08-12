@@ -19,6 +19,7 @@ from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY
 DEFAULT_ASSET_ROOT = Path("/opt/ai-cat-controller/assets/local-speech")
 DEFAULT_MARKER_PATH = Path("/run/ai-cat/local-speech-active")
 DEFAULT_PLAYER_PATH = Path("/usr/bin/paplay")
+DEFAULT_OUTPUT_DEVICE = "alsa_output.platform-snd-card_1.stereo-fallback"
 PLAYER_TIMEOUT_SECONDS = 15.0
 TOUCH_PHRASES = {
     "head": "摸摸头，好舒服呀。",
@@ -26,6 +27,9 @@ TOUCH_PHRASES = {
     "nose": "呀，鼻子有点痒。",
     "left_foot": "你碰到我的左爪啦。",
     "right_foot": "你碰到我的右爪啦。",
+}
+EVENT_PHRASES = {
+    "level_up": "太棒啦，我们的羁绊又更深了一步！",
 }
 
 
@@ -57,6 +61,12 @@ def touch_phrase_asset_path(
     return asset_root / "shared" / f"touch-{sensor}.wav"
 
 
+def event_phrase_asset_path(asset_root: Path, event: str) -> Path:
+    if event not in EVENT_PHRASES:
+        raise LocalSpeechError("local event is not allowlisted for local speech")
+    return asset_root / "shared" / f"event-{event}.wav"
+
+
 class LocalPhrasePlayer:
     """Play only generated phrase assets from the fixed local asset tree."""
 
@@ -66,12 +76,14 @@ class LocalPhrasePlayer:
         asset_root: Path = DEFAULT_ASSET_ROOT,
         marker_path: Path = DEFAULT_MARKER_PATH,
         player_path: Path = DEFAULT_PLAYER_PATH,
+        output_device: str = DEFAULT_OUTPUT_DEVICE,
         timeout_seconds: float = PLAYER_TIMEOUT_SECONDS,
         run_command: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     ) -> None:
         self._asset_root = asset_root
         self._marker_path = marker_path
         self._player_path = player_path
+        self._output_device = output_device
         self._timeout_seconds = timeout_seconds
         self._run_command = run_command
 
@@ -89,6 +101,10 @@ class LocalPhrasePlayer:
             sensor,
         )
         return self._play_asset(expected_path, f"touch-{sensor}")
+
+    def play_event(self, event: str) -> Path:
+        expected_path = event_phrase_asset_path(self._asset_root, event)
+        return self._play_asset(expected_path, f"event-{event}")
 
     def validate_personality_assets(self) -> tuple[Path, ...]:
         try:
@@ -153,6 +169,7 @@ class LocalPhrasePlayer:
                 result = self._run_command(
                     [
                         str(self._player_path),
+                        f"--device={self._output_device}",
                         "--client-name=ai-cat-local-speech",
                         f"--stream-name={stream_name}",
                         str(asset),

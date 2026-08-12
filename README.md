@@ -18,6 +18,15 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 
 修改人：Mars
 
+- 新增亲密度升级庆祝：每日见面、有效对话、实体触摸或完成任务使亲密度跨级时，
+  自动等待语音会话和当前电机动作结束，再执行固定 `celebration_combo`；动作完成后
+  本地播放“太棒啦，我们的羁绊又更深了一步！”。重复请求不会重复庆祝，触摸升级
+  时庆祝动作优先于普通触摸反馈，网页手动调用仍遵守原等级解锁规则。功能由默认
+  关闭的 `AI_CAT_ENABLE_LEVEL_UP_CELEBRATION` 控制，本地语音不启动火山云端；新增
+  1 个控制台当前音色的共享 WAV。采集工具会先避开云端启动欢迎语，缓存语音固定
+  走实体扬声器，避免云端关闭时虚拟回声消除输出静默；现场复听文案正确，完整
+  自动化测试为 `235 passed`。部署恢复点为
+  `/root/ai-cat-backups/before-growth-v1-20260812T050410Z-3417`。
 - 修复每日见面未增加亲密度：用户当天首次登录已有宠物或完成新绑定时自动登记
   `daily_check_in +3`，手动按钮保留为失败重试入口，完成后显示“今日已见面”。服务端
   使用“宠物 + K1 本地日期”生成幂等键，并按本地自然日统计次数和每日增长上限，
@@ -544,6 +553,7 @@ export AI_CAT_ENABLE_TAIL_MOTION=false
 export AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS=false
 export AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY=false
 export AI_CAT_ENABLE_PRODUCT_DATA_RESET=false
+export AI_CAT_ENABLE_LEVEL_UP_CELEBRATION=false
 export AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_MAX_INTERVAL_SECONDS=180
 export AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0
@@ -563,15 +573,16 @@ export AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS=3.0
 export AI_CAT_CONVERSATION_TAIL_MAX_INTERVAL_SECONDS=4.5
 ```
 
-首次部署应确认私有仓库内的 20 个 WAV 已同步：
+首次部署应确认私有仓库内的 21 个 WAV 已同步：
 
 ```bash
 find /opt/ai-cat-controller/assets/local-speech -type f -name '*.wav' | wc -l
-# 预期：20（15 个性格主动短语 + 5 个共享触摸短语）
+# 预期：21（15 个性格主动短语 + 5 个共享触摸短语 + 1 个升级提示语）
 ```
 
 只有修改短语或在火山引擎控制台更换音色时，才在已完成火山鉴权的 K1 上以管理员
-身份运行 `tools/capture_cloud_phrase_assets.py --kind all` 重新缓存；工具不会
+身份运行
+`sg pulse-access -c 'tools/capture_cloud_phrase_assets.py --kind all'` 重新缓存；工具不会
 覆盖控制台音色，结束后会恢复原性格运行时并关闭云端服务。
 
 不要将真实 API Key、火山 ProductSecret 或设备鉴权缓存提交到 GitHub。

@@ -23,7 +23,9 @@ from ai_cat_controller.domain.personalities import (
 )
 from ai_cat_controller.local_speech import (
     DEFAULT_ASSET_ROOT,
+    EVENT_PHRASES,
     TOUCH_PHRASES,
+    event_phrase_asset_path,
     phrase_asset_path,
     touch_phrase_asset_path,
 )
@@ -39,6 +41,7 @@ API_URL = "http://127.0.0.1:8000/api/v1/dialog/speak"
 CAPTURE_TIMEOUT_SECONDS = 30.0
 CAPTURE_FALLBACK_SECONDS = 8.0
 CAPTURE_ATTEMPTS = 2
+STARTUP_WELCOME_SETTLE_SECONDS = 4.0
 
 
 def read_env_value(path: Path, name: str) -> str:
@@ -279,7 +282,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--kind",
-        choices=("proactive", "touch", "all"),
+        choices=("proactive", "touch", "event", "all"),
         default="proactive",
     )
     args = parser.parse_args()
@@ -297,6 +300,10 @@ def main() -> None:
             timeout=40.0,
         )
         wait_for_runtime(runtime["revision"])
+        # The cloud sends its configured welcome phrase immediately after a
+        # fresh session becomes ready. Do not let that uncorrelated audio be
+        # mistaken for the first requested cached phrase.
+        time.sleep(STARTUP_WELCOME_SETTLE_SECONDS)
         if args.kind in {"proactive", "all"}:
             for personality in PERSONALITIES:
                 for index, phrase in enumerate(personality.proactive_phrases):
@@ -320,6 +327,18 @@ def main() -> None:
                     phrase,
                     target=target,
                     request_name=f"touch-{sensor}",
+                )
+                print(f"captured shared/{path.name}: {duration:.2f}s")
+        if args.kind in {"event", "all"}:
+            for index, (event, phrase) in enumerate(EVENT_PHRASES.items()):
+                target = event_phrase_asset_path(DEFAULT_ASSET_ROOT, event)
+                path, duration = capture_phrase_with_retry(
+                    api_key,
+                    "shared-event",
+                    index,
+                    phrase,
+                    target=target,
+                    request_name=f"event-{event}",
                 )
                 print(f"captured shared/{path.name}: {duration:.2f}s")
     finally:

@@ -67,8 +67,8 @@ profile:
 | `conversation_nod` | Move the up/down head axis from center 90 to 108 degrees at speed 1, then return | Accepted |
 | `proud_pose` | Hold head to one side for 1.2 s, wag tail once, return to center over 0.6 s | Accepted |
 | `quiet_companion` | Shallow head-down target at speed 1, then return to center | Accepted |
-| `greeting_combo` | Standard nod at speed 2, then one standard tail gesture | Pending |
-| `celebration_combo` | Standard head shake, nod, then one standard tail gesture | Pending |
+| `greeting_combo` | Standard nod at speed 2, then one standard tail gesture | Accepted |
+| `celebration_combo` | Standard head shake, nod, then one standard tail gesture | Accepted |
 
 All names and trajectories are compiled into `/usr/bin/ai-toy_app`; HTTP cannot
 provide raw motion parameters. Intensity `0.2` selects the two conversation
@@ -79,6 +79,6 @@ scheduled every 7-10 seconds and the accepted tail gesture is scheduled every
 respectively. Listening, thinking, follow-up, touch speech, and an already-busy
 motor never start or queue a motion.
 
-The three standard axes, `proud_pose`, and `quiet_companion` have passed
-physical acceptance on device `7c2b63fd4a128`. Keep pending presets out of
-unattended behavior until their individual physical checks are complete.
+The three standard axes and all four fixed product presets have passed physical
+acceptance on device `7c2b63fd4a128`. Do not reuse this acceptance on a device
+whose motor mapping or effective range differs.
