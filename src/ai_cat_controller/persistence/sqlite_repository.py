@@ -6,7 +6,7 @@ import json
 import math
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +24,20 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _utc_date() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+def _local_day_utc_bounds(now: datetime | None = None) -> tuple[str, str]:
+    local_now = datetime.now().astimezone() if now is None else now
+    if local_now.tzinfo is None:
+        raise ValueError("local day calculation requires a timezone-aware datetime")
+    local_start = datetime.combine(
+        local_now.date(),
+        datetime_time.min,
+        tzinfo=local_now.tzinfo,
+    )
+    local_end = local_start + timedelta(days=1)
+    return (
+        local_start.astimezone(timezone.utc).isoformat(),
+        local_end.astimezone(timezone.utc).isoformat(),
+    )
 
 
 def _stable_id(prefix: str, value: str) -> str:
@@ -479,7 +491,7 @@ class SQLiteRepository:
         request_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
-        today = _utc_date()
+        day_start, day_end = _local_day_utc_bounds()
         now = _utc_now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -505,17 +517,17 @@ class SQLiteRepository:
                     """
                     SELECT COUNT(*) FROM interaction_events
                     WHERE pet_id = ? AND event_type = ?
-                      AND substr(created_at, 1, 10) = ?
+                      AND created_at >= ? AND created_at < ?
                     """,
-                    (pet_id, event_type, today),
+                    (pet_id, event_type, day_start, day_end),
                 ).fetchone()[0]
                 positive_today = connection.execute(
                     """
                     SELECT COALESCE(SUM(points_delta), 0) FROM interaction_events
                     WHERE pet_id = ? AND points_delta > 0
-                      AND substr(created_at, 1, 10) = ?
+                      AND created_at >= ? AND created_at < ?
                     """,
-                    (pet_id, today),
+                    (pet_id, day_start, day_end),
                 ).fetchone()[0]
 
             reason: str | None = None
@@ -587,6 +599,26 @@ class SQLiteRepository:
                 (pet_id, user_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def has_interaction_today(
+        self,
+        user_id: str,
+        pet_id: str,
+        event_type: str,
+    ) -> bool:
+        day_start, day_end = _local_day_utc_bounds()
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            row = connection.execute(
+                """
+                SELECT 1 FROM interaction_events
+                WHERE pet_id = ? AND user_id = ? AND event_type = ?
+                  AND created_at >= ? AND created_at < ?
+                LIMIT 1
+                """,
+                (pet_id, user_id, event_type, day_start, day_end),
+            ).fetchone()
+        return row is not None
 
     def get_growth_attributes(self, pet_id: str) -> dict[str, int]:
         attributes = {attribute.value: 0 for attribute in GrowthAttribute}

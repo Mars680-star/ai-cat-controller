@@ -67,6 +67,9 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert 'viewName === "personality"' in script.text
     assert "growthBandLevels" in script.text
     assert 'value.textContent = `${numericValue.toFixed(2)} / 100`' in script.text
+    assert "ensureDailyMeeting" in script.text
+    assert 'eventType === "daily_check_in"' in script.text
+    assert 'id="daily-meeting-button"' in client.get("/control").text
     assert "settingsVolumeDirty" in script.text
     assert "settingsVolumeSyncAllowed = !state.settingsVolumeDirty" in script.text
     assert "syncSettingsVolume: settingsVolumeSyncAllowed" in script.text

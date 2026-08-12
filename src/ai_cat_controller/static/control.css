@@ -1804,6 +1804,19 @@ textarea:hover {
   border-color: #d2b35e;
 }
 
+.interaction-button:disabled {
+  cursor: default;
+  color: #667068;
+  background: #f2f6f2;
+  border-color: #d6e1d8;
+  border-left-color: var(--success);
+  opacity: 1;
+}
+
+.interaction-button:disabled span {
+  color: var(--success);
+}
+
 .interaction-button span {
   color: #8a610c;
 }

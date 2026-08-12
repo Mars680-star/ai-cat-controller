@@ -84,6 +84,7 @@
     currentUnlocks: $("#current-unlocks"),
     nextUnlocks: $("#next-unlocks"),
     interactionButtons: $$(".interaction-button"),
+    dailyMeetingButton: $("#daily-meeting-button"),
     interactionHistory: $("#interaction-history"),
     interactionHistoryCount: $("#interaction-history-count"),
     growthTags: $("#growth-tags"),
@@ -341,6 +342,13 @@
     });
   }
 
+  function localDateKey(value = new Date()) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
   function reportError(error) {
     setTopStatus(error.status === 401 ? "会话失效" : "服务异常", false);
     showToast(error.message, "error");
@@ -376,6 +384,7 @@
     if (pets.length > 0) {
       state.petId = pets[0].pet_id;
       setBoundNavigation(true);
+      await ensureDailyMeeting().catch(reportError);
       await refreshAll();
       switchView(state.activeView);
     } else {
@@ -570,6 +579,7 @@
     state.intimacyPoints = null;
     state.petId = payload.data.pet.pet_id;
     setBoundNavigation(true);
+    await ensureDailyMeeting().catch(reportError);
     await refreshAll();
     if (payload.data.blind_box_revealed) {
       const personality = payload.data.personality;
@@ -766,22 +776,50 @@
     fillList(ui.currentUnlocks, data.current_unlocks, "暂无");
     fillList(ui.nextUnlocks, data.next_unlocks, "已全部解锁");
     renderInteractionHistory(data.history);
+    const metToday = data.daily_check_in_completed;
+    ui.dailyMeetingButton.disabled = metToday;
+    ui.dailyMeetingButton.querySelector("strong").textContent = metToday
+      ? "今日已见面"
+      : "每日见面";
+    ui.dailyMeetingButton.querySelector("span").textContent = metToday
+      ? "已完成"
+      : "+3";
   }
 
-  async function addInteraction(eventType) {
+  async function submitInteraction(eventType) {
+    const requestId = eventType === "daily_check_in"
+      ? `ui-daily-check-in-${state.petId}-${localDateKey()}`
+      : `ui-${eventType}-${Date.now()}`;
     const payload = await apiRequest(
       `/api/v1/pets/${encodeURIComponent(state.petId)}/interactions`,
       {
         method: "POST",
         body: JSON.stringify({
           event_type: eventType,
-          request_id: `ui-${eventType}-${Date.now()}`,
+          request_id: requestId,
           metadata: {source: "browser_mock"},
         }),
       },
     );
-    const event = payload.data;
-    const message = event.points_delta === 0
+    return payload.data;
+  }
+
+  async function ensureDailyMeeting() {
+    if (!state.petId) {
+      return null;
+    }
+    const event = await submitInteraction("daily_check_in");
+    if (!event.duplicate && event.points_delta > 0) {
+      showToast(`每日见面，亲密度 +${event.points_delta}`);
+    }
+    return event;
+  }
+
+  async function addInteraction(eventType) {
+    const event = await submitInteraction(eventType);
+    const message = event.duplicate && eventType === "daily_check_in"
+      ? "今天已经见过面啦"
+      : event.points_delta === 0
       ? (event.reason || "本次亲密度未变化")
       : `亲密度 ${event.points_delta > 0 ? "+" : ""}${event.points_delta}`;
     showToast(message);

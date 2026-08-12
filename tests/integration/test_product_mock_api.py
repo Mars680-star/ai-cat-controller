@@ -192,6 +192,14 @@ def test_growth_api_reuses_existing_interactions_and_dialogs(client: TestClient)
         headers=headers,
         json={"event_type": "daily_check_in", "request_id": "growth-daily"},
     ).json()["data"]
+    repeated_daily_meeting = client.post(
+        f"/api/v1/pets/{pet_id}/interactions",
+        headers=headers,
+        json={
+            "event_type": "daily_check_in",
+            "request_id": "growth-daily-second-client-request",
+        },
+    ).json()["data"]
     dialog = client.post(
         f"/api/v1/pets/{pet_id}/dialogs",
         headers=headers,
@@ -201,6 +209,14 @@ def test_growth_api_reuses_existing_interactions_and_dialogs(client: TestClient)
     assert first_task["growth"]["duplicate"] is False
     assert duplicate_task["growth"]["duplicate"] is True
     assert daily_meeting["growth"]["duplicate"] is False
+    assert daily_meeting["points_delta"] == 3
+    assert repeated_daily_meeting["duplicate"] is True
+    assert repeated_daily_meeting["event_id"] == daily_meeting["event_id"]
+    intimacy = client.get(
+        f"/api/v1/pets/{pet_id}/intimacy",
+        headers=headers,
+    ).json()["data"]
+    assert intimacy["daily_check_in_completed"] is True
     assert dialog["growth_event"]["duplicate"] is False
     growth = client.get(
         f"/api/v1/pets/{pet_id}/growth",

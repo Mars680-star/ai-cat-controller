@@ -1,8 +1,22 @@
 import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
+from ai_cat_controller.persistence.sqlite_repository import (
+    SQLiteRepository,
+    _local_day_utc_bounds,
+)
+
+
+def test_local_day_bounds_use_device_timezone() -> None:
+    start, end = _local_day_utc_bounds(
+        datetime(2026, 8, 12, 7, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    )
+
+    assert start == "2026-08-11T16:00:00+00:00"
+    assert end == "2026-08-12T16:00:00+00:00"
 
 
 def _bound_pet(repository: SQLiteRepository, *, user_code: str, serial: str) -> tuple[str, str]:

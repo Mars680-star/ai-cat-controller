@@ -250,8 +250,16 @@ class ProductMockService:
         dashboard = await self.dashboard(user_id, pet_id)
         points = dashboard["intimacy"]["points"]
         current_level = level_for_points(points)
-        history = await asyncio.to_thread(
-            self._repository.list_interactions, user_id, pet_id, 30
+        history, daily_check_in_completed = await asyncio.gather(
+            asyncio.to_thread(
+                self._repository.list_interactions, user_id, pet_id, 30
+            ),
+            asyncio.to_thread(
+                self._repository.has_interaction_today,
+                user_id,
+                pet_id,
+                "daily_check_in",
+            ),
         )
         next_level = (
             INTIMACY_LEVELS[current_level.level + 1]
@@ -265,6 +273,7 @@ class ProductMockService:
                 self._settings.debug_unlimited_touch_intimacy
             ),
             "rules": [rule.model_dump() for rule in INTERACTION_RULES.values()],
+            "daily_check_in_completed": daily_check_in_completed,
             "history": history,
             "current_unlocks": current_level.unlocks,
             "next_unlocks": next_level.unlocks if next_level else (),
@@ -340,6 +349,15 @@ class ProductMockService:
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
         rule = INTERACTION_RULES[event_type]
+        if event_type == "daily_check_in":
+            client_request_id = request_id
+            local_date = datetime.now().astimezone().date().isoformat()
+            request_id = f"daily-check-in:{pet_id}:{local_date}"
+            metadata = {
+                **metadata,
+                "client_request_id": client_request_id,
+                "local_date": local_date,
+            }
         enforce_limits = not (
             event_type == "touch"
             and self._settings.debug_unlimited_touch_intimacy
