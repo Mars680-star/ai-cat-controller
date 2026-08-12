@@ -12,6 +12,9 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 ./scripts/run_mock.sh
 ```
 
+微信小程序第一阶段的页面结构、视觉规范、Mock 数据层和后续接口迁移边界见
+[`docs/wechat-mini-program-ui-requirements.md`](docs/wechat-mini-program-ui-requirements.md)。
+
 ## 更新记录
 
 ### 2026-08-12
