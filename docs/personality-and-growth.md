@@ -2,33 +2,38 @@
 
 ## 五种性格
 
-| ID | 性格 | 对话风格 | 火山音色 | `voice_type` | 语音动作白名单 |
+| ID | 性格 | 对话风格 | 音色来源 | `voice_type` 标记 | 语音动作白名单 |
 |---|---|---|---|---|---|
-| `sunny_explorer` | 元气探险家 | 明快、有活力、邀请探索 | 撒娇学妹 | `zh_female_yuanqinvyou_moon_bigtts` | 摇头、点头、摇尾 |
-| `gentle_companion` | 温柔陪伴者 | 柔和、慢节奏、先倾听 | 温柔小雅 | `zh_female_wenrouxiaoya_moon_bigtts` | 点头 |
-| `proud_star` | 傲娇小明星 | 俏皮、嘴硬心软、不贬低用户 | 傲娇霸总 | `zh_male_aojiaobazong_moon_bigtts` | 摇头、点头 |
-| `curious_scholar` | 好奇小博士 | 清晰解释、鼓励验证 | 少年梓辛 | `zh_male_shaonianzixin_moon_bigtts` | 点头、摇头、摇尾 |
-| `calm_guardian` | 沉稳守护者 | 稳重直接、优先安全 | 渊博小叔 | `zh_male_yuanboxiaoshu_moon_bigtts` | 点头 |
+| `sunny_explorer` | 元气探险家 | 明快、有活力、邀请探索 | 火山控制台当前音色 | `volcengine_console` | 摇头、点头、摇尾 |
+| `gentle_companion` | 温柔陪伴者 | 柔和、慢节奏、先倾听 | 火山控制台当前音色 | `volcengine_console` | 点头 |
+| `proud_star` | 傲娇小明星 | 俏皮、嘴硬心软、不贬低用户 | 火山控制台当前音色 | `volcengine_console` | 摇头、点头 |
+| `curious_scholar` | 好奇小博士 | 清晰解释、鼓励验证 | 火山控制台当前音色 | `volcengine_console` | 点头、摇头、摇尾 |
+| `calm_guardian` | 沉稳守护者 | 稳重直接、优先安全 | 火山控制台当前音色 | `volcengine_console` | 点头 |
 
 完整提示词、等级称呼、动作触发规则和禁止内容位于
 `src/ai_cat_controller/domain/personalities.py`。首次创建宠物实例时随机选择性格；
 重新绑定只恢复原性格，不重新抽取。
 
-Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖性格配置：
+Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态更新性格配置。音色不
+属于性格配置，全部由火山引擎控制台统一管理：
 
 1. FastAPI 根据设备序列号找到已绑定宠物，并组合性格、人名、亲密度称呼、禁止
    内容和可用动作。
 2. 配置原子写入
    `/var/lib/ai-cat-controller/personality-runtime.json`，权限为 `0600`。
 3. 原生对话进程只在没有唤醒、收音、思考、播放或工具执行时读取新 revision，
-   通过火山 `session.update` 更新 `LLMConfig.SystemMessages` 和
-   `TTSConfig.ProviderParams.audio.voice_type`。
+   通过火山 `session.update` 只更新 `LLMConfig.SystemMessages`，不会发送
+   `TTSConfig` 或覆盖 `voice_type`。
 4. 原生 Function Calling 在执行电机前再次检查性格动作白名单；不允许的动作只
    返回拒绝结果，不启动电机。
 5. `toy_motor.service` 从 `/api/v1/personality/runtime` 读取同一性格的安全头部
    动作权重与固定主动短语。K1 使用预生成 WAV 本地播放，每 3 分钟最多 1 句，
    不启动火山服务；播放期间通过 `/run/ai-cat/local-speech-active` 暂停唤醒收音。
-   WAV 由每种性格对应的火山音色一次性数字缓存，头部动作结束 2.2 秒后再播放。
+   15 个主动短语 WAV 使用控制台当前音色一次性缓存，头部动作结束 2.2 秒后再
+   播放。控制台更换音色后必须重新生成这些离线资源。
+
+运行时的 `voice_type=volcengine_console` 和 `voice_source=volcengine_console`
+仅表示音色归控制台管理，不是火山实际发音人 ID。
 
 绑定、宠物改名、亲密度跨级和 FastAPI 重启都会刷新配置。设备重启后 SQLite 与
 运行时文件会恢复当前性格。`GET /api/v1/personality/runtime` 中
@@ -47,7 +52,7 @@ Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖
 | 3 | 100-179 | 深度羁绊 | 庆祝动作、主动陪伴、专属语气 |
 | 4 | 180+ | 灵魂伙伴 | 全部动作、最高亲密称呼、纪念日问候 |
 
-默认每日正向增长上限为 20，可通过
+默认每日正向增长上限为 50，可通过
 `AI_CAT_INTIMACY_DAILY_CAP` 调整。
 
 | 事件 | 分值 | 每日次数上限 |
@@ -58,9 +63,25 @@ Local K1 复用一个火山智能体，在当前 WebSocket 会话中动态覆盖
 | 完成互动任务 | +5 | 2 |
 | 忽略主动问候 | -1 | 2 |
 
-每个事件必须携带 `request_id`。重复 ID 返回原结果，不重复计分。当前浏览器的
-触摸和完成任务按钮是人工触发 Mock；生产版本应由设备传感器和服务端任务状态签名
-上报，不能信任小程序直接声明。
+每个事件必须携带 `request_id`。重复 ID 返回原结果，不重复计分。Local K1 会从
+`toy_main` 日志增量导入头部、背部、左右脚和鼻部的实体触摸，并复用相同的幂等、
+每日次数与总增长上限。监控从文件末尾开始，不会在服务重启后重放历史触摸。
+现场调试可临时设置 `AI_CAT_DEBUG_UNLIMITED_TOUCH_INTIMACY=true`，仅让 `touch`
+事件跳过每日次数和总增长上限；幂等保护以及其他互动规则不变，正式环境必须关闭。
+当前 K1 样机的厂商日志标签与实体接线不一致，输入层会将 `nose`/`head` 和
+`back`/`left_foot` 分别交换，`right_foot` 保持不变；原始标签记录在
+`hardware_sensor`，后续动作、语音和亲密度均使用修正后的 `sensor`。
+实体触摸同时通过统一动作调度器提供反馈：头部/背部使用 `head_nod`，鼻部/左右脚
+使用 `head_shake`。对话会话活跃、状态异常、电机繁忙、重复事件或 3 秒冷却期内
+跳过动作，但不影响本次亲密度规则处理。触摸不会调用尾部动作。
+
+动作完成后可播放对应部位的固定本地短语。系统共享 5 个控制台当前音色 WAV，
+分别用于头部、背部、鼻部、左脚和右脚；播放不启动云端服务，且使用与本地主动
+短语相同的播放标记暂停唤醒收音。只有动作成功进入调度时才安排短语，冷却或忙碌
+状态不会单独播音。
+
+浏览器仍保留触摸调试按钮；“完成任务”目前由网页人工确认。正式小程序阶段应改为
+服务端任务状态签名上报，不能信任客户端直接声明任务完成。
 
 ## 动作安全
 

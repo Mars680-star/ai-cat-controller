@@ -14,14 +14,14 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.domain.intimacy import level_for_points
 from ai_cat_controller.domain.personalities import (
     PERSONALITY_BY_ID,
+    VOLCENGINE_CONSOLE_VOICE_ID,
+    VOLCENGINE_CONSOLE_VOICE_NAME,
     PersonalityDefinition,
 )
 from ai_cat_controller.persistence.sqlite_repository import SQLiteRepository
 
 LOGGER = logging.getLogger(__name__)
 MAX_RUNTIME_BYTES = 32 * 1024
-TTS_PROVIDER = "volcano_bidirection"
-TTS_RESOURCE_ID = "volc.service_type.10029"
 FUNCTION_LABELS = {
     "shake_head": "左右轻轻摇头",
     "nod_head": "上下轻轻点头",
@@ -128,10 +128,9 @@ class PersonalityService:
             "personality_name": personality.name,
             "intimacy_level": level,
             "address": style.address,
-            "voice_name": personality.voice_name,
-            "voice_type": personality.voice_id,
-            "tts_provider": TTS_PROVIDER,
-            "tts_resource_id": TTS_RESOURCE_ID,
+            "voice_name": VOLCENGINE_CONSOLE_VOICE_NAME,
+            "voice_type": VOLCENGINE_CONSOLE_VOICE_ID,
+            "voice_source": "volcengine_console",
             "allowed_functions": list(allowed_functions),
             "autonomy": {
                 "action_weights": personality.autonomy_action_weights,
@@ -163,14 +162,9 @@ class PersonalityService:
                         "LLMConfig": {
                             "SystemMessages": [profile_core["system_prompt"]],
                         },
-                        "TTSConfig": {
-                            "Provider": TTS_PROVIDER,
-                            "ProviderParams": {
-                                "ResourceId": TTS_RESOURCE_ID,
-                                "audio": {
-                                    "voice_type": personality.voice_id,
-                                }
-                            }
+                        "SubtitleConfig": {
+                            "DisableRTSSubtitle": False,
+                            "SubtitleMode": 1,
                         },
                     },
                 },
@@ -261,6 +255,15 @@ class PersonalityService:
             **self._public_profile(profile),
         }
 
+    async def clear_runtime(self) -> None:
+        async with self._lock:
+            self._active_profile = None
+            self._active_sync_state = "not_configured"
+        await asyncio.to_thread(
+            self._settings.personality_runtime_path.unlink,
+            missing_ok=True,
+        )
+
     @staticmethod
     def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -275,6 +278,7 @@ class PersonalityService:
                 "address",
                 "voice_name",
                 "voice_type",
+                "voice_source",
                 "allowed_functions",
                 "autonomy",
             )

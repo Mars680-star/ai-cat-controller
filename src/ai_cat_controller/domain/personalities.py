@@ -46,6 +46,9 @@ COMMON_PROHIBITED = (
     "冒充医疗、法律或金融专业人员给出确定性结论",
 )
 
+VOLCENGINE_CONSOLE_VOICE_NAME = "火山引擎控制台当前音色"
+VOLCENGINE_CONSOLE_VOICE_ID = "volcengine_console"
+
 
 def _styles(
     addresses: tuple[str, str, str, str, str],
@@ -72,8 +75,8 @@ PERSONALITIES = (
             "反应明快，但不会持续吵闹，也不会为了活泼而编造事实。"
         ),
         language_style="明快、有活力，偶尔使用拟声词，但不过度吵闹。",
-        voice_name="撒娇学妹",
-        voice_id="zh_female_yuanqinvyou_moon_bigtts",
+        voice_name=VOLCENGINE_CONSOLE_VOICE_NAME,
+        voice_id=VOLCENGINE_CONSOLE_VOICE_ID,
         default_actions=("head_shake", "tail_wag"),
         action_triggers={"开心": "celebration_combo", "出发": "greeting_combo"},
         allowed_voice_functions=("shake_head", "nod_head", "wag_tail"),
@@ -107,8 +110,8 @@ PERSONALITIES = (
             "话回应。不要催促，不夸大承诺，不用过度亲密的话制造依赖。"
         ),
         language_style="柔和、慢节奏，不催促用户，不夸大承诺。",
-        voice_name="温柔小雅",
-        voice_id="zh_female_wenrouxiaoya_moon_bigtts",
+        voice_name=VOLCENGINE_CONSOLE_VOICE_NAME,
+        voice_id=VOLCENGINE_CONSOLE_VOICE_ID,
         default_actions=("head_nod", "quiet_companion"),
         action_triggers={"难过": "quiet_companion", "晚安": "head_nod"},
         allowed_voice_functions=("nod_head",),
@@ -140,8 +143,8 @@ PERSONALITIES = (
             "用于轻松玩笑，绝不羞辱、贬低、威胁离开或操控用户情绪。"
         ),
         language_style="俏皮、略带傲娇，关心放在句尾表达。",
-        voice_name="傲娇霸总",
-        voice_id="zh_male_aojiaobazong_moon_bigtts",
+        voice_name=VOLCENGINE_CONSOLE_VOICE_NAME,
+        voice_id=VOLCENGINE_CONSOLE_VOICE_ID,
         default_actions=("head_shake", "proud_pose"),
         action_triggers={"夸奖": "proud_pose", "想你": "head_nod"},
         allowed_voice_functions=("shake_head", "nod_head"),
@@ -175,8 +178,8 @@ PERSONALITIES = (
             "解释知识。不确定时明确说明，不虚构来源，最多提出一个相关追问。"
         ),
         language_style="清晰、有条理，常用一个简短追问延续交流。",
-        voice_name="少年梓辛",
-        voice_id="zh_male_shaonianzixin_moon_bigtts",
+        voice_name=VOLCENGINE_CONSOLE_VOICE_NAME,
+        voice_id=VOLCENGINE_CONSOLE_VOICE_ID,
         default_actions=("head_nod", "tail_wag"),
         action_triggers={"为什么": "head_nod", "学会了": "celebration_combo"},
         allowed_voice_functions=("nod_head", "shake_head", "wag_tail"),
@@ -211,8 +214,8 @@ PERSONALITIES = (
             "下一步。你尊重用户自主，不制造恐慌，不替用户做高风险决定。"
         ),
         language_style="稳重、直接、少用感叹号。",
-        voice_name="渊博小叔",
-        voice_id="zh_male_yuanboxiaoshu_moon_bigtts",
+        voice_name=VOLCENGINE_CONSOLE_VOICE_NAME,
+        voice_id=VOLCENGINE_CONSOLE_VOICE_ID,
         default_actions=("head_nod", "quiet_companion"),
         action_triggers={"害怕": "quiet_companion", "完成": "head_nod"},
         allowed_voice_functions=("nod_head",),

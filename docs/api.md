@@ -41,7 +41,7 @@ Error:
 | POST | `/api/v1/dialog/wake` | Enter dialog state. |
 | POST | `/api/v1/dialog/interrupt` | Interrupt dialog state. |
 | POST | `/api/v1/dialog/text` | Submit text to the live Volcengine session; K1 speaks the answer. |
-| GET | `/api/v1/personality/runtime` | Read the current personality revision, Volcengine voice and native apply state. |
+| GET | `/api/v1/personality/runtime` | Read the current personality revision, console-managed voice marker and native apply state. |
 | POST | `/api/v1/auth/mock-login` | 创建 Mock 用户会话。 |
 | GET | `/api/v1/personalities` | 查询 5 种逻辑性格配置。 |
 | GET | `/api/v1/pets` | 查询当前用户的宠物。 |
@@ -59,6 +59,7 @@ Error:
 | POST | `/api/v1/pets/{pet_id}/mock-device-status` | 模拟电量和网络状态。 |
 | POST | `/api/v1/pets/{pet_id}/feedback` | 记录异常反馈。 |
 | POST | `/api/v1/pets/{pet_id}/unbind` | 解除用户与设备绑定。 |
+| POST | `/api/v1/admin/reset-product-data` | 备份并清除全部产品体验数据；默认禁用。 |
 
 Motion body:
 
@@ -76,10 +77,14 @@ cannot override native motor parameters. The fixed mappings are:
 
 | API | Local K1 command | Availability |
 |---|---|---|
-| `/motion/head/shake` | `/usr/bin/ai-toy_app motor head_lr 1` | Enabled after board validation. |
-| `/motion/head/nod` | `/usr/bin/ai-toy_app motor head_ud 2` | Enabled after board validation. |
-| `/motion/tail/wag` | `/usr/bin/ai-toy_app motor tail_lr 1` | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
+| `/motion/head/shake` | `head_lr` with the selected fixed profile speed | Enabled after board/profile validation. |
+| `/motion/head/nod` | `head_ud` with the selected fixed profile speed | Enabled after board/profile validation. |
+| `/motion/tail/wag` | `tail_lr` with the selected fixed profile speed | Disabled by default; requires `AI_CAT_ENABLE_TAIL_MOTION=true`. |
 | `/motion/stop` | `/usr/bin/ai-toy_app motor stop` | Idempotent; also stops a voice-started motor process. |
+
+`legacy_safe` maps those commands to speeds `1`, `2`, `1`. The separately
+reviewed `k1_vendor_smooth` profile maps all three to speed `3`; see
+`k1-motion-profiles.md` for the device-specific evidence and ranges.
 
 Overlapping motion returns `409`. An unavailable tail action returns `501`.
 Timeout and cancellation first send `SIGTERM`; the native routine idles the
@@ -100,9 +105,22 @@ X-Mock-Session: temporary-session-token
 `X-Mock-Session` 只用于浏览器产品 Mock，不是正式微信鉴权方案。动作接口只接受
 预设 `action_id`，不接受角度、速度或持续时间覆盖。
 
-性格运行时接口返回当前 `personality_id`、`voice_type`、亲密度称呼、语音动作
-白名单和自主行为配置。`native_applied=true` 表示原生进程上报的 revision 与
-FastAPI 当前 revision 一致；它不代表 5 种音色都已完成人工听感验收。
+格式化接口还要求 `AI_CAT_ENABLE_PRODUCT_DATA_RESET=true`，请求体必须为：
+
+```json
+{
+  "confirmation": "RESET_PRODUCT_DATA"
+}
+```
+
+接口会先备份 SQLite 和固定运行时文件，再清除账号、绑定、性格、亲密度、动作、
+对话和反馈数据。火山鉴权、License、SDK 和系统配置不在清理范围内。响应只返回
+备份编号；正在语音对话时返回 `409`，完成后原 `X-Mock-Session` 立即失效。
+
+性格运行时接口返回当前 `personality_id`、亲密度称呼、语音动作白名单和自主行为
+配置。`voice_type=volcengine_console` 与 `voice_source=volcengine_console` 只
+表示音色由火山引擎控制台统一管理，不是实际发音人 ID。`native_applied=true`
+表示原生进程上报的 revision 与 FastAPI 当前 revision 一致。
 
 文字提问请求：
 
@@ -134,10 +152,18 @@ FastAPI 当前 revision 一致；它不代表 5 种音色都已完成人工听�
 - `charging`：是否正在充电；无法判断时为 `null`。
 - `charger_online`：充电器输入是否在线，不等同于一定正在充电。
 - `battery_error`：读取失败的属性，不可用时用于诊断。
+- `output_volume_available`：是否成功连接系统 PulseAudio。
+- `output_volume_percent`：当前默认输出音量；网页只允许设置 `0..100`。
+- `output_muted`：默认输出是否静音。
+- `output_volume_error`：PulseAudio 状态不可用时的诊断信息。
 
 为了避免电量计状态滞后，`charger_online=false` 时接口会把有效电池状态统一为
 `discharging`；充电器在线但电量计未报告充电时返回 `not_charging`。浏览器端
 状态请求使用 `no-store`，每 5 秒重新读取真机。
+
+`PATCH /api/v1/pets/{pet_id}/settings` 的音量在 `local_k1` 模式下会先写入
+PulseAudio 固定的 `@DEFAULT_SINK@`，成功后才持久化到 SQLite。`0` 同时静音，
+非零值自动取消静音；命令不接受任意 sink 名称。
 
 Validation errors use `422`, conflicts `409`, unavailable devices `503`,
 timeouts `504`, and invalid authentication `401`.

@@ -147,6 +147,61 @@ class SQLiteRepository:
                 """
             )
 
+    def backup_product_data(self) -> dict[str, Any]:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_id = f"product-data-reset-{timestamp}"
+        backup_root = self._path.parent / "backups"
+        backup_directory = backup_root / backup_id
+        backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup_root.chmod(0o700)
+        backup_directory.mkdir(mode=0o700)
+        backup_path = backup_directory / "product-data.db"
+
+        try:
+            with self._connect() as source:
+                with sqlite3.connect(backup_path) as target:
+                    source.backup(target)
+            backup_path.chmod(0o600)
+        except Exception:
+            backup_path.unlink(missing_ok=True)
+            try:
+                backup_directory.rmdir()
+            except OSError:
+                pass
+            raise
+
+        return {
+            "backup_id": backup_id,
+            "backup_directory": backup_directory,
+            "database_path": backup_path,
+        }
+
+    def clear_product_data(self) -> dict[str, int]:
+        tables = (
+            "feedback",
+            "action_executions",
+            "dialog_history",
+            "interaction_events",
+            "pets",
+            "devices",
+            "users",
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            counts = {
+                table: int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
+                )
+                for table in tables
+            }
+            for table in tables:
+                connection.execute(f"DELETE FROM {table}")
+            connection.commit()
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return counts
+
     def login_user(self, login_code: str, nickname: str) -> dict[str, Any]:
         now = _utc_now()
         user_id = _stable_id("usr", login_code)
@@ -361,6 +416,7 @@ class SQLiteRepository:
         base_points: int,
         max_per_day: int,
         daily_cap: int,
+        enforce_limits: bool,
         request_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
@@ -383,28 +439,31 @@ class SQLiteRepository:
                 result["duplicate"] = True
                 return result
 
-            event_count = connection.execute(
-                """
-                SELECT COUNT(*) FROM interaction_events
-                WHERE pet_id = ? AND event_type = ?
-                  AND substr(created_at, 1, 10) = ?
-                """,
-                (pet_id, event_type, today),
-            ).fetchone()[0]
-            positive_today = connection.execute(
-                """
-                SELECT COALESCE(SUM(points_delta), 0) FROM interaction_events
-                WHERE pet_id = ? AND points_delta > 0
-                  AND substr(created_at, 1, 10) = ?
-                """,
-                (pet_id, today),
-            ).fetchone()[0]
+            event_count = 0
+            positive_today = 0
+            if enforce_limits:
+                event_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM interaction_events
+                    WHERE pet_id = ? AND event_type = ?
+                      AND substr(created_at, 1, 10) = ?
+                    """,
+                    (pet_id, event_type, today),
+                ).fetchone()[0]
+                positive_today = connection.execute(
+                    """
+                    SELECT COALESCE(SUM(points_delta), 0) FROM interaction_events
+                    WHERE pet_id = ? AND points_delta > 0
+                      AND substr(created_at, 1, 10) = ?
+                    """,
+                    (pet_id, today),
+                ).fetchone()[0]
 
             reason: str | None = None
-            if event_count >= max_per_day:
+            if enforce_limits and event_count >= max_per_day:
                 points_delta = 0
                 reason = "该互动今日已达到次数上限"
-            elif base_points > 0:
+            elif enforce_limits and base_points > 0:
                 remaining = max(daily_cap - int(positive_today), 0)
                 points_delta = min(base_points, remaining)
                 if points_delta == 0:

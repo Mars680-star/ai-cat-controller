@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ai_cat_controller.core.errors import CommandNotAllowedError
@@ -27,6 +29,7 @@ class CommandRunner:
         allowed_commands: dict[str, frozenset[tuple[str, ...]]] | None = None,
         max_output_bytes: int = 16_384,
         terminate_grace_seconds: float = 2.0,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         self._allowed_executables = allowed_executables
         self._allowed_services = allowed_services
@@ -35,6 +38,7 @@ class CommandRunner:
         self._timeout_seconds = timeout_seconds
         self._max_output_bytes = max_output_bytes
         self._terminate_grace_seconds = terminate_grace_seconds
+        self._environment = dict(environment or {})
 
     def _validate(self, executable: str, args: list[str]) -> None:
         if executable not in self._allowed_executables:
@@ -80,6 +84,7 @@ class CommandRunner:
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, **self._environment},
         )
         try:
             stdout, stderr = await asyncio.wait_for(

@@ -6,10 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=AI_CAT_USER
-Group=AI_CAT_GROUP
+Group=pulse-access
 WorkingDirectory=AI_CAT_PROJECT_DIR
 EnvironmentFile=AI_CAT_ENV_FILE
 Environment=PYTHONUNBUFFERED=1
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
 ExecStart=AI_CAT_VENV_DIR/bin/uvicorn ai_cat_controller.main:app --host ${AI_CAT_API_HOST} --port ${AI_CAT_API_PORT}
 Restart=on-failure
 RestartSec=5

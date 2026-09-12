@@ -15,6 +15,36 @@ Verified K1 motor commands:
 /usr/bin/ai-toy_app motor stop
 ```
 
+For device `7c2b63fd4a128`, the project helper also implements the recovered
+factory-smooth fixed profile:
+
+```bash
+/usr/bin/ai-toy_app motor head_lr 3
+/usr/bin/ai-toy_app motor head_ud 3
+```
+
+Speed 3 keeps the same bounded `180 -> 0 -> 90` normalized target sequence but
+uses the factory 100 ms dwell. This was recovered from factory behavior; the
+project-built helper has been physically accepted for the three standard axes
+on the new device. See `docs/k1-motion-profiles.md` before enabling it through
+`AI_CAT_MOTION_PROFILE=k1_vendor_smooth`.
+
+The new-device profile also exposes four fixed product presets:
+
+```bash
+/usr/bin/ai-toy_app motor preset proud_pose
+/usr/bin/ai-toy_app motor preset quiet_companion
+/usr/bin/ai-toy_app motor preset greeting_combo
+/usr/bin/ai-toy_app motor preset celebration_combo
+```
+
+`proud_pose` holds the head to one side, moves the tail once, and then returns
+the head to center; `quiet_companion` performs one shallow slow nod. Both have
+passed physical acceptance. The two combination presets are compiled and
+allowlisted but still require individual physical acceptance.
+No preset accepts angles, speeds, dwell values, GPIO numbers, or arbitrary
+sequence data from HTTP.
+
 The routines use fixed board profiles, a cross-process lock at
 `/run/ai-cat/motor.lock`, and a PID file at `/run/ai-cat/motor.pid`. `SIGTERM`
 requests a clean exit and the active routine switches the motor to
@@ -22,12 +52,16 @@ requests a clean exit and the active routine switches the motor to
 process command line before signalling it.
 
 The head-left/right profile is limited to 30 degrees and runs only
-right-left-center at speed 1. Keep the vendor `toy_motor.service` disabled while
-this program owns motion; the vendor DDS process does not honor this program's
-lock and can otherwise drive the same motor concurrently.
+right-left-center. `legacy_safe` uses speed 1 with a 500 ms dwell;
+`k1_vendor_smooth` uses the recorded speed 3 with a 100 ms dwell. Keep the
+vendor `toy_motor.service` disabled while this program owns motion; the vendor
+DDS process does not honor this program's lock and can otherwise drive the same
+motor concurrently.
 
-`motor tail_lr 1` exists only for post-repair low-speed validation. Its current
-GPIO profile is provisional and has not been physically accepted; remote API
-and voice access remain disabled unless `AI_CAT_ENABLE_TAIL_MOTION=true`.
+The tail GPIO and motor index now match the factory configuration recorded from
+device `7c2b63fd4a128`, where the standard tail gesture has passed physical
+acceptance. The older sample still has a tail hardware fault. Remote API and
+voice access therefore remain disabled per device unless
+`AI_CAT_ENABLE_TAIL_MOTION=true`.
 
 The original SPDX and copyright notice is retained in `src/main.c`.

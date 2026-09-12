@@ -67,6 +67,11 @@ struct fixed_rohs_motor {
     struct rohs_motor_info info;
 };
 
+struct motor_waypoint {
+    float position;
+    useconds_t dwell_us;
+};
+
 static const char *k_default_i2c_dev = "/dev/i2c-5";
 static const uint8_t k_nfc_i2c_addr = 0x28;
 static const uint8_t k_nfc_demo_block = 4;
@@ -105,7 +110,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
     {
         "head_ud",
         {
-            .motor_index = 3,
+            .motor_index = 2,
             .step_gpio = 34,
             .dir_gpio = 35,
             .enable_gpio = 36,
@@ -123,7 +128,7 @@ static const struct fixed_rohs_motor k_rohs_motors[] = {
     {
         "tail_lr",
         {
-            .motor_index = 2,
+            .motor_index = 3,
             .step_gpio = 37,
             .dir_gpio = 38,
             .enable_gpio = 39,
@@ -147,6 +152,7 @@ static void print_usage(const char *prog)
     printf("  %s wifi <scan|state|info|list|on|off|connect|disconnect|remove|mac> [args...]\n", prog);
     printf("  %s nfc [count]\n", prog);
     printf("  %s motor [all|head_lr|head_ud|tail_lr] [speed]\n", prog);
+    printf("  %s motor preset <proud_pose|quiet_companion|greeting_combo|celebration_combo>\n", prog);
     printf("  %s motor stop\n", prog);
     printf("  %s fan [speed_percent] [seconds]\n", prog);
     printf("  %s light_sensor [count]\n", prog);
@@ -502,7 +508,8 @@ static int run_nfc(int argc, char **argv)
     return 0;
 }
 
-static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
+static int run_rohs_motor_waypoints(const struct fixed_rohs_motor *fixed,
+    float speed, const struct motor_waypoint *waypoints, size_t waypoint_count)
 {
     struct rohs_motor_info info;
     struct motor_dev *motor;
@@ -512,10 +519,7 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         .vel_des = speed,
     };
     struct motor_state state;
-    /* Match the board service's accepted right-left-center gesture. */
-    const float positions[] = {180.0f, 0.0f, 90.0f};
-
-    if (!fixed)
+    if (!fixed || !waypoints || waypoint_count == 0)
         return 1;
 
     info = fixed->info;
@@ -537,21 +541,142 @@ static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
         return 1;
     }
 
-    for (size_t i = 0;
-         i < ARRAY_SIZE(positions) && !motor_stop_requested;
-         ++i) {
-        cmd.pos_des = positions[i];
+    for (size_t i = 0; i < waypoint_count && !motor_stop_requested; ++i) {
+        cmd.pos_des = waypoints[i].position;
         motor_set_cmd_one(motor, &cmd);
         motor_get_state_one(motor, &state);
         printf("[motor] target=%.1f pos=%.2f vel=%.2f trq=%.2f\n",
             cmd.pos_des, state.pos, state.vel, state.trq);
-        usleep(500000);
+        usleep(waypoints[i].dwell_us);
     }
 
     cmd.mode = MOTOR_MODE_IDLE;
     motor_set_cmd_one(motor, &cmd);
     motor_free(&motor, 1);
     return 0;
+}
+
+static int run_one_rohs_motor(const struct fixed_rohs_motor *fixed, float speed)
+{
+    /* Match the board service's accepted right-left-center gesture. */
+    const useconds_t dwell_us = speed >= 3.0f ? 100000U : 500000U;
+    const struct motor_waypoint waypoints[] = {
+        {180.0f, dwell_us},
+        {0.0f, dwell_us},
+        {90.0f, dwell_us},
+    };
+
+    return run_rohs_motor_waypoints(
+        fixed, speed, waypoints, ARRAY_SIZE(waypoints));
+}
+
+static const struct fixed_rohs_motor *find_rohs_motor(const char *name)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
+        if (strcmp(name, k_rohs_motors[i].name) == 0)
+            return &k_rohs_motors[i];
+    }
+    return NULL;
+}
+
+static bool known_motor_preset(const char *name)
+{
+    static const char *presets[] = {
+        "proud_pose",
+        "quiet_companion",
+        "greeting_combo",
+        "celebration_combo",
+    };
+
+    if (!name)
+        return false;
+    for (size_t i = 0; i < ARRAY_SIZE(presets); ++i) {
+        if (strcmp(name, presets[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static int run_proud_pose(const struct fixed_rohs_motor *head_lr,
+    const struct fixed_rohs_motor *tail_lr)
+{
+    struct rohs_motor_info info;
+    struct motor_dev *head_motor;
+    struct motor_cmd cmd = {
+        .mode = MOTOR_MODE_POS,
+        .pos_des = 155.0f,
+        .vel_des = 2.0f,
+    };
+    struct motor_state state;
+    int ret = 0;
+
+    if (!head_lr || !tail_lr)
+        return 1;
+    info = head_lr->info;
+    head_motor = motor_alloc_pwm("pwm_RoHS", 0, &info);
+    if (!head_motor) {
+        fprintf(stderr, "motor_alloc_pwm(pwm_RoHS) failed\n");
+        return 1;
+    }
+    if (motor_init_one(head_motor) < 0) {
+        fprintf(stderr, "motor_init_one failed\n");
+        motor_free(&head_motor, 1);
+        return 1;
+    }
+
+    motor_set_cmd_one(head_motor, &cmd);
+    motor_get_state_one(head_motor, &state);
+    printf("[motor] target=%.1f pos=%.2f vel=%.2f trq=%.2f\n",
+        cmd.pos_des, state.pos, state.vel, state.trq);
+    usleep(1200000U);
+
+    if (!motor_stop_requested && run_one_rohs_motor(tail_lr, 3.0f) != 0)
+        ret = 1;
+
+    cmd.pos_des = 90.0f;
+    motor_set_cmd_one(head_motor, &cmd);
+    motor_get_state_one(head_motor, &state);
+    printf("[motor] target=%.1f pos=%.2f vel=%.2f trq=%.2f\n",
+        cmd.pos_des, state.pos, state.vel, state.trq);
+    usleep(600000U);
+
+    cmd.mode = MOTOR_MODE_IDLE;
+    motor_set_cmd_one(head_motor, &cmd);
+    motor_free(&head_motor, 1);
+    return ret;
+}
+
+static int run_motor_preset(const char *name)
+{
+    const struct fixed_rohs_motor *head_lr = find_rohs_motor("head_lr");
+    const struct fixed_rohs_motor *head_ud = find_rohs_motor("head_ud");
+    const struct fixed_rohs_motor *tail_lr = find_rohs_motor("tail_lr");
+    const struct motor_waypoint quiet_companion[] = {
+        {135.0f, 900000U},
+        {90.0f, 400000U},
+    };
+
+    printf("[motor] preset=%s\n", name);
+    if (strcmp(name, "proud_pose") == 0) {
+        return run_proud_pose(head_lr, tail_lr);
+    }
+    if (strcmp(name, "quiet_companion") == 0) {
+        return run_rohs_motor_waypoints(
+            head_ud, 1.0f, quiet_companion, ARRAY_SIZE(quiet_companion));
+    }
+    if (strcmp(name, "greeting_combo") == 0) {
+        if (run_one_rohs_motor(head_ud, 2.0f) != 0 || motor_stop_requested)
+            return 1;
+        return run_one_rohs_motor(tail_lr, 3.0f);
+    }
+    if (strcmp(name, "celebration_combo") == 0) {
+        if (run_one_rohs_motor(head_lr, 3.0f) != 0 || motor_stop_requested)
+            return 1;
+        if (run_one_rohs_motor(head_ud, 2.0f) != 0 || motor_stop_requested)
+            return 1;
+        return run_one_rohs_motor(tail_lr, 3.0f);
+    }
+    return 1;
 }
 
 static void motor_signal_handler(int signal_number)
@@ -562,6 +687,8 @@ static void motor_signal_handler(int signal_number)
 
 static bool known_motor_name(const char *name)
 {
+    if (strcmp(name, "preset") == 0)
+        return true;
     if (strcmp(name, "all") == 0)
         return true;
     for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
@@ -597,7 +724,7 @@ static int parse_motor_speed(const char *text, float *speed)
         if (errno || end == text || *end != '\0')
             return -1;
     }
-    if (value < 1 || value > 2)
+    if (value < 1 || value > 3)
         return -1;
     *speed = (float)value;
     return 0;
@@ -674,6 +801,7 @@ static int request_motor_stop(void)
 static int run_motor(int argc, char **argv)
 {
     const char *which = argc > 0 ? argv[0] : "all";
+    const char *preset = NULL;
     float speed;
     int lock_fd;
     FILE *pid_file;
@@ -693,9 +821,18 @@ static int run_motor(int argc, char **argv)
         fprintf(stderr, "unknown motor: %s\n", which);
         return 1;
     }
-    if (argc > 2 || parse_motor_speed(argc > 1 ? argv[1] : NULL, &speed) != 0) {
-        fprintf(stderr, "motor speed must be 1 or 2\n");
-        return 1;
+    if (strcmp(which, "preset") == 0) {
+        if (argc != 2 || !known_motor_preset(argv[1])) {
+            fprintf(stderr, "unknown or missing motor preset\n");
+            return 1;
+        }
+        preset = argv[1];
+        speed = 0.0f;
+    } else {
+        if (argc > 2 || parse_motor_speed(argc > 1 ? argv[1] : NULL, &speed) != 0) {
+            fprintf(stderr, "motor speed must be 1, 2 or 3\n");
+            return 1;
+        }
     }
 
     lock_fd = open(MOTOR_LOCK_PATH, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
@@ -728,13 +865,17 @@ static int run_motor(int argc, char **argv)
     fsync(fileno(pid_file));
     fclose(pid_file);
 
-    for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
-        if (motor_stop_requested)
-            break;
-        if (strcmp(which, "all") != 0 && strcmp(which, k_rohs_motors[i].name) != 0)
-            continue;
-        if (run_one_rohs_motor(&k_rohs_motors[i], speed) != 0)
-            ret = 1;
+    if (preset) {
+        ret = run_motor_preset(preset);
+    } else {
+        for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
+            if (motor_stop_requested)
+                break;
+            if (strcmp(which, "all") != 0 && strcmp(which, k_rohs_motors[i].name) != 0)
+                continue;
+            if (run_one_rohs_motor(&k_rohs_motors[i], speed) != 0)
+                ret = 1;
+        }
     }
 
     unlink(MOTOR_PID_PATH);

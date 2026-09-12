@@ -30,6 +30,7 @@ class ActionDefinition(BaseModel):
     personality_ids: frozenset[str]
     min_intimacy_level: int = Field(ge=0, le=4)
     components: tuple[ActionComponent, ...]
+    hardware_preset: str | None = None
 
     @property
     def total_duration_ms(self) -> int:
@@ -88,9 +89,7 @@ ACTIONS = (
         action_no=3,
         name="开心摇尾",
         description="尾巴左右摆动表达亲近。",
-        personality_ids=frozenset(
-            {"sunny_explorer", "gentle_companion", "curious_scholar"}
-        ),
+        personality_ids=ALL_PERSONALITIES,
         min_intimacy_level=1,
         components=(
             ActionComponent(
@@ -107,17 +106,26 @@ ACTIONS = (
         action_id="proud_pose",
         action_no=4,
         name="骄傲转身",
-        description="轻摇头后收尾，表现克制的得意。",
+        description="头部转向一侧并轻摇尾巴，短暂停留后缓慢回中。",
         personality_ids=frozenset({"proud_star", "calm_guardian"}),
         min_intimacy_level=1,
+        hardware_preset="proud_pose",
         components=(
             ActionComponent(
                 capability=Capability.SHAKE_HEAD,
                 actuator="head_lr",
                 direction="right",
                 angle_degrees=18,
-                speed=0.35,
-                duration_ms=500,
+                speed=0.5,
+                duration_ms=1800,
+            ),
+            ActionComponent(
+                capability=Capability.WAG_TAIL,
+                actuator="tail_lr",
+                direction="alternate",
+                angle_degrees=20,
+                speed=0.5,
+                duration_ms=300,
             ),
         ),
     ),
@@ -125,9 +133,10 @@ ACTIONS = (
         action_id="quiet_companion",
         action_no=5,
         name="安静陪伴",
-        description="缓慢点头，传达正在倾听。",
+        description="头部小幅向下后缓慢回中，传达正在倾听。",
         personality_ids=frozenset({"gentle_companion", "calm_guardian"}),
         min_intimacy_level=1,
+        hardware_preset="quiet_companion",
         components=(
             ActionComponent(
                 capability=Capability.NOD_HEAD,
@@ -135,7 +144,7 @@ ACTIONS = (
                 direction="down",
                 angle_degrees=10,
                 speed=0.25,
-                duration_ms=900,
+                duration_ms=1300,
             ),
         ),
     ),
@@ -146,6 +155,7 @@ ACTIONS = (
         description="点头后摇尾的组合动作。",
         personality_ids=ALL_PERSONALITIES,
         min_intimacy_level=2,
+        hardware_preset="greeting_combo",
         components=(
             ActionComponent(
                 capability=Capability.NOD_HEAD,
@@ -153,7 +163,7 @@ ACTIONS = (
                 direction="alternate",
                 angle_degrees=12,
                 speed=0.4,
-                duration_ms=500,
+                duration_ms=1500,
             ),
             ActionComponent(
                 capability=Capability.WAG_TAIL,
@@ -161,7 +171,7 @@ ACTIONS = (
                 direction="alternate",
                 angle_degrees=22,
                 speed=0.5,
-                duration_ms=700,
+                duration_ms=300,
             ),
         ),
     ),
@@ -172,6 +182,7 @@ ACTIONS = (
         description="摇头、点头和摇尾组成的庆祝动作。",
         personality_ids=ALL_PERSONALITIES,
         min_intimacy_level=3,
+        hardware_preset="celebration_combo",
         components=(
             ActionComponent(
                 capability=Capability.SHAKE_HEAD,
@@ -179,7 +190,7 @@ ACTIONS = (
                 direction="alternate",
                 angle_degrees=20,
                 speed=0.55,
-                duration_ms=500,
+                duration_ms=300,
             ),
             ActionComponent(
                 capability=Capability.NOD_HEAD,
@@ -187,7 +198,7 @@ ACTIONS = (
                 direction="alternate",
                 angle_degrees=15,
                 speed=0.45,
-                duration_ms=500,
+                duration_ms=1500,
             ),
             ActionComponent(
                 capability=Capability.WAG_TAIL,
@@ -195,7 +206,7 @@ ACTIONS = (
                 direction="alternate",
                 angle_degrees=30,
                 speed=0.65,
-                duration_ms=900,
+                duration_ms=300,
             ),
         ),
     ),

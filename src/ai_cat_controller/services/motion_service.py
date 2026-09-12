@@ -210,6 +210,7 @@ class MotionService:
         self,
         *,
         action_name: str,
+        preset_name: str | None = None,
         steps: tuple[tuple[Capability, float, int], ...],
         request_id: str | None,
     ) -> dict[str, Any]:
@@ -218,7 +219,7 @@ class MotionService:
         if not steps:
             raise ValueError("motion sequence must contain at least one step")
 
-        async def operation() -> None:
+        async def generic_operation() -> None:
             operations = {
                 Capability.SHAKE_HEAD: self._adapter.shake_head,
                 Capability.NOD_HEAD: self._adapter.nod_head,
@@ -227,11 +228,18 @@ class MotionService:
             for capability, intensity, duration_ms in steps:
                 await operations[capability](intensity, duration_ms)
 
+        duration_ms = sum(step[2] for step in steps)
+        operation = generic_operation
+        if preset_name and self._adapter.supports_motion_preset(preset_name):
+            operation = lambda: self._adapter.run_motion_preset(
+                preset_name, duration_ms
+            )
+
         return await self._start(
             capabilities=tuple(step[0] for step in steps),
             action_name=action_name,
             operation=operation,
-            duration_ms=sum(step[2] for step in steps),
+            duration_ms=duration_ms,
             request_id=request_id,
             track_completion=True,
         )

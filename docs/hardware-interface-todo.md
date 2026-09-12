@@ -4,8 +4,8 @@
 
 | Capability | Evidence | First-stage API |
 |---|---|---|
-| Head left/right routine | Reduced to fixed low-speed `head_lr 1` with the board service's 30-degree range and right-left-center path; the user confirmed the repaired motion is smooth and its range is appropriate. | Enabled and physically accepted. |
-| Head up/down routine | GPIO mapping was corrected against the original board binary; the FastAPI nod action was physically verified on K1. | Enabled with fixed `/usr/bin/ai-toy_app motor head_ud 2`. |
+| Head left/right routine | Old device accepted fixed `head_lr 1`; new device factory evidence records `head_lr 3`, a 30-degree range and 100 ms dwell. | Old profile accepted; new profile requires project-helper acceptance. |
+| Head up/down routine | Old device accepted fixed `head_ud 2`; new device factory evidence records `head_ud 3`, a 20-degree range and 100 ms dwell. | Old profile accepted; new profile requires project-helper acceptance. |
 | Motor stop | A running head action was stopped through FastAPI and the user confirmed that movement ended. | Enabled with fixed `/usr/bin/ai-toy_app motor stop`. |
 | Dialog wake/new turn | `SIGUSR1` to `volc-conv-ai.service` is used by the wake-word process and was tested. | Enabled through a fixed allowlisted signal. |
 | Dialog status | Native dialog writes atomic state to `/run/ai-cat/dialog-status.json`. | Read-only `/api/v1/dialog/status`. |

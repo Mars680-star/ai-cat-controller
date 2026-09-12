@@ -12,6 +12,7 @@ from ai_cat_controller.core.config import Settings
 from ai_cat_controller.core.errors import (
     ActionConflictError,
     AdapterNotImplementedError,
+    DeviceUnavailableError,
 )
 
 
@@ -33,6 +34,22 @@ class PartiallyFailingRunner(FakeRunner):
         if args[1] == "volc-conv-ai.service":
             raise FileNotFoundError("simulated query failure")
         return await super().run(executable, args)
+
+
+class VolumeRunner(FakeRunner):
+    async def run(self, executable: str, args: list[str]) -> CommandResult:
+        self.calls.append((executable, tuple(args)))
+        if args == ["get-sink-volume", "@DEFAULT_SINK@"]:
+            return CommandResult(
+                0,
+                "Volume: front-left: 27525 / 42% / -22.62 dB, "
+                "front-right: 27525 / 42% / -22.62 dB",
+                "",
+                False,
+            )
+        if args == ["get-sink-mute", "@DEFAULT_SINK@"]:
+            return CommandResult(0, "Mute: no", "", False)
+        return CommandResult(0, "", "", False)
 
 
 def local_settings() -> Settings:
@@ -57,6 +74,57 @@ def write_dialog_status(path, state: str = "ready") -> None:
         ),
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_local_volume_status_uses_default_pulseaudio_sink() -> None:
+    runner = VolumeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    result = await adapter._read_output_volume_status()
+
+    assert result == {
+        "output_volume_available": True,
+        "output_volume_percent": 42,
+        "output_muted": False,
+        "output_volume_error": None,
+    }
+    assert runner.calls == [
+        ("/usr/bin/pactl", ("get-sink-volume", "@DEFAULT_SINK@")),
+        ("/usr/bin/pactl", ("get-sink-mute", "@DEFAULT_SINK@")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_volume_setting_updates_volume_and_mute() -> None:
+    runner = VolumeRunner()
+    adapter = LocalK1Adapter(local_settings(), runner)  # type: ignore[arg-type]
+
+    await adapter.set_output_volume(35)
+    await adapter.set_output_volume(0)
+
+    assert runner.calls == [
+        ("/usr/bin/pactl", ("set-sink-volume", "@DEFAULT_SINK@", "35%")),
+        ("/usr/bin/pactl", ("set-sink-mute", "@DEFAULT_SINK@", "0")),
+        ("/usr/bin/pactl", ("set-sink-volume", "@DEFAULT_SINK@", "0%")),
+        ("/usr/bin/pactl", ("set-sink-mute", "@DEFAULT_SINK@", "1")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_volume_setting_reports_pulseaudio_failure() -> None:
+    class FailingVolumeRunner(FakeRunner):
+        async def run(self, executable: str, args: list[str]) -> CommandResult:
+            del executable, args
+            return CommandResult(1, "", "access denied", False)
+
+    adapter = LocalK1Adapter(
+        local_settings(),
+        FailingVolumeRunner(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DeviceUnavailableError, match="设置输出音量失败"):
+        await adapter.set_output_volume(50)
 
 
 @pytest.mark.asyncio
@@ -111,6 +179,23 @@ async def test_local_head_actions_use_only_fixed_motor_profiles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_head_actions_use_recorded_vendor_smooth_profile() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={"motion_profile": "k1_vendor_smooth"}
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.shake_head(0.1, 100)
+    await adapter.nod_head(1.0, 3000)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "head_lr", "3")),
+        ("/usr/bin/ai-toy_app", ("motor", "head_ud", "3")),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_local_tail_action_is_disabled() -> None:
     adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
 
@@ -130,6 +215,61 @@ async def test_local_tail_action_uses_fixed_low_speed_when_enabled() -> None:
     assert runner.calls == [
         ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "1")),
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_tail_action_uses_recorded_vendor_smooth_profile() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={
+            "enable_tail_motion": True,
+            "motion_profile": "k1_vendor_smooth",
+        }
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    await adapter.wag_tail(0.5, 600)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "tail_lr", "3")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_vendor_smooth_profile_uses_named_product_presets() -> None:
+    runner = FakeRunner()
+    settings = local_settings().model_copy(
+        update={
+            "enable_tail_motion": True,
+            "motion_profile": "k1_vendor_smooth",
+        }
+    )
+    adapter = LocalK1Adapter(settings, runner)  # type: ignore[arg-type]
+
+    for preset in (
+        "proud_pose",
+        "quiet_companion",
+        "greeting_combo",
+        "celebration_combo",
+    ):
+        assert adapter.supports_motion_preset(preset) is True
+        await adapter.run_motion_preset(preset, 1800)
+
+    assert runner.calls == [
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "proud_pose")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "quiet_companion")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "greeting_combo")),
+        ("/usr/bin/ai-toy_app", ("motor", "preset", "celebration_combo")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_product_presets_fall_back_for_legacy_profile() -> None:
+    adapter = LocalK1Adapter(local_settings(), FakeRunner())  # type: ignore[arg-type]
+
+    assert adapter.supports_motion_preset("proud_pose") is False
+    with pytest.raises(AdapterNotImplementedError, match="不支持该动作预设"):
+        await adapter.run_motion_preset("proud_pose", 1000)
 
 
 @pytest.mark.asyncio

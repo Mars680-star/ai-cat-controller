@@ -53,12 +53,12 @@
 - FastAPI `/api/v1/dialog/*` 和浏览器页面可查看状态、开始聆听和打断。
 - 网页/API 可将免唤醒追问窗口设置为 5 到 120 秒，重启后保持并逐轮生效。
 - 云端断开后退出，由 systemd 自动重建会话。
-- `shake_head` 工具固定调用低速 `/usr/bin/ai-toy_app motor head_lr 1`；左右范围
-  为 `30°`，轨迹为 `右 -> 左 -> 中`，不再执行六段大幅往返。
-- `nod_head` 工具调用 `/usr/bin/ai-toy_app motor head_ud 2`；头部动作与
-  FastAPI 共用原生跨进程锁和停止机制。
-- `wag_tail` 软件路径固定调用低速 `/usr/bin/ai-toy_app motor tail_lr 1`，但
-  默认由 `AI_CAT_ENABLE_TAIL_MOTION=false` 拒绝，等待硬件维修后验收。
+- `shake_head` 和 `nod_head` 根据 `AI_CAT_MOTION_PROFILE` 选择审核过的固定速度：
+  `legacy_safe` 分别使用 `head_lr 1`、`head_ud 2`；新设备
+  `k1_vendor_smooth` 均使用速度 `3`。目标轨迹固定为 `右/上 -> 左/下 -> 中`。
+- 头部动作与 FastAPI 共用原生跨进程锁和停止机制；外部请求不能指定底层速度。
+- `wag_tail` 使用同一配置对应的固定速度，但默认由
+  `AI_CAT_ENABLE_TAIL_MOTION=false` 拒绝，必须另行完成真机验收。
 - `get_battery_status` 工具实时读取电量、充电状态、电压和充电器在线状态。
 - 开机等待网络、DNS、PulseAudio 就绪后再连接云端。
 

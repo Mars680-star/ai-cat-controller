@@ -1,10 +1,14 @@
 import json
+import sqlite3
 import time
+from functools import partial
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from ai_cat_controller.core.config import Settings
 from ai_cat_controller.domain.personalities import PERSONALITY_BY_ID
+from ai_cat_controller.local_speech import LocalPhrasePlayer
 from ai_cat_controller.main import create_app
 
 
@@ -40,6 +44,29 @@ def _bind(
     )
     assert response.status_code == 200
     return response.json()["data"]
+
+
+def _add_device_touch(
+    client: TestClient,
+    *,
+    serial: str,
+    request_id: str,
+    sensor: str,
+) -> dict:
+    services = client.app.state.services
+    assert client.portal is not None
+    return client.portal.call(
+        partial(
+            services.product.add_device_touch,
+            device_serial=serial,
+            request_id=request_id,
+            metadata={
+                "source": "test_touch",
+                "sensor": sensor,
+                "gesture": "short",
+            },
+        )
+    )
 
 
 def test_login_bind_blind_box_and_dashboard(client: TestClient) -> None:
@@ -127,10 +154,180 @@ def test_intimacy_idempotency_daily_cap_and_unlocks(client: TestClient) -> None:
     intimacy = client.get(
         f"/api/v1/pets/{pet_id}/intimacy", headers=headers
     ).json()["data"]
-    assert intimacy["points"] == 20
+    assert intimacy["points"] == 23
     assert intimacy["level"]["level"] == 1
-    assert intimacy["daily_growth_cap"] == 20
+    assert intimacy["daily_growth_cap"] == 50
     assert any(event["points_delta"] == 0 for event in intimacy["history"])
+
+
+def test_debug_unlimited_touch_bypasses_only_touch_limits(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            debug_unlimited_touch_intimacy=True,
+            intimacy_daily_cap=3,
+            enable_touch_motion=False,
+            data_path=tmp_path / "unlimited-touch.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="unlimited-touch-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-UNLIMITED-TOUCH",
+        )["pet"]["pet_id"]
+
+        events = []
+        for index in range(10):
+            events.append(
+                test_client.post(
+                    f"/api/v1/pets/{pet_id}/interactions",
+                    headers=headers,
+                    json={
+                        "event_type": "touch",
+                        "request_id": f"debug-touch-{index}",
+                    },
+                ).json()["data"]
+            )
+        duplicate = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "touch", "request_id": "debug-touch-0"},
+        ).json()["data"]
+        task = test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "limited-task"},
+        ).json()["data"]
+        intimacy = test_client.get(
+            f"/api/v1/pets/{pet_id}/intimacy",
+            headers=headers,
+        ).json()["data"]
+
+        assert all(event["points_delta"] == 1 for event in events)
+        assert events[-1]["points_after"] == 10
+        assert duplicate["duplicate"] is True
+        assert duplicate["points_after"] == 1
+        assert task["points_delta"] == 0
+        assert intimacy["points"] == 10
+        assert intimacy["debug_unlimited_touch_intimacy"] is True
+
+
+def test_physical_touch_starts_safe_action_and_preserves_cooldown(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client, code="touch-action-user")
+    pet_id = _bind(client, headers, serial="K1-TOUCH-ACTION")["pet"]["pet_id"]
+
+    first = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-1",
+        sensor="head",
+    )
+    assert first["points_delta"] == 1
+    assert first["touch_action"]["status"] == "started"
+    assert first["touch_action"]["action_id"] == "head_nod"
+
+    services = client.app.state.services
+    assert client.portal is not None
+    client.portal.call(services.motion.wait_until_idle)
+    second = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-2",
+        sensor="nose",
+    )
+    duplicate = _add_device_touch(
+        client,
+        serial="K1-TOUCH-ACTION",
+        request_id="physical-touch-1",
+        sensor="head",
+    )
+
+    assert second["points_delta"] == 1
+    assert second["touch_action"] == {
+        "status": "skipped",
+        "reason": "touch_motion_cooldown",
+    }
+    assert duplicate["duplicate"] is True
+    assert duplicate["touch_action"] == {
+        "status": "skipped",
+        "reason": "duplicate_touch",
+    }
+    executions = client.get(
+        f"/api/v1/pets/{pet_id}/actions/executions",
+        headers=headers,
+    ).json()["data"]
+    assert len(executions) == 1
+    assert executions[0]["action_id"] == "head_nod"
+
+
+def test_physical_touch_does_not_move_during_dialog(client: TestClient) -> None:
+    headers, _ = _login(client, code="touch-dialog-user")
+    pet_id = _bind(client, headers, serial="K1-TOUCH-DIALOG")["pet"]["pet_id"]
+    services = client.app.state.services
+    assert client.portal is not None
+    client.portal.call(services.adapter.wake_dialog)
+
+    event = _add_device_touch(
+        client,
+        serial="K1-TOUCH-DIALOG",
+        request_id="dialog-touch-1",
+        sensor="right_foot",
+    )
+
+    assert event["points_delta"] == 1
+    assert event["touch_action"]["status"] == "skipped"
+    assert event["touch_action"]["reason"] == "dialog_busy"
+    executions = client.get(
+        f"/api/v1/pets/{pet_id}/actions/executions",
+        headers=headers,
+    ).json()["data"]
+    assert executions == []
+
+
+def test_physical_touch_plays_local_phrase_after_motion(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    played: list[str] = []
+
+    def fake_play_touch(
+        self: LocalPhrasePlayer,
+        sensor: str,
+    ) -> Path:
+        del self
+        played.append(sensor)
+        return tmp_path / "touch.wav"
+
+    monkeypatch.setattr(LocalPhrasePlayer, "play_touch", fake_play_touch)
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            motion_cooldown_seconds=0.0,
+            data_path=tmp_path / "touch-speech.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+            enable_touch_speech=True,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="touch-speech-user")
+        _bind(test_client, headers, serial="K1-TOUCH-SPEECH")
+        event = _add_device_touch(
+            test_client,
+            serial="K1-TOUCH-SPEECH",
+            request_id="touch-speech-1",
+            sensor="back",
+        )
+        assert event["touch_action"]["speech_scheduled"] is True
+        deadline = time.monotonic() + 2.0
+        while not played and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert played == ["back"]
 
 
 def test_action_catalog_rejects_locked_and_tracks_idempotency(
@@ -180,6 +377,38 @@ def test_action_catalog_rejects_locked_and_tracks_idempotency(
     assert execution["status"] == "completed"
 
 
+def test_debug_unlock_exposes_and_executes_all_safe_actions(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            debug_unlock_all_actions=True,
+            motion_cooldown_seconds=0.0,
+            data_path=tmp_path / "debug-actions.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="debug-action-user")
+        pet_id = _bind(test_client, headers, serial="K1-DEBUG-ACTIONS")["pet"][
+            "pet_id"
+        ]
+        catalog = test_client.get(
+            f"/api/v1/pets/{pet_id}/actions", headers=headers
+        ).json()["data"]
+
+        assert len(catalog) == 7
+        assert all(action["unlocked"] for action in catalog)
+        assert any(action["debug_unlocked"] for action in catalog)
+        response = test_client.post(
+            f"/api/v1/pets/{pet_id}/actions/celebration_combo/execute",
+            headers=headers,
+            json={"request_id": "debug-celebration"},
+        )
+
+        assert response.status_code == 202
+        assert response.json()["data"]["status"] == "running"
+
+
 def test_dialog_history_settings_device_status_and_feedback(
     client: TestClient,
 ) -> None:
@@ -227,6 +456,10 @@ def test_dialog_history_settings_device_status_and_feedback(
     ).json()["data"]
     assert settings["name"] == "安心"
     assert settings["volume"] == 35
+    device_status = client.get("/api/v1/device/status").json()["data"]
+    assert device_status["output_volume_available"] is True
+    assert device_status["output_volume_percent"] == 35
+    assert device_status["output_muted"] is False
 
     offline = client.post(
         f"/api/v1/pets/{pet_id}/mock-device-status",
@@ -254,6 +487,160 @@ def test_dialog_history_settings_device_status_and_feedback(
     )
     assert feedback.status_code == 200
     assert feedback.json()["data"]["feedback_id"].startswith("fb_")
+
+
+def test_product_data_reset_is_disabled_by_default(client: TestClient) -> None:
+    headers, _ = _login(client, code="reset-disabled-user")
+
+    response = client.post(
+        "/api/v1/admin/reset-product-data",
+        headers=headers,
+        json={"confirmation": "RESET_PRODUCT_DATA"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["data"]["code"] == "operation_disabled"
+
+
+def test_product_data_reset_backs_up_and_clears_experience_data(
+    tmp_path,
+) -> None:
+    data_path = tmp_path / "product-data.db"
+    runtime_paths = {
+        "personality_runtime_path": tmp_path / "personality-runtime.json",
+        "dialog_event_path": tmp_path / "dialog-events.jsonl",
+        "dialog_text_request_path": tmp_path / "dialog-text-request.json",
+        "dialog_config_path": tmp_path / "dialog-runtime-config.json",
+    }
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            motion_cooldown_seconds=0.0,
+            data_path=data_path,
+            enable_product_data_reset=True,
+            **runtime_paths,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="reset-enabled-user")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-RESET-ALL-DATA",
+        )["pet"]["pet_id"]
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/interactions",
+            headers=headers,
+            json={"event_type": "completed_task", "request_id": "reset-task"},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+            json={"content": "格式化前的对话", "trigger_action": False},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/feedback",
+            headers=headers,
+            json={"category": "other", "content": "格式化前的反馈"},
+        )
+        test_client.post(
+            f"/api/v1/pets/{pet_id}/actions/head_shake/execute",
+            headers=headers,
+            json={"request_id": "reset-action"},
+        )
+        for path in runtime_paths.values():
+            path.write_text('{"test":true}\n', encoding="utf-8")
+
+        invalid = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET"},
+        )
+        assert invalid.status_code == 422
+
+        response = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET_PRODUCT_DATA"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()["data"]
+        assert result["reset"] is True
+        assert result["backup_id"].startswith("product-data-reset-")
+        assert "/" not in result["backup_id"]
+        assert "backup_directory" not in result
+        assert result["deleted"] == {
+            "feedback": 1,
+            "action_executions": 1,
+            "dialog_history": 2,
+            "interaction_events": 2,
+            "pets": 1,
+            "devices": 1,
+            "users": 1,
+        }
+        assert set(result["archived_files"]) == {
+            path.name for path in runtime_paths.values()
+        }
+        assert all(not path.exists() for path in runtime_paths.values())
+        assert test_client.portal is not None
+        personality_status = test_client.portal.call(
+            test_client.app.state.services.personality.status
+        )
+        assert personality_status == {
+            "active": False,
+            "sync_state": "not_configured",
+        }
+
+        expired_session = test_client.get("/api/v1/pets", headers=headers)
+        assert expired_session.status_code == 401
+
+    backup_directory = tmp_path / "backups" / result["backup_id"]
+    backup_database = backup_directory / "product-data.db"
+    assert backup_database.exists()
+    assert backup_database.stat().st_mode & 0o777 == 0o600
+    assert all((backup_directory / path.name).exists() for path in runtime_paths.values())
+    with sqlite3.connect(backup_database) as backup:
+        assert backup.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM pets").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM dialog_history").fetchone()[0] == 2
+    with sqlite3.connect(data_path) as active:
+        for table in (
+            "feedback",
+            "action_executions",
+            "dialog_history",
+            "interaction_events",
+            "pets",
+            "devices",
+            "users",
+        ):
+            assert active.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_product_data_reset_rejects_active_dialog(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            hardware_driver="mock",
+            data_path=tmp_path / "busy-reset.db",
+            dialog_config_path=tmp_path / "dialog-config.json",
+            enable_product_data_reset=True,
+        )
+    )
+    with TestClient(app) as test_client:
+        headers, _ = _login(test_client, code="busy-reset-user")
+        _bind(test_client, headers, serial="K1-BUSY-RESET")
+        assert test_client.portal is not None
+        test_client.portal.call(test_client.app.state.services.adapter.wake_dialog)
+
+        response = test_client.post(
+            "/api/v1/admin/reset-product-data",
+            headers=headers,
+            json={"confirmation": "RESET_PRODUCT_DATA"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["data"]["code"] == "action_conflict"
+        assert len(test_client.get("/api/v1/pets", headers=headers).json()["data"]) == 1
 
 
 def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> None:
@@ -316,6 +703,71 @@ def test_native_dialog_events_are_imported_once_for_bound_device(tmp_path) -> No
         ]
         assert second == first
         assert first[0]["voice_id"] == "volcengine_tts"
+
+
+def test_native_dialog_events_are_imported_during_application_restart(
+    tmp_path,
+) -> None:
+    event_path = tmp_path / "dialog-events.jsonl"
+    database_path = tmp_path / "native-dialog-restart.db"
+    settings = Settings(
+        hardware_driver="mock",
+        motion_cooldown_seconds=0.0,
+        data_path=database_path,
+        dialog_event_path=event_path,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers, login = _login(client, code="native-dialog-restart-user")
+        pet_id = _bind(
+            client,
+            headers,
+            serial="K1-NATIVE-RESTART",
+        )["pet"]["pet_id"]
+        user_id = login["user"]["user_id"]
+
+    created_at_ms = int(time.time() * 1000) + 100
+    event_path.write_text(
+        "\n".join(
+            json.dumps(event, ensure_ascii=False)
+            for event in (
+                {
+                    "event_id": "event-restart-user",
+                    "conversation_id": "native-K1-NATIVE-RESTART-1",
+                    "device_serial": "K1-NATIVE-RESTART",
+                    "role": "user",
+                    "content": "重启后还能看到吗？",
+                    "created_at_ms": created_at_ms,
+                },
+                {
+                    "event_id": "event-restart-assistant",
+                    "conversation_id": "native-K1-NATIVE-RESTART-1",
+                    "device_serial": "K1-NATIVE-RESTART",
+                    "role": "assistant",
+                    "content": "可以，记录已经恢复。",
+                    "created_at_ms": created_at_ms + 1,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(settings)):
+        with sqlite3.connect(database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT role, content
+                FROM dialog_history
+                WHERE pet_id = ? AND user_id = ?
+                ORDER BY created_at ASC
+                """,
+                (pet_id, user_id),
+            ).fetchall()
+
+    assert rows == [
+        ("user", "重启后还能看到吗？"),
+        ("assistant", "可以，记录已经恢复。"),
+    ]
 
 
 def test_native_dialog_conversation_syncs_partial_turn_and_reused_raw_id(

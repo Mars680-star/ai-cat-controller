@@ -70,9 +70,10 @@ the bot's `LLMConfig.Tools` in the Volcengine console:
 ]
 ```
 
-The K1 implementation executes `/usr/bin/ai-toy_app motor head_lr 1` and sends
-a `function_call_output` event back to the bot. Verify that command manually
-before testing the voice-triggered action.
+The K1 implementation executes the fixed `head_lr` command selected by
+`AI_CAT_MOTION_PROFILE` and sends a `function_call_output` event back to the
+bot. The default is speed 1; the reviewed new-device profile uses speed 3.
+Verify the selected command manually before testing the voice-triggered action.
 
 ## Weather function call
 
@@ -114,12 +115,13 @@ To restore low-frequency autonomous behavior without restoring the unsafe DDS
 motor executor, install the repository's replacement `toy_motor.service`. It
 uses the local FastAPI API, selects only fixed head presets, skips all active
 dialog states, and never selects the unverified tail. It does not pull in the
-cloud dialog service. The private controller repository includes 15 allowlisted
-WAV assets captured once from the matching Volcengine voices. Verify the assets,
+cloud dialog service. The private controller repository includes 20 allowlisted
+WAV assets captured from the voice currently selected in the Volcengine console:
+15 personality phrase assets and five shared touch assets. Verify the assets,
 then enable the worker with a fixed three-minute interval:
 
 ```bash
-test "$(find /opt/ai-cat-controller/assets/local-speech -type f -name '*.wav' | wc -l)" -eq 15
+test "$(find /opt/ai-cat-controller/assets/local-speech -type f -name '*.wav' | wc -l)" -eq 20
 install -m 0644 systemd/toy_motor.service /etc/systemd/system/toy_motor.service
 systemctl daemon-reload
 systemctl enable --now toy_motor.service
@@ -130,12 +132,15 @@ Set `AI_CAT_AUTONOMY_MIN_INTERVAL_SECONDS=180`,
 `AI_CAT_AUTONOMY_PHRASE_PROBABILITY=1.0`,
 `AI_CAT_AUTONOMY_LOCAL_SPEECH_ENABLED=true`, and
 `AI_CAT_AUTONOMY_CLOUD_SPEECH_ENABLED=false` in `/etc/ai-cat-controller.env`.
+Set `AI_CAT_MOTION_PROFILE=legacy_safe` unless the exact device has passed the
+`k1_vendor_smooth` checks documented in `docs/k1-motion-profiles.md`.
 Playback uses PulseAudio and never starts `volc-conv-ai.service`. The wake-word
 process releases capture while `/run/ai-cat/local-speech-active` exists and
 resumes automatically after playback. Local playback waits 2.2 seconds after
 the head action so motor noise does not mask the phrase. Run
-`tools/capture_cloud_phrase_assets.py` as an administrator only when a fixed
-phrase or mapped voice changes.
+`tools/capture_cloud_phrase_assets.py --kind all` as an administrator only when
+a fixed phrase changes or a different voice is selected in the Volcengine
+console. The runtime deliberately does not override the console TTS voice.
 
 Do not change its `ExecStart` back to `/usr/bin/toy_control` while the FastAPI
 and voice action paths are enabled.

@@ -48,3 +48,8 @@ class ActionTimeoutError(AiCatError):
 class CommandNotAllowedError(AiCatError):
     status_code = 501
     code = "command_not_allowed"
+
+
+class OperationDisabledError(AiCatError):
+    status_code = 403
+    code = "operation_disabled"

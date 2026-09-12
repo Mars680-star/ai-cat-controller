@@ -103,6 +103,7 @@
     feedbackCategory: $("#feedback-category"),
     feedbackContent: $("#feedback-content"),
     unbind: $("#unbind-button"),
+    resetData: $("#reset-data-button"),
     personalityDialog: $("#personality-dialog"),
     revealName: $("#reveal-name"),
     revealDescription: $("#reveal-description"),
@@ -129,6 +130,7 @@
     voiceStatus: null,
     hardwareStatus: null,
     dialogConfig: null,
+    intimacyPoints: null,
   };
 
   const statusLabels = {
@@ -322,6 +324,7 @@
     ui.topSubtitle.textContent = state.user.nickname;
 
     const pets = payload.data.pets;
+    state.intimacyPoints = null;
     if (pets.length > 0) {
       state.petId = pets[0].pet_id;
       setBoundNavigation(true);
@@ -399,6 +402,17 @@
 
     if (!isLocalK1) {
       return;
+    }
+
+    if (
+      status.output_volume_available &&
+      status.output_volume_percent !== null
+    ) {
+      const outputVolume = Math.min(100, Math.max(0, status.output_volume_percent));
+      ui.settingsVolume.value = outputVolume;
+      ui.settingsVolumeValue.textContent = status.output_muted
+        ? `${outputVolume}%（静音）`
+        : `${outputVolume}%`;
     }
 
     ui.connectionLastSeen.textContent = formatDate(new Date().toISOString());
@@ -486,6 +500,7 @@
         network_name: ui.networkName.value.trim(),
       }),
     });
+    state.intimacyPoints = null;
     state.petId = payload.data.pet.pet_id;
     setBoundNavigation(true);
     await refreshAll();
@@ -653,7 +668,7 @@
     });
   }
 
-  async function refreshIntimacy() {
+  async function refreshIntimacy({notifyChange = false} = {}) {
     if (!state.petId) {
       return;
     }
@@ -661,6 +676,14 @@
       `/api/v1/pets/${encodeURIComponent(state.petId)}/intimacy`,
     );
     const data = payload.data;
+    if (
+      notifyChange &&
+      state.intimacyPoints !== null &&
+      data.points > state.intimacyPoints
+    ) {
+      showToast(`检测到新互动，亲密度 +${data.points - state.intimacyPoints}`);
+    }
+    state.intimacyPoints = data.points;
     ui.growthLevel.textContent = `Lv.${data.level.level} ${data.level.name}`;
     ui.growthBadge.textContent = data.level.badge;
     ui.growthPoints.textContent = data.points;
@@ -668,7 +691,9 @@
     ui.growthProgressCopy.textContent = data.progress.next_level === null
       ? "已达到最高等级"
       : `${data.points} / ${data.progress.next_level}`;
-    ui.growthDailyCap.textContent = `每日增长上限 ${data.daily_growth_cap}`;
+    ui.growthDailyCap.textContent = data.debug_unlimited_touch_intimacy
+      ? "触摸计分不限（调试）"
+      : `每日增长上限 ${data.daily_growth_cap}`;
     fillList(ui.currentUnlocks, data.current_unlocks, "暂无");
     fillList(ui.nextUnlocks, data.next_unlocks, "已全部解锁");
     renderInteractionHistory(data.history);
@@ -1035,6 +1060,7 @@
       {method: "POST", body: JSON.stringify({})},
     );
     state.petId = null;
+    state.intimacyPoints = null;
     state.dashboard = null;
     state.actions = [];
     ui.navPetName.textContent = "等待绑定";
@@ -1045,10 +1071,34 @@
     showToast("设备已解绑");
   }
 
+  async function resetProductData() {
+    const confirmed = window.confirm(
+      "确认格式化全部体验数据？系统会先自动备份，然后清除账号、绑定、性格、亲密度、动作、对话和反馈记录。此操作不能在网页中撤销。",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    ui.resetData.disabled = true;
+    try {
+      const payload = await apiRequest("/api/v1/admin/reset-product-data", {
+        method: "POST",
+        body: JSON.stringify({confirmation: "RESET_PRODUCT_DATA"}),
+      });
+      const backupId = payload.data.backup_id;
+      logout();
+      setTopStatus("体验数据已格式化", false);
+      window.alert(`格式化完成。备份编号：${backupId}\n请重新登录并从性格盲盒开始测试。`);
+    } finally {
+      ui.resetData.disabled = false;
+    }
+  }
+
   function logout() {
     state.sessionToken = "";
     state.user = null;
     state.petId = null;
+    state.intimacyPoints = null;
     state.dashboard = null;
     window.sessionStorage.removeItem("aiCatMockIdentity");
     ui.appShell.classList.add("hidden");
@@ -1137,6 +1187,9 @@
   ui.unbind.addEventListener("click", () => {
     unbindPet().catch(reportError);
   });
+  ui.resetData.addEventListener("click", () => {
+    resetProductData().catch(reportError);
+  });
 
   async function boot() {
     setBoundNavigation(false);
@@ -1162,6 +1215,9 @@
     }
     try {
       await refreshDashboard();
+      if (state.activeView === "growth") {
+        await refreshIntimacy({notifyChange: true});
+      }
     } catch (error) {
       if (error.status === 401) {
         const saved = window.sessionStorage.getItem("aiCatMockIdentity");

@@ -25,6 +25,8 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="conversation-list"' in response.text
     assert 'id="conversation-detail-title"' in response.text
     assert 'id="dialog-sync-state"' in response.text
+    assert 'id="reset-data-button"' in response.text
+    assert "格式化体验数据" in response.text
     assert "https://" not in response.text
     assert "cdn" not in response.text.lower()
 
@@ -43,6 +45,8 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert 'apiRequest("/api/v1/dialog/text"' in script.text
     assert "renderConversationList" in script.text
     assert "refreshDialogDetail" in script.text
+    assert 'apiRequest("/api/v1/admin/reset-product-data"' in script.text
+    assert 'confirmation: "RESET_PRODUCT_DATA"' in script.text
     assert client.get("/static/ai-cat-avatar.png").status_code == 200
 
 

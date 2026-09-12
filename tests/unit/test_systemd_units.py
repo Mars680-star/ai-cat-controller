@@ -5,6 +5,18 @@ SYSTEMD_DIR = (
     Path(__file__).parents[2]
     / "integrations/volcengine-k1/overlay/examples/low_load_solution/linux_k1/systemd"
 )
+FASTAPI_UNIT = (
+    Path(__file__).parents[2]
+    / "deploy/systemd/ai-cat-controller.service.example"
+)
+
+
+def test_fastapi_unit_can_control_system_pulseaudio() -> None:
+    unit = FASTAPI_UNIT.read_text(encoding="utf-8")
+
+    assert "Group=pulse-access" in unit
+    assert "SupplementaryGroups=pulse-access" not in unit
+    assert "PULSE_SERVER=unix:/var/run/pulse/native" in unit
 
 
 def test_dialog_service_preserves_runtime_status_across_restart() -> None:
@@ -19,6 +31,14 @@ def test_dialog_service_preserves_runtime_status_across_restart() -> None:
     assert "WantedBy=multi-user.target" not in unit
     assert "StartLimitBurst=3" in unit
     assert "EnvironmentFile=-/etc/ai-cat-controller.env" in unit
+
+
+def test_pulseaudio_service_can_be_enabled_at_boot() -> None:
+    unit = (SYSTEMD_DIR / "volc-pulseaudio.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "WantedBy=multi-user.target" in unit
 
 
 def test_toy_motor_unit_runs_only_safe_autonomy_worker() -> None:

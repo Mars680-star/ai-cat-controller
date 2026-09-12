@@ -41,7 +41,8 @@
 - “小安小安”本地唤醒，兼容实测近音结果；对话时暂停唤醒采集，避免 K1 双录音冲突，20 秒后恢复。
 - 背景人声下最大收音 6 秒，避免云端 VAD 长时间等待。
 - 云端断开后退出，由 systemd 自动重建会话。
-- `shake_head` 工具调用低速 `/usr/bin/ai-toy_app motor head_lr 1` 并回传执行结果。
+- `shake_head` 工具调用 `AI_CAT_MOTION_PROFILE` 选定的固定 `head_lr` 命令并回传
+  执行结果；默认低速为 1，新设备顺滑配置固定为 3。
 - 开机等待网络、DNS、PulseAudio 就绪后再连接云端。
 
 ## 已测试

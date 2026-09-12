@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Capture all fixed personality phrases from Volcengine TTS on a provisioned K1."""
+"""Capture fixed local speech assets with the current Volcengine console voice."""
 
 from __future__ import annotations
 
+import argparse
 import array
 import hashlib
 import json
@@ -15,8 +16,17 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from ai_cat_controller.domain.personalities import PERSONALITIES
-from ai_cat_controller.local_speech import DEFAULT_ASSET_ROOT, phrase_asset_path
+from ai_cat_controller.domain.personalities import (
+    PERSONALITIES,
+    VOLCENGINE_CONSOLE_VOICE_ID,
+    VOLCENGINE_CONSOLE_VOICE_NAME,
+)
+from ai_cat_controller.local_speech import (
+    DEFAULT_ASSET_ROOT,
+    TOUCH_PHRASES,
+    phrase_asset_path,
+    touch_phrase_asset_path,
+)
 
 ENV_PATH = Path("/etc/ai-cat-controller.env")
 RUNTIME_PATH = Path("/var/lib/ai-cat-controller/personality-runtime.json")
@@ -27,6 +37,8 @@ PARECORD = "/usr/bin/parecord"
 SYSTEMCTL = "/usr/bin/systemctl"
 API_URL = "http://127.0.0.1:8000/api/v1/dialog/speak"
 CAPTURE_TIMEOUT_SECONDS = 30.0
+CAPTURE_FALLBACK_SECONDS = 8.0
+CAPTURE_ATTEMPTS = 2
 
 
 def read_env_value(path: Path, name: str) -> str:
@@ -59,26 +71,22 @@ def write_runtime(payload: dict[str, Any]) -> None:
         raise
 
 
-def capture_runtime(original: dict[str, Any], personality: Any) -> dict[str, Any]:
+def capture_runtime(original: dict[str, Any]) -> dict[str, Any]:
     payload = json.loads(json.dumps(original, ensure_ascii=False))
     revision = "capture-" + hashlib.sha256(
-        personality.personality_id.encode("ascii")
+        b"volcengine-console-voice"
     ).hexdigest()[:20]
     payload.update(
         {
-            "personality_id": personality.personality_id,
-            "personality_name": personality.name,
-            "voice_name": personality.voice_name,
-            "voice_type": personality.voice_id,
+            "voice_name": VOLCENGINE_CONSOLE_VOICE_NAME,
+            "voice_type": VOLCENGINE_CONSOLE_VOICE_ID,
+            "voice_source": "volcengine_console",
             "revision": revision,
         }
     )
     update = payload["session_update"]
     update["event_id"] = f"event_{revision}"
-    tts = update["session"]["config"]["TTSConfig"]
-    tts["Provider"] = "volcano_bidirection"
-    tts["ProviderParams"]["ResourceId"] = "volc.service_type.10029"
-    tts["ProviderParams"]["audio"]["voice_type"] = personality.voice_id
+    update["session"]["config"].pop("TTSConfig", None)
     return payload
 
 
@@ -178,8 +186,11 @@ def capture_phrase(
     personality_id: str,
     phrase_index: int,
     phrase: str,
+    *,
+    target: Path | None = None,
+    request_name: str | None = None,
 ) -> tuple[Path, float]:
-    target = phrase_asset_path(DEFAULT_ASSET_ROOT, personality_id, phrase)
+    target = target or phrase_asset_path(DEFAULT_ASSET_ROOT, personality_id, phrase)
     target.parent.mkdir(parents=True, exist_ok=True)
     raw_capture = target.with_suffix(".capture.wav")
     raw_capture.unlink(missing_ok=True)
@@ -203,19 +214,28 @@ def capture_phrase(
         time.sleep(0.5)
         if recorder.poll() is not None:
             raise RuntimeError("parecord exited before TTS started")
-        request_id = f"asset-{personality_id}-{phrase_index + 1:02d}"
+        request_id = (
+            f"asset-{personality_id}-{request_name}"
+            if request_name
+            else f"asset-{personality_id}-{phrase_index + 1:02d}"
+        )
+        request_id = f"{request_id}-{time.time_ns():x}"
         post_speak(api_key, phrase, request_id)
         saw_playback = False
         deadline = time.monotonic() + CAPTURE_TIMEOUT_SECONDS
+        fallback_deadline = time.monotonic() + CAPTURE_FALLBACK_SECONDS
         while time.monotonic() < deadline:
             state = read_status().get("state")
             if state in {"answering", "proactive_finishing"}:
                 saw_playback = True
             if saw_playback and state == "ready":
                 break
+            # The vendor demo can receive response.audio.done just after its
+            # acknowledgement timer expires without publishing the answering
+            # state. Keep recording for a bounded window and validate the WAV.
+            if time.monotonic() >= fallback_deadline:
+                break
             time.sleep(0.1)
-        else:
-            raise RuntimeError(f"TTS playback timed out for {request_id}")
         time.sleep(0.4)
     finally:
         recorder_error = stop_recorder(recorder)
@@ -229,33 +249,79 @@ def capture_phrase(
     return target, duration
 
 
+def capture_phrase_with_retry(
+    api_key: str,
+    personality_id: str,
+    phrase_index: int,
+    phrase: str,
+    *,
+    target: Path | None = None,
+    request_name: str | None = None,
+) -> tuple[Path, float]:
+    for attempt in range(1, CAPTURE_ATTEMPTS + 1):
+        try:
+            return capture_phrase(
+                api_key,
+                personality_id,
+                phrase_index,
+                phrase,
+                target=target,
+                request_name=request_name,
+            )
+        except RuntimeError:
+            if attempt == CAPTURE_ATTEMPTS:
+                raise
+            time.sleep(1.0)
+    raise AssertionError("capture retry loop exited unexpectedly")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--kind",
+        choices=("proactive", "touch", "all"),
+        default="proactive",
+    )
+    args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("run this capture tool as root on the provisioned K1")
     os.umask(0o077)
     api_key = read_env_value(ENV_PATH, "AI_CAT_API_KEY")
     original = json.loads(RUNTIME_PATH.read_text(encoding="utf-8"))
     try:
-        for personality in PERSONALITIES:
-            runtime = capture_runtime(original, personality)
-            write_runtime(runtime)
-            subprocess.run(
-                [SYSTEMCTL, "start", CLOUD_SERVICE],
-                check=True,
-                timeout=40.0,
-            )
-            wait_for_runtime(runtime["revision"])
-            for index, phrase in enumerate(personality.proactive_phrases):
-                path, duration = capture_phrase(
+        runtime = capture_runtime(original)
+        write_runtime(runtime)
+        subprocess.run(
+            [SYSTEMCTL, "start", CLOUD_SERVICE],
+            check=True,
+            timeout=40.0,
+        )
+        wait_for_runtime(runtime["revision"])
+        if args.kind in {"proactive", "all"}:
+            for personality in PERSONALITIES:
+                for index, phrase in enumerate(personality.proactive_phrases):
+                    path, duration = capture_phrase_with_retry(
+                        api_key,
+                        personality.personality_id,
+                        index,
+                        phrase,
+                    )
+                    print(
+                        f"captured {personality.personality_id}/"
+                        f"{path.name}: {duration:.2f}s"
+                    )
+        if args.kind in {"touch", "all"}:
+            for index, (sensor, phrase) in enumerate(TOUCH_PHRASES.items()):
+                target = touch_phrase_asset_path(DEFAULT_ASSET_ROOT, sensor)
+                path, duration = capture_phrase_with_retry(
                     api_key,
-                    personality.personality_id,
+                    "shared",
                     index,
                     phrase,
+                    target=target,
+                    request_name=f"touch-{sensor}",
                 )
-                print(
-                    f"captured {personality.personality_id}/"
-                    f"{path.name}: {duration:.2f}s"
-                )
+                print(f"captured shared/{path.name}: {duration:.2f}s")
     finally:
         try:
             write_runtime(original)

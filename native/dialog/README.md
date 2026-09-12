@@ -41,10 +41,12 @@ FastAPI writes the current pet personality to
 `/var/lib/ai-cat-controller/personality-runtime.json`. At startup and while the
 conversation is fully idle, the native client validates this bounded file and
 sends its embedded `session.update` to override the current Volcengine system
-prompt and TTS `voice_type`. The same file provides an allowlist for
+prompt. It deliberately omits `TTSConfig`, so the voice remains the one selected
+in the Volcengine console. The same file provides an allowlist for
 `shake_head`, `nod_head`, and `wag_tail`; a disallowed Function Calling request
 returns a normal tool result without starting a motor. The applied personality
-ID, revision, and voice are included in `/run/ai-cat/dialog-status.json`.
+ID, revision, and console-voice marker are included in
+`/run/ai-cat/dialog-status.json`.
 
 - `SIGUSR1`: start listening, or interrupt the current response and listen again.
 - `SIGUSR2`: interrupt the current response and end the continuous session.

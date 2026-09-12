@@ -106,13 +106,16 @@ def test_native_dialog_uses_fixed_motion_commands() -> None:
     assert 'strcmp(name, "shake_head") == 0' in source
     assert 'strcmp(name, "nod_head") == 0' in source
     assert 'strcmp(name, "wag_tail") == 0' in source
-    assert 'strcmp(actuator, "head_lr") != 0' in source
-    assert 'strcmp(actuator, "head_ud") != 0' in source
-    assert 'strcmp(actuator, "head_lr") != 0 || strcmp(speed, "1") != 0' in source
-    assert 'strcmp(actuator, "head_ud") != 0 || strcmp(speed, "2") != 0' in source
+    assert 'strcmp(actuator, "head_lr") == 0' in source
+    assert 'strcmp(actuator, "head_ud") == 0' in source
+    assert 'strcmp(actuator, "tail_lr") == 0' in source
     assert 'const char* executable = "/usr/bin/ai-toy_app";' in source
     assert 'getenv("AI_CAT_ENABLE_TAIL_MOTION")' in source
-    assert 'const char* speed = (is_tail || !is_nod) ? "1" : "2";' in source
+    assert 'getenv("AI_CAT_MOTION_PROFILE")' in source
+    assert '__vendor_smooth_motion_enabled()' in source
+    assert '__motor_motion_speed(actuator)' in source
+    assert 'strcmp(speed, expected_speed) != 0' in source
+    assert ') ? "3" : NULL;' in source
 
 
 def test_native_dialog_applies_personality_and_enforces_action_rules() -> None:

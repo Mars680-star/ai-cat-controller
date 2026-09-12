@@ -88,3 +88,26 @@ async def test_motion_sequence_reports_completion() -> None:
     outcome = await service.await_execution(result["execution_token"])
 
     assert outcome == "completed"
+
+
+@pytest.mark.asyncio
+async def test_motion_sequence_prefers_named_adapter_preset() -> None:
+    adapter = MockAiCatAdapter(SERVICES)
+    await adapter.connect()
+    service = MotionService(
+        adapter,
+        command_timeout_seconds=1.0,
+        cooldown_seconds=0.0,
+    )
+
+    result = await service.run_sequence(
+        action_name="quiet_companion",
+        preset_name="quiet_companion",
+        steps=((Capability.NOD_HEAD, 0.25, 10),),
+        request_id="preset-sequence",
+    )
+    outcome = await service.await_execution(result["execution_token"])
+    status = await adapter.get_device_status()
+
+    assert outcome == "completed"
+    assert status["last_action"] == "quiet_companion"
