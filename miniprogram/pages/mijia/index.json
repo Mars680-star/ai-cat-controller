@@ -1,0 +1,1 @@
+{ "navigationBarTitleText": "米家连接", "enablePullDownRefresh": true, "usingComponents": { "app-page": "/components/app-page/index", "confirm-sheet": "/components/confirm-sheet/index" } }

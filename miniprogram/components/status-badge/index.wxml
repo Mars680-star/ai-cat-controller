@@ -1,0 +1,1 @@
+<view class="badge badge-{{state}}"><view class="dot"></view><text>{{text}}</text></view>

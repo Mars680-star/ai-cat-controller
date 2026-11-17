@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import grp
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ CAPTURE_TIMEOUT_SECONDS = 30.0
 CAPTURE_FALLBACK_SECONDS = 8.0
 CAPTURE_ATTEMPTS = 2
 STARTUP_WELCOME_SETTLE_SECONDS = 4.0
+PULSE_ACCESS_GROUP = "pulse-access"
 
 
 def read_env_value(path: Path, name: str) -> str:
@@ -199,6 +201,10 @@ def capture_phrase(
     raw_capture.unlink(missing_ok=True)
     recorder_env = os.environ.copy()
     recorder_env["PULSE_SERVER"] = "unix:/var/run/pulse/native"
+    try:
+        recorder_group: int | None = grp.getgrnam(PULSE_ACCESS_GROUP).gr_gid
+    except KeyError:
+        recorder_group = None
     recorder = subprocess.Popen(
         [
             PARECORD,
@@ -212,6 +218,7 @@ def capture_phrase(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         env=recorder_env,
+        group=recorder_group,
     )
     try:
         time.sleep(0.5)
@@ -285,7 +292,14 @@ def main() -> None:
         choices=("proactive", "touch", "event", "all"),
         default="proactive",
     )
+    parser.add_argument(
+        "--personality-id",
+        choices=tuple(personality.personality_id for personality in PERSONALITIES),
+        help="capture proactive phrases for only one personality",
+    )
     args = parser.parse_args()
+    if args.personality_id and args.kind not in {"proactive", "all"}:
+        parser.error("--personality-id only applies to proactive phrase capture")
     if os.geteuid() != 0:
         raise SystemExit("run this capture tool as root on the provisioned K1")
     os.umask(0o077)
@@ -306,6 +320,11 @@ def main() -> None:
         time.sleep(STARTUP_WELCOME_SETTLE_SECONDS)
         if args.kind in {"proactive", "all"}:
             for personality in PERSONALITIES:
+                if (
+                    args.personality_id
+                    and personality.personality_id != args.personality_id
+                ):
+                    continue
                 for index, phrase in enumerate(personality.proactive_phrases):
                     path, duration = capture_phrase_with_retry(
                         api_key,

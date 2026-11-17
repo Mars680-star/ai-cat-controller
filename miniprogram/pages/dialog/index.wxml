@@ -1,0 +1,45 @@
+<app-page authKind="{{liveState.authKind}}" current="history" liveDevice="{{liveMode}}" loading="{{false}}" error="{{liveMode ? '' : error}}" subtitle="{{pet ? pet.name + (liveMode ? ' · 真实对话' : ' · ' + pet.personalityName) : 'AI 狐狸伴侣'}}" online="{{liveMode ? liveOnline : true}}" statusText="{{liveMode ? liveStatusLabel : '界面预览'}}" bindretry="load">
+  <live-product-panel state="{{liveState}}" busy="{{liveDialogLoading}}" error="{{liveDialogError}}" caption="状态与记录只读；真实文字、聆听与打断需独立服务端授权和逐次确认，不会随打开、刷新或切换设备自动发送。" bindenable="useRealDevice" bindlogin="liveLogin" bindrefresh="liveDialogRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="showPreview" />
+  <loading-skeleton wx:if="{{!liveMode && loading || liveMode && liveDialogLoading && !liveStatusKnown && !liveListKnown}}" />
+  <view class="page-heading">
+    <text class="eyebrow">语音与文字</text><text class="page-title">与 {{pet.name || '小安'}} 聊一聊</text>
+    <text class="page-description">{{liveMode ? '查看真实语音阶段与已保存会话。实际控制按服务端开关开放，每次操作都需要你确认。' : '查看语音阶段，发送文字问题，也可以回看每一次交流。'}}</text>
+  </view>
+
+  <view class="voice-panel">
+    <view class="voice-top"><text class="section-kicker">语音互动状态</text><text class="preview-badge">{{liveMode ? '真实状态' : '状态预览'}}</text></view>
+    <text class="voice-phase">{{statusView.text}}</text><text class="voice-hint">{{statusView.hint}}</text>
+    <text wx:if="{{liveMode && dialogState === 'offline' && liveCanListen}}" class="section-copy">当前已获控制权限，可点击下方“开始或继续聆听”请求启动语音服务。</text>
+    <text wx:if="{{liveMode && liveDialogSampled}}" class="section-copy">网关采样时间 {{liveDialogSampled}}，不是设备最后在线时间。</text>
+    <text wx:if="{{liveMode && liveStatusStale}}" class="readonly-note" role="status">语音快照已过期，不作为当前聆听或回答状态。</text>
+    <view class="voice-timing"><view><text class="timing-label">{{liveMode ? '阶段时长' : '当前阶段'}}</text><text class="timing-value mono">{{statusElapsed}}</text></view><text class="timing-note">{{liveMode ? !liveStatusKnown || liveStatusStale ? '当前会话活跃状态未验证' : status && status.sessionActive ? '服务端会话标记：活跃' : '服务端会话标记：未活跃' : status && status.followUpRemaining > 0 ? '追问窗口剩余 ' + status.followUpRemaining + ' 秒' : status && status.sessionActive ? '连续会话进行中' : '尚未进入连续会话'}}</text></view>
+    <view wx:if="{{liveMode}}" class="real-control-status"><view class="control-status-heading"><text class="section-kicker">{{liveControlStatus}}</text><button class="text-refresh" bindtap="refreshRealControl" loading="{{liveControlLoading}}" disabled="{{liveControlLoading || liveControlConfirm || liveControlSubmitting || liveControlInterrupting}}">核对控制权限</button></view><text class="section-copy">{{liveControlReason}}</text><text class="section-copy">{{liveDraftEditable ? '对话控制已开放，请用当前可用的按钮逐次确认；接口接受不代表回答或播音完成。' : '控制权限核验通过后才允许确认发送；历史记录可独立查看。'}}</text><text wx:if="{{liveControlError}}" class="control-error" role="alert">{{liveControlError}}</text></view>
+    <view class="voice-actions"><button class="btn btn-primary" bindtap="startListening" loading="{{liveMode ? liveControlSubmitting : controlling}}" disabled="{{liveMode ? !liveCanListen : controlling || dialogState === 'offline'}}">{{liveMode ? '开始或继续聆听 · 需确认' : '开始或继续聆听'}}</button><button class="btn btn-secondary" bindtap="interrupt" loading="{{liveMode && liveControlInterrupting}}" disabled="{{liveMode ? !liveCanInterrupt : controlling || !status || (!status.canInterrupt && !status.sessionActive)}}">{{liveMode ? '打断并结束 · 需确认' : '打断并结束'}}</button></view>
+    <view class="wake-hint"><block wx:if="{{!liveMode}}"><text>设备接入后的唤醒方式</text><text class="wake-phrase">“小安，开启对话模式”</text><text>当前按钮仅演示状态，不会打开麦克风或连接语音服务。</text></block><text wx:else>不猜测当前设备的唤醒词；语音离线不等于设备断开。按钮获授权后才可确认调用真实设备。</text></view>
+  </view>
+  <view wx:if="{{liveMode && (liveMainMessage || liveMainReceipt || liveCanCheckMain)}}" class="control-receipt" role="status"><text class="section-kicker">聆听 / 文字请求回执</text><text class="section-copy">{{liveMainMessage}}</text><text wx:if="{{liveMainReceipt}}" class="receipt-reference">原请求 {{liveMainReceipt.requestId}} · {{liveMainReceipt.status}}</text><button wx:if="{{liveCanCheckMain}}" class="text-refresh" data-channel="main" bindtap="checkOriginalReceipt" loading="{{liveCheckingMain}}" disabled="{{liveCheckingMain}}">核对原回执</button><text class="section-copy">未知结果不自动重发，不会改用新编号绕过；核对不到记录也不视为未发送。</text></view>
+  <view wx:if="{{liveMode && (liveInterruptMessage || liveInterruptReceipt || liveCanCheckInterrupt)}}" class="control-receipt" role="status"><text class="section-kicker">独立打断回执</text><text class="section-copy">{{liveInterruptMessage}}</text><text wx:if="{{liveInterruptReceipt}}" class="receipt-reference">原请求 {{liveInterruptReceipt.requestId}} · {{liveInterruptReceipt.status}}</text><button wx:if="{{liveCanCheckInterrupt}}" class="text-refresh" data-channel="interrupt" bindtap="checkOriginalReceipt" loading="{{liveCheckingInterrupt}}" disabled="{{liveCheckingInterrupt}}">核对原回执</button><text class="section-copy">打断不会清除另一条文字或聆听请求的未知结果。</text></view>
+
+  <view class="composer-card">
+    <view class="composer-heading"><text class="section-title">文字提问</text><text>{{liveMode ? realDraftCount : inputText.length}} / 500</text></view>
+    <textarea class="composer-input" value="{{inputText}}" maxlength="{{liveMode ? 1000 : 500}}" disabled="{{liveMode && !liveDraftEditable}}" placeholder="{{liveMode ? liveDraftEditable ? '输入真实问题，发送前需再次确认…' : '控制尚未验证或开放；已保存记录仍可查看' : '输入想问小安的问题…'}}" auto-height="{{false}}" adjust-position="{{true}}" cursor-spacing="28" show-confirm-bar="{{false}}" bindinput="onInput" confirm-type="send" bindconfirm="sendText" aria-label="文字问题"/>
+    <text class="draft-hint">{{liveMode ? '真实草稿仅保存在当前内存，与演示草稿隔离。刷新状态不会清空输入；未知结果只核对原回执，不重新发送正文。' : '切换页面时保留草稿，发送成功后清除。'}}</text>
+    <text wx:if="{{liveMode && realDraftError}}" class="control-error" role="alert">{{realDraftError}}</text>
+    <view class="composer-bottom"><text>{{liveMode ? '真实设备 · 逐次确认后发送' : '仅生成本地演示回答'}}</text><button class="send-action" bindtap="sendText" loading="{{liveMode ? liveControlSubmitting : sending}}" disabled="{{liveMode ? !liveCanSendText : !canSend || sending}}">{{liveMode ? liveControlSubmitting ? '请求发送中' : '发送真实问题 · 需确认' : sending ? '发送中' : '发送问题'}}</button></view>
+    <view wx:if="{{!liveMode && pendingMessage}}" class="pending {{pendingMessage.state}}"><view class="pending-copy"><text class="pending-content">{{pendingMessage.content}}</text><text class="pending-status">{{pendingMessage.state === 'sending' ? '正在发送…' : pendingMessage.state === 'failed' ? '发送失败，内容已保留' : '演示问题已发送'}}</text></view><button wx:if="{{pendingMessage.state === 'failed'}}" class="pending-retry" bindtap="retrySend">重新发送</button></view>
+  </view>
+
+  <view class="conversation-heading"><view><text class="section-title">会话记录</text><text class="section-copy">{{liveMode ? liveListKnown ? '已读取 ' + conversations.length + ' 条摘要，并非全部历史' : '真实会话尚未读取' : '共 ' + conversations.length + ' 次交流'}}</text></view><text class="sync-text">{{syncText}}</text></view>
+  <view wx:if="{{liveMode && liveListError}}" class="readonly-note error-note" role="alert"><text>{{liveListError}}</text><button class="text-refresh" bindtap="liveDialogRefresh" disabled="{{liveDialogLoading}}">重新读取会话</button></view>
+  <view wx:if="{{conversations.length}}" class="conversation-list">
+    <button wx:for="{{conversations}}" wx:key="conversationId" class="conversation-item" data-id="{{item.conversationId}}" bindtap="openConversation" disabled="{{openingConversationId}}">
+      <view class="conversation-top"><text class="conversation-title">{{item.userPreview || '无用户字幕'}}</text><text class="detail-arrow">›</text></view>
+      <text class="assistant-preview">{{item.assistantPreview || '暂无回答'}}</text>
+      <text class="conversation-time">{{item.startedLabel}}</text>
+      <text wx:if="{{liveMode}}" class="conversation-time">{{item.sourceText}}</text>
+      <view class="conversation-meta"><text class="conversation-status {{item.status}}">{{item.statusText}}</text><text>{{openingConversationId === item.conversationId ? '正在打开…' : item.messageCount + ' 条消息 · 查看详情'}}</text></view>
+    </button>
+  </view>
+  <view wx:elif="{{liveMode}}" class="readonly-note" role="status">{{!liveState.signedIn ? liveState.authKind === 'local' ? '请先扫描机身卡本地配对并选择设备。' : '请先验证微信登录并选择已授权设备。' : !liveState.selectedPetId ? '请选择已授权设备，再读取真实对话。' : liveListLoading ? '正在读取真实会话摘要…' : liveListKnown ? '暂无已保存的真实对话，不显示演示记录。' : '会话记录暂未验证，请刷新后重试。'}}</view>
+  <empty-state wx:else title="还没有对话记录" description="试着输入一个问题，预览小安的演示回答。" actionText="开始聆听预览" bindaction="mainAction"/>
+</app-page>

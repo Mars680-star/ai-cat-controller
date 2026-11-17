@@ -1,0 +1,21 @@
+.debug-heading { margin-bottom: 28rpx; }
+.eyebrow { display: block; margin-bottom: 14rpx; color: var(--color-primary-deep); font-size: 20rpx; font-weight: 700; letter-spacing: 1rpx; }
+.debug-copy { display: block; margin-top: 18rpx; color: var(--color-muted); font-size: 25rpx; line-height: 1.65; }
+.status-panel { margin-bottom: 28rpx; padding: 24rpx; border: 1rpx solid var(--color-line); border-radius: 16rpx; background: var(--color-surface-soft); }
+.status-panel.success { border-color: var(--color-success); background: var(--color-success-soft); }
+.status-panel.danger { border-color: var(--color-danger-border); background: var(--color-danger-soft); }
+.status-title { display: block; color: var(--color-title); font-size: 30rpx; font-weight: 700; }
+.status-copy { display: block; margin-top: 8rpx; color: var(--color-muted); font-size: 23rpx; }
+.gateway-card, .reading-section { margin-top: 28rpx; padding: 26rpx; border: 1rpx solid var(--color-line); border-radius: 18rpx; background: var(--color-surface); }
+.gateway-address { display: block; margin-top: 18rpx; color: var(--color-title); font-size: 27rpx; overflow-wrap: anywhere; }
+.field-note { display: block; margin-top: 12rpx; color: var(--color-muted); font-size: 22rpx; line-height: 1.65; }
+.field-label { display: block; margin-top: 28rpx; color: var(--color-title); font-size: 25rpx; font-weight: 650; }
+.token-input { box-sizing: border-box; width: 100%; height: 96rpx; margin-top: 12rpx; padding: 0 20rpx; border: 1rpx solid var(--color-line); border-radius: 12rpx; background: var(--color-bg); font-size: 24rpx; }
+.read-button { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; min-width: 0; min-height: 96rpx; margin: 26rpx 0 0; padding: 18rpx; border: 0; border-radius: 14rpx; color: var(--color-title); background: var(--color-primary); font-size: 27rpx; font-weight: 650; line-height: 1.5; }
+.read-button::after { border: 0; }
+.read-button[disabled] { color: var(--color-muted); background: var(--color-surface-soft); }
+.error-copy { display: block; margin-top: 18rpx; color: var(--color-danger); font-size: 24rpx; }
+.reading-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 20rpx 0; border-bottom: 1rpx solid var(--color-line); color: var(--color-muted); font-size: 24rpx; }
+.reading-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.reading-value { flex: 1; min-width: 0; color: var(--color-title); text-align: right; overflow-wrap: anywhere; }
+.sample-note { display: flex; flex-direction: column; gap: 8rpx; margin-top: 26rpx; color: var(--color-muted); font-size: 21rpx; overflow-wrap: anywhere; }

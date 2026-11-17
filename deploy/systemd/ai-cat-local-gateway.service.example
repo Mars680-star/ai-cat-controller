@@ -1,0 +1,23 @@
+[Unit]
+Description=AI Cat paired encrypted local gateway
+Wants=ai-cat-controller.service
+After=ai-cat-controller.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai-cat-controller
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+# Replace this example's dedicated venv path with the verified installed release.
+# Do not install extra gateway dependencies into the controller API venv.
+ExecStart=/opt/ai-cat-local-20261102-1v6fKQiB/.venv/bin/python -m ai_cat_controller.local_gateway.cli --config-file /var/lib/ai-cat-local/current.json
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=180
+KillSignal=SIGTERM
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

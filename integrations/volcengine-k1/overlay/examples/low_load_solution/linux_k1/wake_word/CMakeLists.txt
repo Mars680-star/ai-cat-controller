@@ -35,6 +35,7 @@ set_source_files_properties(main.cpp PROPERTIES COMPILE_OPTIONS "-O0;-g0")
 
 target_compile_definitions(volc_k1_wake_word PRIVATE USE_SPACEMIT_EP)
 target_include_directories(volc_k1_wake_word PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../common
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor
     ${ONNXRUNTIME_INCLUDE_DIR}
     /usr/local/share/third_party/ten-vad

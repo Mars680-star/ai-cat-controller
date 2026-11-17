@@ -1,0 +1,1 @@
+{ "navigationBarTitleText": "会话详情", "enablePullDownRefresh": true, "usingComponents": { "app-page": "/components/app-page/index", "live-product-panel": "/components/live-product-panel/index", "loading-skeleton": "/components/loading-skeleton/index", "status-badge": "/components/status-badge/index" } }

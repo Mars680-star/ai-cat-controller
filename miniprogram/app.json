@@ -1,0 +1,30 @@
+{
+  "pages": [
+    "pages/auth/index",
+    "pages/device/index",
+    "pages/provision/index",
+    "pages/device-debug/index",
+    "pages/gateway-setup/index",
+    "pages/local-pair/index",
+    "pages/local-network/index",
+    "pages/blind-box/index",
+    "pages/home/index",
+    "pages/motion/index",
+    "pages/growth/index",
+    "pages/growth-personality/index",
+    "pages/dialog/index",
+    "pages/conversation/index",
+    "pages/mijia/index",
+    "pages/profile/index"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#F9F9F7",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "小安 · 界面预览",
+    "backgroundColor": "#F6F7F3",
+    "backgroundTextStyle": "dark"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

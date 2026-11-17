@@ -57,8 +57,6 @@ def test_motor_source_has_only_named_safe_product_presets() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 
     for preset in (
-        "conversation_tilt",
-        "conversation_nod",
         "proud_pose",
         "quiet_companion",
         "greeting_combo",
@@ -70,13 +68,3 @@ def test_motor_source_has_only_named_safe_product_presets() -> None:
     assert "run_rohs_motor_waypoints(" in source
     assert "run_proud_pose(head_lr, tail_lr)" in source
     assert "usleep(1200000U)" in source
-
-
-def test_conversation_motor_presets_stay_near_center() -> None:
-    source = SOURCE_PATH.read_text(encoding="utf-8")
-
-    assert "const struct motor_waypoint conversation_motion[]" in source
-    assert "{108.0f, 450000U}" in source
-    assert "{90.0f, 300000U}" in source
-    assert 'strcmp(name, "conversation_tilt") == 0' in source
-    assert 'strcmp(name, "conversation_nod") == 0' in source

@@ -1,0 +1,39 @@
+<view class="wifi-form">
+  <view class="form-heading"><text class="title">{{localNetworkReceipt ? '核验本次连接结果' : pending ? '手机切回目标 Wi-Fi' : '填写目标 Wi-Fi'}}</text><text class="step-note">{{localNetworkReceipt || pending ? '仅核对原请求，不重新发送' : '中文名称可直接填写'}}</text></view>
+  <text wx:if="{{error}}" class="error" role="alert">{{bindingRecoveryAvailable ? '手机标准 Wi-Fi 绑定未通过，网络信息尚未发送。' : error}}</text>
+  <view wx:if="{{bindingRecoveryAvailable}}" class="compatibility-help">
+    <text class="note">可以主动改用本地直连兼容。此次只检查端口，不发送 Wi-Fi 名称或密码。</text>
+    <button class="primary recovery-button" bindtap="recoverBinding" disabled="{{!canRecoverBinding}}">使用兼容通道并检查</button>
+    <text wx:if="{{!hotspotReady}}" class="note">请先勾选下方“我已连接本次设备热点”。</text>
+    <text class="note">检查后需重新填写密码，再单独确认连接；不会自动重试。</text>
+  </view>
+  <text wx:if="{{notice}}" class="notice" role="status">{{notice}}</text>
+  <view wx:if="{{transportMode === 'direct' && !pending && status !== 'connected'}}" class="compatibility-status" role="status">
+    <text class="compatibility-title">本地直连兼容 · {{probeLabel}}</text>
+    <text class="note">{{compatibilityReady ? '只确认端口可达，不代表已联网。请填写密码后确认连接一次。' : probeStatus === 'failed' ? '仍未发送网络信息，请确认热点连接与配网窗口，再手动检查。' : '仅检查固定配网端口，不发送网络资料。'}}</text>
+  </view>
+  <block wx:if="{{!localNetworkReceipt && !pending && status !== 'connected'}}">
+    <text wx:if="{{networkLockReason}}" class="notice">{{networkLockReason}}</text>
+    <checkbox-group bindchange="hotspotChanged"><label class="hotspot-check"><checkbox value="hotspot" checked="{{hotspotReady}}" disabled="{{busy || confirming}}" color="#967023"/><text>我已连接本次设备热点</text></label></checkbox-group>
+    <view wx:for="{{formKeys}}" wx:key="*this">
+      <text class="label">Wi-Fi 名称</text><input class="input" value="{{ssid}}" maxlength="32" disabled="{{!canEditNetwork}}" bindinput="inputSSID" placeholder="例如：家庭 Wi-Fi（支持中文）" />
+      <text class="label">Wi-Fi 密码</text><input class="input" password="{{true}}" maxlength="64" disabled="{{!canEditNetwork}}" bindinput="inputPassword" placeholder="输入目标网络密码" />
+    </view>
+    <text class="note">仅支持 WPA2 个人网络。保存会切换猫的网络；密码不会存入页面数据或日志。</text>
+    <button class="primary" wx:if="{{transportMode !== 'direct' || compatibilityReady}}" bindtap="configure" loading="{{busy}}" disabled="{{!canConfigure || busy || confirming}}">{{confirming ? '请完成确认' : '保存并连接 · 需确认'}}</button>
+    <button class="primary" wx:else bindtap="probeCompatibility" loading="{{probeStatus === 'testing'}}" disabled="{{!canProbe || busy || confirming}}">先检查兼容通道</button>
+  </block>
+  <view wx:if="{{pending || localNetworkReceipt || status === 'connected'}}" class="result" role="status">
+    <text class="result-title">{{phaseLabel}}</text><text class="note">{{status === 'connected' ? '原加密回执已验证。' : statusHint}}</text>
+    <button wx:if="{{canQuery}}" class="secondary" bindtap="queryOriginal" disabled="{{busy || confirming}}">{{busy ? '正在核对…' : '刷新原请求结果'}}</button>
+  </view>
+  <button class="details-button" bindtap="toggleDiagnostics" disabled="{{busy || confirming}}">{{diagnosticsOpen ? '收起连接选项' : '连接异常？查看兼容选项'}}</button>
+  <view wx:if="{{diagnosticsOpen}}" class="details">
+    <text wx:if="{{bindingRecoveryAvailable}}" class="note diagnostic">{{error}}</text>
+    <text class="note">默认使用标准 Wi-Fi 绑定。仅在绑定报错时主动选择兼容通道，自检不发送密码，也不代表身份验证成功。</text>
+    <radio-group bindchange="transportChanged"><label class="radio"><radio value="bound" checked="{{transportMode === 'bound'}}" disabled="{{busy || confirming}}" color="#967023"/><text>标准 Wi-Fi 绑定</text></label><label class="radio"><radio value="direct" checked="{{transportMode === 'direct'}}" disabled="{{!transportAvailable || busy || confirming}}" color="#967023"/><text>本地直连兼容</text></label></radio-group>
+    <text wx:if="{{probeHint || probeStatus !== 'idle'}}" class="note">{{probeLabel}} {{probeHint}}</text>
+    <text class="note">结果未知时不要重新发送、重开热点或清缓存。离开微信会清除填写内容，回来需重扫同一机身卡。</text>
+  </view>
+  <button class="secondary" bindtap="returnToLocalNetwork" disabled="{{busy || confirming}}">{{status === 'connected' && !pending ? '完成，返回设备' : pending ? '下一步：连接目标 Wi-Fi' : '返回配网步骤'}}</button>
+</view>

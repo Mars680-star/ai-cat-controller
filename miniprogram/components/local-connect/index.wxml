@@ -1,0 +1,27 @@
+<view class="local-connect {{compact ? 'compact' : ''}}">
+  <view class="connect-heading"><view><text class="connect-title">{{paired ? pairedName : '连接你的狐狸'}}</text><text class="connect-copy">{{paired ? '机身卡加密连接 · 不经电脑中转' : '同一 Wi-Fi，扫描机身卡连接。'}}</text></view><text class="connect-badge {{paired ? 'connected' : ''}}">{{statusText}}</text></view>
+  <block wx:if="{{!paired || compact || addressExpanded}}">
+    <view wx:if="{{addressExpanded}}" class="address-box">
+      <text class="field-label">设备地址</text><input class="address-input" value="{{address}}" placeholder="填写设备当前的局域网 IP" maxlength="15" bindinput="inputAddress" disabled="{{busy || scanning || confirming}}" />
+      <view class="address-actions"><button class="text-button" bindtap="discover" disabled="{{!discoveryAvailable || discovering || busy || scanning || confirming}}">查找同网设备</button><button wx:if="{{discovering}}" class="text-button" bindtap="stopDiscovery">停止查找</button></view>
+      <button wx:for="{{candidates}}" wx:key="address" data-address="{{item.address}}" class="candidate" bindtap="chooseCandidate" disabled="{{busy || scanning || confirming}}">选择 {{item.address}}</button>
+      <text wx:if="{{discovering}}" class="field-note">查找最多30秒，发现不代表已授权。</text>
+      <text wx:elif="{{discoveryHint}}" class="field-note">{{discoveryHint}}</text>
+    </view>
+    <button wx:else class="address-toggle" bindtap="toggleAddress" disabled="{{busy || scanning || confirming}}">设备地址 {{address}} <text>修改</text></button>
+    <button class="primary-button" bindtap="scanCard" loading="{{busy}}" disabled="{{!available || busy || scanning || confirming}}">{{busy ? '正在连接…' : confirming ? '请确认连接' : paired ? '重新扫描机身卡连接' : '扫描机身卡连接'}}</button>
+    <text wx:if="{{!available}}" class="field-note">仅安卓微信开发版支持连接，当前环境只显示界面。</text>
+  </block>
+  <view wx:if="{{scanning}}" class="scanner"><camera wx:for="{{cameraKeys}}" wx:key="*this" data-scan-id="{{item}}" class="camera" mode="scanCode" device-position="back" flash="off" bindscancode="cameraDecoded" binderror="cameraError" /><text class="field-note">对准私有机身卡，不是开发者工具预览码。</text><button class="secondary-button" bindtap="cancelScan">取消扫码</button></view>
+  <block wx:if="{{paired && !scanning}}">
+    <view class="connected-summary"><view><text class="metric-label">真实电量</text><text class="metric-value">{{batteryText}}</text></view><view><text class="metric-label">设备连接</text><text class="metric-value">{{statusText}}</text></view></view>
+    <text wx:if="{{state.statusLoading}}" class="field-note">正在读取真实状态…</text>
+    <view wx:if="{{!selectedPetId && state.pets.length > 1}}" class="pet-options"><text class="field-label">选择要使用的设备</text><button wx:for="{{state.pets}}" wx:key="petId" data-pet-id="{{item.petId}}" class="candidate" bindtap="selectPet" disabled="{{busy}}">{{item.name}}</button></view>
+    <button class="secondary-button" bindtap="refreshState" loading="{{state.statusLoading}}" disabled="{{busy || state.statusLoading || state.loading || state.listLoading}}">刷新状态</button>
+    <button wx:if="{{!compact}}" class="text-button" bindtap="toggleAddress" disabled="{{busy}}">更换连接地址</button>
+    <view wx:if="{{!compact}}" class="connection-actions"><button class="primary-button" bindtap="openControls" disabled="{{busy || !selectedPetId}}">进入控制</button><button class="secondary-button" bindtap="openLocalNetwork" disabled="{{busy}}">设置设备 Wi-Fi</button></view>
+  </block>
+  <text wx:if="{{error || state.error}}" class="connect-error" role="alert">{{error || state.error}}</text>
+  <button class="details-toggle" bindtap="toggleDetails">{{detailsExpanded ? '收起连接说明' : '连接说明与其他方式'}} {{detailsExpanded ? '⌃' : '⌄'}}</button>
+  <view wx:if="{{detailsExpanded}}" class="connection-details"><text class="field-note">只在受信同 Wi-Fi 使用。机身卡是本机控制凭证，不是微信身份，请勿分享。进入后台会清除密钥，返回时需要重扫；原请求记录不会删除。</text><button wx:if="{{paired}}" class="text-button" bindtap="logoutLocal" disabled="{{busy || state.loading}}">断开本次连接</button><button class="text-button" bindtap="useComputer" disabled="{{busy || scanning || confirming}}">使用电脑微信网关</button></view>
+</view>

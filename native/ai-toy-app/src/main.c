@@ -3,13 +3,6 @@
 /*
  * Copyright (C) 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
  * SPDX-License-Identifier: Apache-2.0
- *
- * AI Cat maintenance notes:
- * - This is the native boundary for fixed, physically validated K1 motions.
- * - Product requests may select a preset but must never supply GPIO, direction,
- *   speed, or unrestricted angle values to this program.
- * - Validate every changed trajectory on hardware before marking it accepted.
- * - Deploy changes by rebuilding and installing /usr/bin/ai-toy_app on K1.
  */
 
 #include <errno.h>
@@ -21,10 +14,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include "../../common/ai_cat_process_gate.h"
 
 #include <light_sensor.h>
 #include <misc_io.h>
@@ -78,6 +74,46 @@ struct motor_waypoint {
     float position;
     useconds_t dwell_us;
 };
+
+/* Keep this self-contained: vendor SDK deployment copies this C source alone.
+ * Match Settings exactly: missing uses the documented default; explicit empty,
+ * whitespace or an unknown token fails closed, never a truthy fallback. */
+static int motion_env_flag(const char *name, bool fallback, bool *result)
+{
+    const char *value = getenv(name);
+    if (value == NULL) {
+        *result = fallback;
+        return 0;
+    }
+    if (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0 ||
+        strcasecmp(value, "yes") == 0 || strcasecmp(value, "on") == 0) {
+        *result = true;
+        return 0;
+    }
+    if (strcmp(value, "0") == 0 || strcasecmp(value, "false") == 0 ||
+        strcasecmp(value, "no") == 0 || strcasecmp(value, "off") == 0) {
+        *result = false;
+        return 0;
+    }
+    fprintf(stderr, "invalid motion boolean: %s\n", name);
+    return -1;
+}
+
+static const char *motion_rejection_reason(bool requires_tail)
+{
+    bool enabled, has_tail, tail_enabled;
+    if (motion_env_flag("AI_CAT_ENABLE_MOTION", true, &enabled) != 0 ||
+        motion_env_flag("AI_CAT_HAS_TAIL", true, &has_tail) != 0 ||
+        motion_env_flag("AI_CAT_ENABLE_TAIL_MOTION", false, &tail_enabled) != 0)
+        return "动作配置无效，保持禁用";
+    if (requires_tail && !has_tail)
+        return "当前设备没有尾部机构";
+    if (!enabled)
+        return "动作已暂停";
+    if (requires_tail && !tail_enabled)
+        return "尾部动作尚未通过维修后验收，当前保持禁用";
+    return NULL;
+}
 
 static const char *k_default_i2c_dev = "/dev/i2c-5";
 static const uint8_t k_nfc_i2c_addr = 0x28;
@@ -526,8 +562,14 @@ static int run_rohs_motor_waypoints(const struct fixed_rohs_motor *fixed,
         .vel_des = speed,
     };
     struct motor_state state;
+    const char *rejection;
     if (!fixed || !waypoints || waypoint_count == 0)
         return 1;
+    rejection = motion_rejection_reason(strcmp(fixed->name, "tail_lr") == 0);
+    if (rejection != NULL) {
+        fprintf(stderr, "[motor] %s\n", rejection);
+        return 1;
+    }
 
     info = fixed->info;
 
@@ -606,6 +648,14 @@ static bool known_motor_preset(const char *name)
     return false;
 }
 
+static bool motor_preset_requires_tail(const char *name)
+{
+    return name != NULL && (
+        strcmp(name, "proud_pose") == 0 ||
+        strcmp(name, "greeting_combo") == 0 ||
+        strcmp(name, "celebration_combo") == 0);
+}
+
 static int run_proud_pose(const struct fixed_rohs_motor *head_lr,
     const struct fixed_rohs_motor *tail_lr)
 {
@@ -618,9 +668,14 @@ static int run_proud_pose(const struct fixed_rohs_motor *head_lr,
     };
     struct motor_state state;
     int ret = 0;
+    const char *rejection = motion_rejection_reason(true);
 
     if (!head_lr || !tail_lr)
         return 1;
+    if (rejection != NULL) {
+        fprintf(stderr, "[motor] %s\n", rejection);
+        return 1;
+    }
     info = head_lr->info;
     head_motor = motor_alloc_pwm("pwm_RoHS", 0, &info);
     if (!head_motor) {
@@ -668,6 +723,12 @@ static int run_motor_preset(const char *name)
         {135.0f, 900000U},
         {90.0f, 400000U},
     };
+    const char *rejection = motion_rejection_reason(motor_preset_requires_tail(name));
+
+    if (rejection != NULL) {
+        fprintf(stderr, "[motor] %s\n", rejection);
+        return 1;
+    }
 
     printf("[motor] preset=%s\n", name);
     if (strcmp(name, "conversation_tilt") == 0) {
@@ -830,14 +891,16 @@ static int run_motor(int argc, char **argv)
     FILE *pid_file;
     struct sigaction action;
     int ret = 0;
+    const char *rejection;
+    struct ai_cat_process_gate process_gate;
 
-    if (ensure_motor_runtime_directory() != 0)
-        return 1;
     if (strcmp(which, "stop") == 0) {
         if (argc != 1) {
             fprintf(stderr, "motor stop does not accept extra arguments\n");
             return 1;
         }
+        if (ensure_motor_runtime_directory() != 0)
+            return 1;
         return request_motor_stop();
     }
     if (!known_motor_name(which)) {
@@ -858,14 +921,36 @@ static int run_motor(int argc, char **argv)
         }
     }
 
+    /* Reject whole tail-containing presets/all before even their first head
+     * movement; never replace a named action with a shortened sequence. Stop
+     * above intentionally bypasses all three gates, including malformed ones. */
+    rejection = motion_rejection_reason(
+        strcmp(which, "all") == 0 || strcmp(which, "tail_lr") == 0 ||
+        (preset != NULL && motor_preset_requires_tail(preset)));
+    if (rejection != NULL) {
+        fprintf(stderr, "[motor] %s\n", rejection);
+        return 1;
+    }
+    ai_cat_process_gate_init(&process_gate);
+    if (ai_cat_process_gate_enter(&process_gate) != 0) {
+        fprintf(stderr, "[motor] device maintenance gate rejected action\n");
+        return 1;
+    }
+    if (ensure_motor_runtime_directory() != 0) {
+        ai_cat_process_gate_close(&process_gate);
+        return 1;
+    }
+
     lock_fd = open(MOTOR_LOCK_PATH, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (lock_fd < 0) {
         perror("open motor lock");
+        ai_cat_process_gate_close(&process_gate);
         return 1;
     }
     if (flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
         fprintf(stderr, "motor controller is busy\n");
         close(lock_fd);
+        ai_cat_process_gate_close(&process_gate);
         return 2;
     }
 
@@ -881,6 +966,7 @@ static int run_motor(int argc, char **argv)
         perror("open motor pid file");
         flock(lock_fd, LOCK_UN);
         close(lock_fd);
+        ai_cat_process_gate_close(&process_gate);
         return 1;
     }
     fprintf(pid_file, "%ld\n", (long)getpid());
@@ -888,12 +974,18 @@ static int run_motor(int argc, char **argv)
     fsync(fileno(pid_file));
     fclose(pid_file);
 
-    if (preset) {
+    if (ai_cat_process_gate_check(&process_gate) != 0) {
+        ret = 1;
+    } else if (preset) {
         ret = run_motor_preset(preset);
     } else {
         for (size_t i = 0; i < ARRAY_SIZE(k_rohs_motors); ++i) {
             if (motor_stop_requested)
                 break;
+            if (ai_cat_process_gate_check(&process_gate) != 0) {
+                ret = 1;
+                break;
+            }
             if (strcmp(which, "all") != 0 && strcmp(which, k_rohs_motors[i].name) != 0)
                 continue;
             if (run_one_rohs_motor(&k_rohs_motors[i], speed) != 0)
@@ -904,6 +996,7 @@ static int run_motor(int argc, char **argv)
     unlink(MOTOR_PID_PATH);
     flock(lock_fd, LOCK_UN);
     close(lock_fd);
+    ai_cat_process_gate_close(&process_gate);
     return ret;
 }
 

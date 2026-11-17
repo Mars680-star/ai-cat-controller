@@ -113,6 +113,20 @@
     dialogList: $("#dialog-list"),
     dialogForm: $("#dialog-form"),
     dialogInput: $("#dialog-input"),
+    mijiaStatusBadge: $("#mijia-status-badge"),
+    mijiaStatusCopy: $("#mijia-status-copy"),
+    mijiaGatewayId: $("#mijia-gateway-id"),
+    mijiaAccountState: $("#mijia-account-state"),
+    mijiaModel: $("#mijia-model"),
+    mijiaSpecRevision: $("#mijia-spec-revision"),
+    mijiaPropertyCount: $("#mijia-property-count"),
+    mijiaPropertyList: $("#mijia-property-list"),
+    mijiaActionCount: $("#mijia-action-count"),
+    mijiaActionList: $("#mijia-action-list"),
+    mijiaEventCount: $("#mijia-event-count"),
+    mijiaEventList: $("#mijia-event-list"),
+    mijiaPrepare: $("#mijia-prepare-button"),
+    mijiaRemove: $("#mijia-remove-button"),
     settingsForm: $("#settings-form"),
     settingsName: $("#settings-name"),
     settingsVolume: $("#settings-volume"),
@@ -124,6 +138,7 @@
     feedbackCategory: $("#feedback-category"),
     feedbackContent: $("#feedback-content"),
     unbind: $("#unbind-button"),
+    clearMemory: $("#clear-memory-button"),
     resetData: $("#reset-data-button"),
     personalityDialog: $("#personality-dialog"),
     revealName: $("#reveal-name"),
@@ -153,6 +168,7 @@
     dialogConfig: null,
     intimacyPoints: null,
     growthTagIds: null,
+    mijia: null,
     settingsVolumeDirty: false,
   };
 
@@ -306,6 +322,8 @@
         refreshGrowthPersonality().catch(reportError);
       } else if (viewName === "history") {
         Promise.all([refreshDialogs(), refreshVoiceStatus()]).catch(reportError);
+      } else if (viewName === "mijia") {
+        refreshMijia().catch(reportError);
       }
     }
   }
@@ -391,6 +409,7 @@
       state.petId = null;
       state.dashboard = null;
       setBoundNavigation(false);
+      await prepareBindDeviceSerial().catch(reportError);
       switchView("connection");
     }
     if (!silent) {
@@ -446,6 +465,12 @@
   function renderHardwareStatus(status, {syncSettingsVolume = true} = {}) {
     state.hardwareStatus = status;
     const isLocalK1 = status.adapter_mode === "local_k1";
+    if (isLocalK1 && status.device_serial) {
+      ui.deviceSerial.value = status.device_serial;
+      ui.deviceSerial.readOnly = true;
+    } else {
+      ui.deviceSerial.readOnly = false;
+    }
     ui.realDeviceStatus.classList.toggle("hidden", !isLocalK1);
     ui.deviceStatusForm.classList.toggle("hidden", isLocalK1);
     ui.reconnect.classList.toggle("hidden", isLocalK1);
@@ -508,6 +533,17 @@
       : `${(status.battery_voltage_mv / 1000).toFixed(2)} V`;
   }
 
+  async function prepareBindDeviceSerial() {
+    const payload = await apiRequest("/api/v1/device/status");
+    const status = payload.data;
+    if (status.adapter_mode === "local_k1" && status.device_serial) {
+      ui.deviceSerial.value = status.device_serial;
+      ui.deviceSerial.readOnly = true;
+      return;
+    }
+    ui.deviceSerial.readOnly = false;
+  }
+
   async function refreshDashboard() {
     if (!state.petId || state.refreshing) {
       return;
@@ -551,10 +587,86 @@
       refreshGrowthPersonality(),
       refreshDialogs(),
       refreshDialogConfig(),
+      refreshMijia(),
     ]);
     const failed = results.find((result) => result.status === "rejected");
     if (failed) {
       throw failed.reason;
+    }
+  }
+
+  function renderMijia(status, spec) {
+    state.mijia = {status, spec};
+    const prepared = status.status === "prepared";
+    ui.mijiaStatusBadge.textContent = prepared ? "资料已准备" : "尚未准备";
+    ui.mijiaStatusBadge.classList.toggle("offline", !prepared);
+    ui.mijiaStatusCopy.textContent = prepared
+      ? "接入资料已就绪，但尚未连接米家账号；完成平台申请、能力编号确认和授权后才会显示正式连接。"
+      : "当前仅整理接入资料，不会连接米家账号；完成平台申请和授权后才进入正式连接。";
+    ui.mijiaGatewayId.textContent = status.gateway_device_id || "准备后生成";
+    ui.mijiaAccountState.textContent = status.platform_linked ? "已连接" : "未连接";
+    ui.mijiaModel.textContent = status.miot_model || "等待平台确认";
+    ui.mijiaSpecRevision.textContent = status.spec_revision;
+    ui.mijiaPrepare.disabled = prepared;
+    ui.mijiaRemove.disabled = !prepared;
+
+    const capabilityLists = [
+      [spec.properties, ui.mijiaPropertyList, ui.mijiaPropertyCount, (item) => (
+        item.access.includes("write") ? "可查看、可设置" : "可查看"
+      )],
+      [spec.actions, ui.mijiaActionList, ui.mijiaActionCount, () => "固定操作"],
+      [spec.events, ui.mijiaEventList, ui.mijiaEventCount, () => "待正式连接"],
+    ];
+    capabilityLists.forEach(([items, list, count, describe]) => {
+      list.replaceChildren();
+      count.textContent = `${items.length} 项`;
+      items.forEach((item) => {
+        const row = document.createElement("li");
+        const name = document.createElement("span");
+        const description = document.createElement("small");
+        name.textContent = item.name;
+        description.textContent = describe(item);
+        row.append(name, description);
+        list.append(row);
+      });
+    });
+  }
+
+  async function refreshMijia() {
+    const root = `/api/v1/integrations/mijia/pets/${encodeURIComponent(state.petId)}`;
+    const [statusPayload, specPayload] = await Promise.all([
+      apiRequest(`${root}/status`),
+      apiRequest(`${root}/spec`),
+    ]);
+    renderMijia(statusPayload.data, specPayload.data);
+  }
+
+  function browserRequestId(prefix) {
+    const suffix = window.crypto?.randomUUID
+      ? window.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return `${prefix}-${suffix}`.slice(0, 80);
+  }
+
+  async function changeMijiaPreparation(operation) {
+    const button = operation === "prepare" ? ui.mijiaPrepare : ui.mijiaRemove;
+    button.disabled = true;
+    try {
+      const payload = await apiRequest(
+        `/api/v1/integrations/mijia/pets/${encodeURIComponent(state.petId)}/${operation}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            request_id: browserRequestId(`web-mijia-${operation}`),
+          }),
+        },
+      );
+      await refreshMijia();
+      showToast(payload.message);
+    } finally {
+      if (!state.mijia) {
+        button.disabled = false;
+      }
     }
   }
 
@@ -1335,6 +1447,7 @@
     state.petId = null;
     state.intimacyPoints = null;
     state.growthTagIds = null;
+    state.mijia = null;
     state.dashboard = null;
     state.settingsVolumeDirty = false;
     state.actions = [];
@@ -1348,7 +1461,7 @@
 
   async function resetProductData() {
     const confirmed = window.confirm(
-      "确认重置全部数据？系统会先保留恢复副本，然后清除账号、绑定、性格、亲密度、动作、对话和反馈记录。此操作不能在页面中撤销。",
+      "确认重置全部数据？系统会先保留恢复副本，然后清除账号、绑定、性格、亲密度、记忆、动作、对话和反馈记录。此操作不能在页面中撤销。",
     );
     if (!confirmed) {
       return;
@@ -1369,12 +1482,36 @@
     }
   }
 
+  async function clearDialogMemory() {
+    const confirmed = window.confirm(
+      "确认清除当前宠物的全部记忆？短期原文和长期结构化记忆都会清除，已有对话记录仍会保留；之后的新对话会重新形成记忆。",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    ui.clearMemory.disabled = true;
+    try {
+      await apiRequest(
+        `/api/v1/pets/${encodeURIComponent(state.petId)}/memory/clear`,
+        {
+          method: "POST",
+          body: JSON.stringify({request_id: `web-memory-clear-${Date.now()}`}),
+        },
+      );
+      showToast("短期与长期记忆已清除，对话记录仍然保留");
+    } finally {
+      ui.clearMemory.disabled = false;
+    }
+  }
+
   function logout() {
     state.sessionToken = "";
     state.user = null;
     state.petId = null;
     state.intimacyPoints = null;
     state.growthTagIds = null;
+    state.mijia = null;
     state.dashboard = null;
     state.settingsVolumeDirty = false;
     window.sessionStorage.removeItem("aiCatMockIdentity");
@@ -1447,6 +1584,12 @@
   ui.voiceInterrupt.addEventListener("click", () => {
     controlVoice("/api/v1/dialog/interrupt").catch(reportError);
   });
+  ui.mijiaPrepare.addEventListener("click", () => {
+    changeMijiaPreparation("prepare").catch(reportError);
+  });
+  ui.mijiaRemove.addEventListener("click", () => {
+    changeMijiaPreparation("remove").catch(reportError);
+  });
   ui.settingsVolume.addEventListener("input", () => {
     state.settingsVolumeDirty = true;
     ui.settingsVolumeValue.textContent = `${ui.settingsVolume.value}%（待保存）`;
@@ -1468,6 +1611,9 @@
   });
   ui.unbind.addEventListener("click", () => {
     unbindPet().catch(reportError);
+  });
+  ui.clearMemory.addEventListener("click", () => {
+    clearDialogMemory().catch(reportError);
   });
   ui.resetData.addEventListener("click", () => {
     resetProductData().catch(reportError);

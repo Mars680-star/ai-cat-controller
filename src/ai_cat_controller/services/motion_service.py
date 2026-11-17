@@ -1,11 +1,4 @@
-"""Single-owner, cancellable motion scheduling for every action source.
-
-Maintenance notes:
-- Web, touch, autonomy, and AI function calls must pass through this lock and
-  cooldown boundary.
-- Keep raw motor angles and GPIO details out of this service; K1 uses fixed
-  presets selected by the adapter and native helper.
-"""
+"""Serialized, cancellable motion scheduling."""
 
 from __future__ import annotations
 
@@ -21,6 +14,7 @@ from ai_cat_controller.core.errors import (
     ActionTimeoutError,
     AdapterNotImplementedError,
 )
+from ai_cat_controller.core.operation_gate import DeviceOperationGate, device_operation
 
 LOGGER = logging.getLogger(__name__)
 MOTION_INPUT_NOISE_SETTLE_SECONDS = 1.0
@@ -33,14 +27,23 @@ class MotionService:
         *,
         command_timeout_seconds: float,
         cooldown_seconds: float,
+        enable_motion: bool = True,
+        has_tail: bool = True,
+        maintenance_gate: DeviceOperationGate | None = None,
     ) -> None:
+        if type(enable_motion) is not bool or type(has_tail) is not bool:
+            raise ValueError("Motion safety settings must be explicit booleans")
         self._adapter = adapter
+        self._maintenance_gate = maintenance_gate
+        self._motion_enabled = enable_motion
+        self._has_tail = has_tail
         self._command_timeout_seconds = command_timeout_seconds
         self._cooldown_seconds = cooldown_seconds
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._current_action = "idle"
         self._current_request_id: str | None = None
+        self._current_execution_token: str | None = None
         self._generation = 0
         self._cooldown_until = 0.0
         self._input_noise_guard_until = 0.0
@@ -51,6 +54,14 @@ class MotionService:
     @property
     def current_action(self) -> str:
         return self._current_action
+
+    @property
+    def motion_enabled(self) -> bool:
+        return self._motion_enabled
+
+    @property
+    def has_tail(self) -> bool:
+        return self._has_tail
 
     @property
     def last_error(self) -> str | None:
@@ -74,13 +85,21 @@ class MotionService:
         )
 
     def supports(self, capability: Capability) -> bool:
+        if capability == Capability.WAG_TAIL and not self._has_tail:
+            return False
+        if capability in {Capability.SHAKE_HEAD, Capability.NOD_HEAD, Capability.WAG_TAIL} and not self._motion_enabled:
+            return False
         return self._adapter.supports(capability)
 
     def unavailable_reason(self, capabilities: tuple[Capability, ...]) -> str | None:
+        if Capability.WAG_TAIL in capabilities and not self._has_tail:
+            return "当前设备没有尾部机构"
+        if not self._motion_enabled and any(capability in {Capability.SHAKE_HEAD, Capability.NOD_HEAD, Capability.WAG_TAIL} for capability in capabilities):
+            return "动作已暂停"
         unsupported = [
             capability
             for capability in capabilities
-            if not self._adapter.supports(capability)
+            if not self.supports(capability)
         ]
         if not unsupported:
             return None
@@ -91,6 +110,7 @@ class MotionService:
             )
         )
 
+    @device_operation
     async def _execute(
         self,
         generation: int,
@@ -137,11 +157,13 @@ class MotionService:
                     self._task = None
                     self._current_action = "idle"
                     self._current_request_id = None
+                    self._current_execution_token = None
                     self._input_noise_guard_until = (
                         time.monotonic() + MOTION_INPUT_NOISE_SETTLE_SECONDS
                     )
                     self._cooldown_until = time.monotonic() + self._cooldown_seconds
 
+    @device_operation
     async def _start(
         self,
         *,
@@ -155,7 +177,7 @@ class MotionService:
         unsupported = [
             capability
             for capability in capabilities
-            if not self._adapter.supports(capability)
+            if not self.supports(capability)
         ]
         if unsupported:
             raise AdapterNotImplementedError(
@@ -184,16 +206,23 @@ class MotionService:
                 self._completion_futures[execution_token] = (
                     asyncio.get_running_loop().create_future()
                 )
-            self._task = asyncio.create_task(
-                self._execute(
-                    generation,
-                    action_name,
-                    operation,
-                    duration_ms,
-                    execution_token,
-                ),
-                name=f"ai-cat-{action_name}-{generation}",
+            self._current_execution_token = execution_token
+            execution = self._execute(
+                generation,
+                action_name,
+                operation,
+                duration_ms,
+                execution_token,
             )
+            name = f"ai-cat-{action_name}-{generation}"
+            if self._maintenance_gate is None:
+                self._task = asyncio.create_task(execution, name=name)
+            else:
+                # Reserve the real background lease synchronously, before the
+                # accepted submission can return and close its parent lease.
+                self._task = self._maintenance_gate.spawn(
+                    execution, name=name, cancellable=True,
+                )
 
         return {
             "action": action_name,
@@ -247,6 +276,10 @@ class MotionService:
 
         if not steps:
             raise ValueError("motion sequence must contain at least one step")
+        if preset_name in {"proud_pose", "greeting_combo", "celebration_combo"} and not self._has_tail:
+            raise AdapterNotImplementedError("当前设备没有尾部机构")
+        if not self._motion_enabled:
+            raise AdapterNotImplementedError("动作已暂停")
 
         async def generic_operation() -> None:
             operations = {
@@ -298,6 +331,7 @@ class MotionService:
             if self._stopping:
                 raise ActionConflictError("停止动作正在执行")
             task = self._task
+            execution_token = self._current_execution_token
             self._stopping = True
             task_was_active = task is not None and not task.done()
             if task_was_active:
@@ -308,6 +342,12 @@ class MotionService:
         if task_was_active and task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        # A reserved background task can be stopped before _execute enters its
+        # try/finally. Still settle the accepted sequence for its waiting owner.
+        if execution_token is not None:
+            completion = self._completion_futures.get(execution_token)
+            if completion is not None and not completion.done():
+                completion.set_result("cancelled")
         adapter_stopped = False
         try:
             adapter_stopped = await asyncio.wait_for(
@@ -321,6 +361,7 @@ class MotionService:
                 self._stopping = False
                 self._current_action = "idle"
                 self._current_request_id = None
+                self._current_execution_token = None
                 self._input_noise_guard_until = (
                     time.monotonic() + MOTION_INPUT_NOISE_SETTLE_SECONDS
                 )

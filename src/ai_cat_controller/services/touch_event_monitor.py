@@ -191,7 +191,7 @@ class TouchEventMonitor:
             sensor = sensor_map[hardware_sensor]
             if self._product.physical_touch_input_guard_active:
                 LOGGER.info(
-                    "K1 touch ignored during managed motion or local speech: "
+                    "K1 touch ignored during self-generated motion or audio: "
                     "sensor=%s",
                     sensor,
                 )

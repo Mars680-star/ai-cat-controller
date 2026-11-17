@@ -1,0 +1,1 @@
+<view class="metric"><view class="icon-wrap"><image class="icon icon-device-state" src="{{icon}}" /></view><text class="value mono">{{value}}</text><text class="label">{{label}}</text><text wx:if="{{hint}}" class="hint">{{hint}}</text></view>

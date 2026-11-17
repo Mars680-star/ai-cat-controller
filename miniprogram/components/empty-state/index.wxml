@@ -1,0 +1,1 @@
+<view class="empty"><image class="empty-icon" src="{{icon}}" /><text class="title">{{title}}</text><text class="desc">{{description}}</text><button wx:if="{{actionText}}" class="action" bindtap="action">{{actionText}}</button></view>

@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "网关接入检查",
+  "enablePullDownRefresh": true,
+  "usingComponents": { "app-page": "/components/app-page/index" }
+}

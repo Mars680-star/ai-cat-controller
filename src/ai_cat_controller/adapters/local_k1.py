@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,30 @@ from ai_cat_controller.core.errors import (
     AdapterNotImplementedError,
     DeviceUnavailableError,
 )
+from ai_cat_controller.core.operation_gate import DeviceOperationGate
+from ai_cat_controller.core.process_gate import ProcessGateError, ProcessOperationGate
+
+
+def _adapter_operation(method):
+    """Keep a complete fixed mutation in its original admitted transaction."""
+    @wraps(method)
+    async def guarded(self, *args, **kwargs):
+        try:
+            gate = self._normal_operation_gate()
+            if gate is None:
+                return await method(self, *args, **kwargs)
+            gate = gate.process_context_gate(expected_path=self._settings.process_gate_path)
+        except ProcessGateError as exc:
+            raise ActionConflictError(
+                "设备正在维护或请求已失效，请刷新状态后重新确认；不会自动重试"
+            ) from exc
+        # Reserve through the selected gate before the caller can disconnect.
+        # Nested mutations are tracked required children, not a new epoch.
+        task = gate.spawn(method(self, *args, **kwargs))
+        self._operation_tasks.add(task)
+        task.add_done_callback(self._operation_tasks.discard)
+        return await asyncio.shield(task)
+    return guarded
 
 
 class LocalK1Adapter(AiCatAdapter):
@@ -48,14 +73,39 @@ class LocalK1Adapter(AiCatAdapter):
         {"proud_pose", "greeting_combo", "celebration_combo"}
     )
 
-    def __init__(self, settings: Settings, runner: CommandRunner) -> None:
+    def __init__(
+        self, settings: Settings, runner: CommandRunner,
+        *, operation_gate: DeviceOperationGate | None = None,
+    ) -> None:
         self._settings = settings
         self._runner = runner
-        if settings.enable_tail_motion:
+        if settings.has_tail and settings.enable_tail_motion:
             self.capabilities = self.capabilities | {Capability.WAG_TAIL}
+        if not settings.enable_motion:
+            self.capabilities = self.capabilities - {Capability.SHAKE_HEAD, Capability.NOD_HEAD, Capability.WAG_TAIL}
         self._connected = False
         self._connected_at = time.monotonic()
         self._dialog_start_lock = asyncio.Lock()
+        self._operation_gate = operation_gate
+        self._owned_process_gate: ProcessOperationGate | None = None
+        self._operation_tasks: set[asyncio.Task] = set()
+
+    def _normal_operation_gate(self) -> DeviceOperationGate | None:
+        if self._operation_gate is not None:
+            return self._operation_gate
+        if self._settings.process_gate_path is None:
+            return None
+        # Explicitly configured IPC is never provisioned/repaired here. Opening
+        # lazily leaves status and the safety stop/interrupt paths independent.
+        protocol = ProcessOperationGate(self._settings.process_gate_path)
+        try:
+            gate = DeviceOperationGate(process_gate=protocol)
+        except BaseException:
+            protocol.close()
+            raise
+        self._owned_process_gate = protocol
+        self._operation_gate = gate
+        return gate
 
     async def connect(self) -> None:
         self._connected = True
@@ -63,6 +113,21 @@ class LocalK1Adapter(AiCatAdapter):
 
     async def close(self) -> None:
         self._connected = False
+        if self._owned_process_gate is not None:
+            # A disconnected caller may have left a shielded real file thread
+            # or child cleanup running. Do not close its coordinator early.
+            await self._operation_gate.shutdown()
+        # The protocol may have selected an outer gate for a real transaction;
+        # shutting down our otherwise-empty private gate alone cannot drain it.
+        # Do not shut down that borrowed outer gate or close its coordinator.
+        while self._operation_tasks:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in tuple(self._operation_tasks)),
+                return_exceptions=True,
+            )
+            await asyncio.sleep(0)
+        if self._owned_process_gate is not None:
+            self._owned_process_gate.close()
 
     async def get_device_status(self) -> dict[str, Any]:
         dialog_status, power_status, volume_status = await asyncio.gather(
@@ -75,8 +140,11 @@ class LocalK1Adapter(AiCatAdapter):
             "current_action": "unavailable",
             "last_action": None,
             "dialog_state": dialog_status["state"],
-            "head_state": "idle",
-            "tail_state": "idle" if self._settings.enable_tail_motion else "disabled",
+            "head_state": "idle" if self._settings.enable_motion else "disabled",
+            "tail_state": ("not_present" if not self._settings.has_tail else
+                           "idle" if self._settings.enable_motion and self._settings.enable_tail_motion else "disabled"),
+            "motion_enabled": self._settings.enable_motion,
+            "has_tail": self._settings.has_tail,
             "action_count": 0,
             "last_action_at": None,
             "adapter_uptime_seconds": max(0.0, time.monotonic() - self._connected_at),
@@ -141,6 +209,7 @@ class LocalK1Adapter(AiCatAdapter):
             "output_volume_error": error,
         }
 
+    @_adapter_operation
     async def set_output_volume(self, percent: int) -> None:
         if not 0 <= percent <= 100:
             raise ValueError("音量必须在 0 到 100 之间")
@@ -360,7 +429,7 @@ class LocalK1Adapter(AiCatAdapter):
     def _offline_dialog_status(cls) -> dict[str, Any]:
         return {
             **cls._unavailable_dialog_status(
-                "云端语音未连接，正在等待唤醒词“小安小安”"
+                "云端语音未连接，正在等待口令“小安，开启对话模式”"
             ),
             "state": "offline",
             "stale": False,
@@ -425,6 +494,15 @@ class LocalK1Adapter(AiCatAdapter):
         return await asyncio.to_thread(self._read_dialog_status)
 
     async def _signal_dialog(self, signal_name: str) -> None:
+        if signal_name == "SIGUSR2":
+            return await self._run_dialog_signal(signal_name)
+        return await self._normal_dialog_signal(signal_name)
+
+    @_adapter_operation
+    async def _normal_dialog_signal(self, signal_name: str) -> None:
+        await self._run_dialog_signal(signal_name)
+
+    async def _run_dialog_signal(self, signal_name: str) -> None:
         result = await self._runner.run(
             str(self._settings.systemctl_binary),
             [
@@ -444,8 +522,9 @@ class LocalK1Adapter(AiCatAdapter):
                 },
             )
 
+    @_adapter_operation
     async def _ensure_dialog_ready(self) -> None:
-        ready_states = {"ready", "interrupted"}
+        ready_states = {"ready", "interrupted", "followup_listening"}
         async with self._dialog_start_lock:
             active_result = await self._query_service(
                 "is-active", self._settings.dialog_service
@@ -507,6 +586,10 @@ class LocalK1Adapter(AiCatAdapter):
             )
 
     def capability_unavailable_reason(self, capability: Capability) -> str:
+        if capability == Capability.WAG_TAIL and not self._settings.has_tail:
+            return "当前设备没有尾部机构"
+        if capability in {Capability.SHAKE_HEAD, Capability.NOD_HEAD, Capability.WAG_TAIL} and not self._settings.enable_motion:
+            return "动作已暂停"
         if capability == Capability.WAG_TAIL:
             return (
                 "当前 K1 样机尾部动作默认禁用；硬件修复并完成低速验收后，"
@@ -515,18 +598,25 @@ class LocalK1Adapter(AiCatAdapter):
         return super().capability_unavailable_reason(capability)
 
     def supports_motion_preset(self, preset_name: str) -> bool:
+        if not self._settings.enable_motion:
+            return False
         if self._settings.motion_profile != "k1_vendor_smooth":
             return False
         if preset_name in self._HEAD_MOTION_PRESETS:
             return True
         return (
-            self._settings.enable_tail_motion
+            self._settings.has_tail and self._settings.enable_tail_motion
             and preset_name in self._TAIL_MOTION_PRESETS
         )
 
+    @_adapter_operation
     async def run_motion_preset(
         self, preset_name: str, duration_ms: int
     ) -> None:
+        if preset_name in self._TAIL_MOTION_PRESETS and not self._settings.has_tail:
+            raise AdapterNotImplementedError("当前设备没有尾部机构")
+        if not self._settings.enable_motion:
+            raise AdapterNotImplementedError("动作已暂停")
         if not 100 <= duration_ms <= 10_000:
             raise ValueError("动作预设持续时间超出安全范围")
         if not self.supports_motion_preset(preset_name):
@@ -550,9 +640,12 @@ class LocalK1Adapter(AiCatAdapter):
             },
         )
 
+    @_adapter_operation
     async def _run_head_motor(
         self, actuator: str, intensity: float, duration_ms: int
     ) -> None:
+        if not self._settings.enable_motion:
+            raise AdapterNotImplementedError("动作已暂停")
         if not 0.1 <= intensity <= 1.0 or not 100 <= duration_ms <= 3000:
             raise ValueError("头部动作参数超出安全预设范围")
         if self._settings.motion_profile == "k1_vendor_smooth" and intensity <= 0.25:
@@ -585,7 +678,12 @@ class LocalK1Adapter(AiCatAdapter):
             },
         )
 
+    @_adapter_operation
     async def _run_tail_motor(self, intensity: float, duration_ms: int) -> None:
+        if not self._settings.has_tail:
+            raise AdapterNotImplementedError("当前设备没有尾部机构")
+        if not self._settings.enable_motion:
+            raise AdapterNotImplementedError("动作已暂停")
         if not self._settings.enable_tail_motion:
             raise AdapterNotImplementedError(
                 self.capability_unavailable_reason(Capability.WAG_TAIL)
@@ -614,12 +712,15 @@ class LocalK1Adapter(AiCatAdapter):
             },
         )
 
+    @_adapter_operation
     async def shake_head(self, intensity: float, duration_ms: int) -> None:
         await self._run_head_motor("head_lr", intensity, duration_ms)
 
+    @_adapter_operation
     async def nod_head(self, intensity: float, duration_ms: int) -> None:
         await self._run_head_motor("head_ud", intensity, duration_ms)
 
+    @_adapter_operation
     async def wag_tail(self, intensity: float, duration_ms: int) -> None:
         await self._run_tail_motor(intensity, duration_ms)
 
@@ -640,6 +741,7 @@ class LocalK1Adapter(AiCatAdapter):
             )
         return "stop requested" in result.stdout.lower()
 
+    @_adapter_operation
     async def wake_dialog(self) -> None:
         await self._ensure_dialog_ready()
         await self._signal_dialog("SIGUSR1")
@@ -691,6 +793,7 @@ class LocalK1Adapter(AiCatAdapter):
             temporary_path.unlink(missing_ok=True)
             raise
 
+    @_adapter_operation
     async def send_text_dialog(self, content: str, request_id: str) -> None:
         await self._ensure_dialog_ready()
         await asyncio.to_thread(
@@ -705,6 +808,7 @@ class LocalK1Adapter(AiCatAdapter):
             self._settings.dialog_text_request_path.unlink(missing_ok=True)
             raise
 
+    @_adapter_operation
     async def speak_text(self, content: str, request_id: str) -> None:
         await self._ensure_dialog_ready()
         await asyncio.to_thread(

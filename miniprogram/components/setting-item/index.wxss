@@ -1,0 +1,7 @@
+.setting-item { display: flex; align-items: center; justify-content: flex-start; box-sizing: border-box; gap: var(--space-3); width: 100%; max-width: 100%; min-width: 0; min-height: 116rpx; margin: 0; padding: var(--space-4) var(--space-5); border: 0; text-align: left; line-height: 1.5; background: transparent; }
+.setting-item::after { border: 0; }
+.setting-copy { display: flex; flex: 1; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.setting-title { color: var(--color-title); font-size: 27rpx; font-weight: 650; white-space: nowrap; }
+.setting-description { color: var(--color-muted); font-size: 21rpx; line-height: 1.45; }
+.setting-value { max-width: 160rpx; overflow: hidden; color: var(--color-primary-deep); font-size: 23rpx; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.setting-arrow { flex: 0 0 30rpx; width: 30rpx; height: 30rpx; opacity: .7; }

@@ -1,11 +1,4 @@
-"""Intimacy levels, event point rules, daily limits, and unlock metadata.
-
-Maintenance notes:
-- Keep level thresholds strictly increasing and action unlock levels aligned
-  with ``domain.actions``.
-- Event names are persisted in history; changing them requires compatibility
-  handling for existing data.
-"""
+"""Intimacy levels, event rules, and unlock metadata."""
 
 from __future__ import annotations
 
@@ -115,6 +108,17 @@ INTERACTION_RULES = {
 def level_for_points(points: int) -> IntimacyLevel:
     applicable = [level for level in INTIMACY_LEVELS if points >= level.min_points]
     return applicable[-1]
+
+
+def hardware_unlocks(unlocks: tuple[str, ...], *, has_tail: bool) -> tuple[str, ...]:
+    """Keep relationship rules while omitting impossible hardware promises."""
+    if has_tail:
+        return unlocks
+    return tuple(
+        "全部可用动作" if item == "全部动作" else item
+        for item in unlocks
+        if item not in {"基础尾部动作", "组合动作", "庆祝动作"}
+    )
 
 
 def level_progress(points: int) -> dict[str, int | float | None]:

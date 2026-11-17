@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "CommonJS",
+    "moduleDetection": "force",
+    "strict": false,
+    "allowJs": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "typeRoots": ["./types"]
+  },
+  "include": ["**/*.ts", "types/**/*.d.ts"],
+  "exclude": ["node_modules"]
+}

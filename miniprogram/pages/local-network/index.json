@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "连接 Wi-Fi",
+  "enablePullDownRefresh": false,
+  "usingComponents": { "app-page": "/components/app-page/index", "local-connect": "/components/local-connect/index", "provision-flow": "/components/provision-flow/index" }
+}

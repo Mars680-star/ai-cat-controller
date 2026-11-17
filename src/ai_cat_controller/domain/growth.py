@@ -245,7 +245,7 @@ TAG_RULES = (
     ),
     TagRule(
         tag_id="scholar_cat",
-        display_name="学霸猫",
+        display_name="博学小狐狸",
         description="长期积累了丰富的知识讨论经历。",
         required_attributes={GrowthAttribute.KNOWLEDGE: 7500},
         required_event_counts=(

@@ -1,0 +1,38 @@
+<app-page authKind="{{liveState.authKind}}" current="motion" liveDevice="{{true}}" hideModeBanner="{{true}}" subtitle="{{selectedName ? selectedName + ' · 动作与陪伴' : '连接你的智能伙伴'}}" online="{{liveOnline}}" statusText="{{liveStatusLabel}}">
+  <view class="page-heading"><view><text class="eyebrow">运动控制</text><text class="page-title">陪它动一动</text></view><text class="tap-hint">轻点即执行一次</text></view>
+  <view class="device-strip">
+    <view class="device-copy"><text class="device-title">{{liveState.signedIn ? selectedName || '选择你的设备' : '连接你的 AI 伙伴'}}</text><text class="small-copy">{{liveState.message}}</text></view>
+    <button wx:if="{{!liveState.signedIn && liveState.authKind === 'local'}}" class="connection-button" bindtap="openLocalPair" disabled="{{liveState.loading}}">扫码连接</button>
+    <button wx:elif="{{!liveState.signedIn}}" class="connection-button" bindtap="liveLogin" loading="{{liveState.loading}}" disabled="{{liveState.loading || !liveState.health || !liveState.health.wechatConfigured}}">微信登录</button>
+    <button wx:else class="text-button" bindtap="refreshConnection" loading="{{liveState.listLoading}}" disabled="{{liveState.loading || liveState.listLoading}}">刷新设备</button>
+    <view wx:if="{{liveState.signedIn && liveState.pets.length > 1}}" class="device-choices"><button wx:for="{{liveState.pets}}" wx:key="petId" class="device-choice {{liveState.selectedPetId === item.petId ? 'is-selected' : ''}}" data-pet-id="{{item.petId}}" bindtap="liveSelect" disabled="{{liveState.loading || liveState.listLoading}}">{{item.name}} {{liveState.selectedPetId === item.petId ? '✓' : ''}}</button></view>
+    <button wx:if="{{liveState.signedIn && liveState.pets.length === 1 && !liveState.selectedPetId}}" class="device-choice" data-pet-id="{{liveState.pets[0].petId}}" bindtap="liveSelect" disabled="{{liveState.loading || liveState.listLoading}}">选择 {{liveState.pets[0].name}}</button>
+    <view wx:if="{{liveState.error || (!liveState.signedIn && !liveState.health && !liveState.loading)}}" class="connection-notice"><text>{{liveState.error || '连接暂不可用，请检查网关'}}</text><button class="text-button" bindtap="refreshConnection" disabled="{{liveState.loading}}">重试连接</button></view>
+    <text wx:if="{{liveState.signedIn && !liveState.pets.length && !liveState.listLoading}}" class="small-copy">暂无已授权设备，请先完成设备授权。</text>
+  </view>
+  <view class="control-panel {{motionCanStop ? 'is-running' : ''}}">
+    <view class="control-top"><text class="control-kicker">{{motionSubmitting ? '正在发送' : motionStopping ? '正在停止' : '当前状态'}}</text><button class="text-button" bindtap="liveMotionRefresh" disabled="{{motionLoading || !liveState.selectedPetId || !liveState.signedIn}}">{{motionLoading ? '刷新中…' : '刷新状态'}}</button></view>
+    <text class="control-title" role="status">{{motionStatus}}</text>
+    <text wx:if="{{executionName}}" class="control-description">最近操作：{{executionName}}</text>
+    <text wx:if="{{motionError}}" class="state-notice" role="alert">{{motionError}}</text>
+    <button wx:if="{{motionCanRetry}}" class="text-button motion-retry" bindtap="liveRetryMotion">核对并重试原请求（不创建新动作）</button>
+    <text class="small-copy">请留意机器周围安全；异常时点底部停止。离开页面不会自动停止。</text>
+  </view>
+  <view class="section-heading"><text class="section-title">选择动作</text><text class="section-count">{{availableCount}} / {{connectedCount}} 项可用</text></view>
+  <view class="action-grid"><button wx:for="{{actions}}" wx:key="actionId" class="action-card {{item.disabled ? 'is-disabled' : ''}} {{item.running ? 'is-running' : ''}}" data-action-id="{{item.actionId}}" bindtap="liveExecute" disabled="{{item.disabled}}" aria-label="{{item.name + '，' + item.badge + (item.reason ? '，' + item.reason : '')}}"><view class="action-top"><image class="action-icon" src="{{item.icon}}"/><text class="action-state">{{item.badge}}</text></view><text class="action-name">{{item.name}}</text><text class="action-description">{{item.reason || item.description}}</text></button></view>
+  <view class="section-heading record-heading"><text class="section-title">动作记录</text><button class="text-button" bindtap="refreshHistory" disabled="{{historyLoading || !liveState.signedIn || !liveState.selectedPetId}}">{{historyLoading ? '刷新中…' : '刷新'}}</button></view>
+  <view wx:if="{{historyError}}" class="history-message"><text role="alert">{{historyError}}</text><button class="text-button" bindtap="refreshHistory" disabled="{{historyLoading}}">重试记录</button></view>
+  <record-disclosure title="最近动作" count="{{history ? history.length : 0}}" countText="{{historyError ? '读取失败' : historyLoading ? '读取中' : history === null ? '未读取' : ''}}">
+    <text wx:if="{{history === null}}" class="empty-copy">{{historyLoading ? '正在读取动作记录…' : historyError ? '记录尚未验证，请重试读取。' : '连接已授权设备后查看真实记录。'}}</text>
+    <view wx:elif="{{history.length}}" class="history"><view wx:for="{{history}}" wx:key="executionId" class="history-row"><view class="history-copy"><text class="history-title">{{item.name}}</text><text class="history-time">{{item.time}}</text><text class="history-request">编号 {{item.requestId}}</text></view><status-badge state="{{item.badgeState}}" text="{{item.statusText}}"/></view></view>
+    <text wx:else class="empty-copy">该账号与设备暂无动作记录。</text>
+  </record-disclosure>
+  <view class="motion-details"><record-disclosure title="连接与安全说明" countText="说明">
+    <text wx:if="{{sampledTime}}" class="details-copy">状态更新于 {{sampledTime}}</text>
+    <text class="details-copy">仅执行设备单次固定预设，不调幅度、速度或硬件参数。未解锁、无尾部或缺少授权的动作会禁用；不自动重试未决动作。软件结束或停止回执不代表已确认实际动作。</text>
+    <text class="details-copy">当前为同网本地联调，不是正式异地控制。</text>
+    <button class="text-button" bindtap="openLocalPair">更换连接方式</button><button wx:if="{{liveState.signedIn}}" class="text-button" bindtap="liveLogout" disabled="{{liveState.loading}}">退出登录</button>
+  </record-disclosure></view>
+  <view class="dock-spacer"></view>
+  <view class="motion-dock"><view class="dock-copy"><text class="dock-title">{{motionStopping ? '正在停止…' : motionCanStop ? '需要中止？' : '单次动作 · 请现场观察'}}</text><text class="dock-description">{{motionUncertain ? '结果待核实，已暂停新动作' : motionSubmitting ? '正在提交，请勿连点' : motionCanStop ? '停止不用二次确认' : '机器异常时先停止并检查'}}</text></view><button class="stop-action" bindtap="liveStopMotion" disabled="{{!motionCanStop}}" loading="{{motionStopping}}">{{motionStopping ? '发送中' : '停止动作'}}</button></view>
+</app-page>

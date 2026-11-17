@@ -50,6 +50,7 @@ class DialogStatusData(BaseModel):
     message: str
     session_active: bool
     can_interrupt: bool
+    audio_playing: bool = False
     follow_up_deadline_ms: int
     updated_at_ms: int
     sequence: int

@@ -13,7 +13,7 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert "AI 猫伴侣" in response.text
+    assert "AI 狐狸伴侣" in response.text
     assert "停止当前动作" in response.text
     assert "性格盲盒" in response.text
     assert "陪它动一动" in response.text
@@ -35,6 +35,12 @@ def test_control_page_is_self_contained(client: TestClient) -> None:
     assert 'id="interaction-history-count"' in response.text
     assert 'id="action-execution-count"' in response.text
     assert 'id="growth-event-count"' in response.text
+    assert 'id="view-mijia"' in response.text
+    assert 'data-view-panel="mijia"' in response.text
+    assert 'id="mijia-status-badge"' in response.text
+    assert 'id="mijia-prepare-button"' in response.text
+    assert 'id="mijia-remove-button"' in response.text
+    assert response.text.count('data-view="mijia"') == 2
     assert response.text.count('data-view="personality"') == 2
     assert response.text.count('<details class="record-disclosure') == 3
     assert "重置全部数据" in response.text
@@ -62,12 +68,21 @@ def test_static_assets_are_available(client: TestClient) -> None:
     assert "refreshDialogDetail" in script.text
     assert 'apiRequest("/api/v1/admin/reset-product-data"' in script.text
     assert 'confirmation: "RESET_PRODUCT_DATA"' in script.text
+    assert "/memory/clear" in script.text
+    assert "clearDialogMemory" in script.text
+    assert 'id="clear-memory-button"' in client.get("/control").text
+    assert "清除短期原文与长期结构化记忆" in client.get("/control").text
+    assert "亲密度、记忆、动作、对话和反馈记录" in client.get("/control").text
     assert "/growth/debug" in script.text
     assert "renderGrowthPersonality" in script.text
     assert 'viewName === "personality"' in script.text
     assert "growthBandLevels" in script.text
     assert 'value.textContent = `${numericValue.toFixed(2)} / 100`' in script.text
     assert "ensureDailyMeeting" in script.text
+    assert "refreshMijia" in script.text
+    assert "renderMijia" in script.text
+    assert "/integrations/mijia/pets/" in script.text
+    assert 'viewName === "mijia"' in script.text
     assert 'eventType === "daily_check_in"' in script.text
     assert 'id="daily-meeting-button"' in client.get("/control").text
     assert "settingsVolumeDirty" in script.text

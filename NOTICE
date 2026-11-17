@@ -15,3 +15,11 @@ files derived from or designed to work with:
 
 The complete vendor SDK trees, binary libraries, models and credentials are
 not redistributed by this repository.
+
+3. @noble/ciphers 2.4.0
+   Upstream: https://github.com/paulmillr/noble-ciphers
+   License: MIT
+   Selected browser cryptography modules are mechanically converted to CommonJS
+   in miniprogram/vendor/noble-ciphers-2.4.0. The original license, provenance,
+   integrity hash and reproducible conversion script are retained there and in
+   miniprogram/scripts/vendor-provisioning-crypto.cjs.

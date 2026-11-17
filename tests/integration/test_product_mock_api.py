@@ -96,6 +96,107 @@ def test_login_bind_blind_box_and_dashboard(client: TestClient) -> None:
     assert runtime["native_applied"] is False
 
 
+def test_complete_dialog_updates_bounded_runtime_memory(client: TestClient) -> None:
+    headers, login = _login(client, code="runtime-memory-user")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-RUNTIME-MEMORY",
+    )["pet"]["pet_id"]
+
+    before = client.get("/api/v1/personality/runtime").json()["data"]
+    response = client.post(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+        json={"content": "我叫小雨，我喜欢蓝色", "trigger_action": False},
+    )
+    after = client.get("/api/v1/personality/runtime").json()["data"]
+
+    assert response.status_code == 200
+    assert before["memory_message_count"] == 0
+    assert after["memory_message_count"] == 2
+    assert after["long_term_memory_count"] == 2
+    assert after["memory_revision"] != before["memory_revision"]
+    assert after["memory_latest_at"] is not None
+
+    for index in range(8):
+        turn = client.post(
+            f"/api/v1/pets/{pet_id}/dialogs",
+            headers=headers,
+            json={"content": f"普通对话 {index}", "trigger_action": False},
+        )
+        assert turn.status_code == 200
+    bounded = client.get("/api/v1/personality/runtime").json()["data"]
+    memories = client.app.state.services.product._repository.list_long_term_memories(
+        login["user"]["user_id"],
+        pet_id,
+    )
+
+    assert bounded["memory_message_count"] == 16
+    assert bounded["long_term_memory_count"] == 2
+    assert {item["content"] for item in memories} == {"小雨", "喜欢蓝色"}
+
+
+def test_memory_clear_preserves_history_and_only_remembers_new_dialogs(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client, code="memory-clear-user")
+    pet_id = _bind(
+        client,
+        headers,
+        serial="K1-MEMORY-CLEAR",
+    )["pet"]["pet_id"]
+    client.post(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+        json={"content": "我喜欢清除前的蓝色", "trigger_action": False},
+    )
+
+    first = client.post(
+        f"/api/v1/pets/{pet_id}/memory/clear",
+        headers=headers,
+        json={"request_id": "clear-memory-once"},
+    )
+    cleared_runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    preserved_history = client.get(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+    ).json()["data"]
+    duplicate = client.post(
+        f"/api/v1/pets/{pet_id}/memory/clear",
+        headers=headers,
+        json={"request_id": "clear-memory-once"},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["data"]["cleared"] is True
+    assert first.json()["data"]["duplicate"] is False
+    assert first.json()["data"]["excluded_message_count"] == 2
+    assert first.json()["data"]["deleted_long_term_memory_count"] == 1
+    assert first.json()["data"]["history_preserved"] is True
+    assert cleared_runtime["memory_message_count"] == 0
+    assert cleared_runtime["long_term_memory_count"] == 0
+    assert len(preserved_history) == 2
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["cleared"] is False
+    assert duplicate.json()["data"]["duplicate"] is True
+
+    client.post(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+        json={"content": "我习惯清除后早起", "trigger_action": False},
+    )
+    refreshed_runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    complete_history = client.get(
+        f"/api/v1/pets/{pet_id}/dialogs",
+        headers=headers,
+    ).json()["data"]
+
+    assert refreshed_runtime["memory_message_count"] == 2
+    assert refreshed_runtime["long_term_memory_count"] == 1
+    assert len(complete_history) == 4
+
+
 def test_session_and_owner_isolation(client: TestClient) -> None:
     missing_session = client.get("/api/v1/pets")
     assert missing_session.status_code == 401
@@ -1090,10 +1191,16 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
             headers=headers,
             json={"event_type": "completed_task", "request_id": "reset-task"},
         )
+        memory_clear = test_client.post(
+            f"/api/v1/pets/{pet_id}/memory/clear",
+            headers=headers,
+            json={"request_id": "reset-memory-clear"},
+        )
+        assert memory_clear.status_code == 200
         test_client.post(
             f"/api/v1/pets/{pet_id}/dialogs",
             headers=headers,
-            json={"content": "格式化前的对话", "trigger_action": False},
+            json={"content": "我喜欢格式化前的蓝色", "trigger_action": False},
         )
         test_client.post(
             f"/api/v1/pets/{pet_id}/feedback",
@@ -1104,6 +1211,20 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
             f"/api/v1/pets/{pet_id}/actions/head_shake/execute",
             headers=headers,
             json={"request_id": "reset-action"},
+        )
+        mijia = test_client.post(
+            f"/api/v1/integrations/mijia/pets/{pet_id}/prepare",
+            headers=headers,
+            json={"request_id": "reset-mijia-prepare"},
+        ).json()["data"]
+        test_client.post(
+            f"/api/v1/gateway/mijia/v1/devices/{mijia['gateway_device_id']}"
+            "/properties/write",
+            json={
+                "property_id": "volume",
+                "value": 45,
+                "request_id": "reset-mijia-volume",
+            },
         )
         for path in runtime_paths.values():
             path.write_text('{"test":true}\n', encoding="utf-8")
@@ -1128,8 +1249,12 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
         assert "/" not in result["backup_id"]
         assert "backup_directory" not in result
         assert result["deleted"] == {
+            "mijia_gateway_requests": 1,
+            "mijia_integrations": 1,
             "feedback": 1,
             "action_executions": 1,
+            "dialog_long_term_memories": 1,
+            "dialog_memory_state": 1,
             "dialog_history": 2,
             "growth_tags": 0,
             "growth_events": 2,
@@ -1164,11 +1289,21 @@ def test_product_data_reset_backs_up_and_clears_experience_data(
         assert backup.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
         assert backup.execute("SELECT COUNT(*) FROM pets").fetchone()[0] == 1
         assert backup.execute("SELECT COUNT(*) FROM dialog_history").fetchone()[0] == 2
+        assert backup.execute(
+            "SELECT COUNT(*) FROM dialog_long_term_memories"
+        ).fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM dialog_memory_state").fetchone()[0] == 1
         assert backup.execute("SELECT COUNT(*) FROM growth_events").fetchone()[0] == 2
+        assert backup.execute("SELECT COUNT(*) FROM mijia_integrations").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM mijia_gateway_requests").fetchone()[0] == 1
     with sqlite3.connect(data_path) as active:
         for table in (
+            "mijia_gateway_requests",
+            "mijia_integrations",
             "feedback",
             "action_executions",
+            "dialog_long_term_memories",
+            "dialog_memory_state",
             "dialog_history",
             "growth_tags",
             "growth_events",
@@ -1192,7 +1327,11 @@ def test_product_data_reset_rejects_active_dialog(tmp_path) -> None:
     )
     with TestClient(app) as test_client:
         headers, _ = _login(test_client, code="busy-reset-user")
-        _bind(test_client, headers, serial="K1-BUSY-RESET")
+        pet_id = _bind(
+            test_client,
+            headers,
+            serial="K1-BUSY-RESET",
+        )["pet"]["pet_id"]
         assert test_client.portal is not None
         test_client.portal.call(test_client.app.state.services.adapter.wake_dialog)
 
@@ -1204,6 +1343,13 @@ def test_product_data_reset_rejects_active_dialog(tmp_path) -> None:
 
         assert response.status_code == 409
         assert response.json()["data"]["code"] == "action_conflict"
+        memory_clear = test_client.post(
+            f"/api/v1/pets/{pet_id}/memory/clear",
+            headers=headers,
+            json={"request_id": "busy-memory-clear"},
+        )
+        assert memory_clear.status_code == 409
+        assert memory_clear.json()["data"]["code"] == "action_conflict"
         assert len(test_client.get("/api/v1/pets", headers=headers).json()["data"]) == 1
 
 
@@ -1504,6 +1650,8 @@ def test_unbind_preserves_personality_but_isolates_dialog_history(
         headers=first_headers,
         json={"content": "第一位用户的隐私", "trigger_action": False},
     )
+    first_runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    assert first_runtime["memory_message_count"] == 2
     client.post(f"/api/v1/pets/{pet_id}/unbind", headers=first_headers)
 
     second_headers, _ = _login(client, code="second-owner")
@@ -1514,3 +1662,6 @@ def test_unbind_preserves_personality_but_isolates_dialog_history(
     assert second_bound["blind_box_revealed"] is False
     assert second_bound["pet"]["personality_id"] == personality_id
     assert second_history == []
+    second_runtime = client.get("/api/v1/personality/runtime").json()["data"]
+    assert second_runtime["memory_message_count"] == 0
+    assert second_runtime["memory_revision"] != first_runtime["memory_revision"]

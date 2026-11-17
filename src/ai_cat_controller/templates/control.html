@@ -10,15 +10,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>AI 猫伴侣</title>
-  <link rel="stylesheet" href="/static/control.css?v=20260812-2">
+  <title>AI 狐狸伴侣</title>
+  <link rel="stylesheet" href="/static/control.css?v=20260812-3">
 </head>
 <body>
   <header class="topbar">
     <div class="brand-block">
       <span class="brand-mark" aria-hidden="true">A</span>
       <div>
-        <h1>AI 猫伴侣</h1>
+        <h1>AI 狐狸伴侣</h1>
         <p id="top-subtitle">陪伴你的智能宠物</p>
       </div>
     </div>
@@ -31,11 +31,11 @@
   <main id="login-screen" class="login-screen">
     <section class="login-panel" aria-labelledby="login-title">
       <div class="login-visual">
-        <img src="/static/ai-cat-avatar.png" alt="米色布偶猫">
+        <img src="/static/ai-cat-avatar.png" alt="小狐狸伴侣">
       </div>
       <div class="login-content">
         <p class="eyebrow">欢迎回来</p>
-        <h2 id="login-title">登录猫咪空间</h2>
+        <h2 id="login-title">登录小狐狸空间</h2>
         <form id="login-form" class="form-stack">
           <label>
             <span>账号标识</span>
@@ -52,7 +52,7 @@
             <input id="login-api-key" type="password" autocomplete="off"
                    placeholder="未设置时可留空">
           </label>
-          <button class="button primary" type="submit">进入猫咪空间</button>
+          <button class="button primary" type="submit">进入小狐狸空间</button>
         </form>
       </div>
     </section>
@@ -86,6 +86,9 @@
         <button class="nav-button" data-view="history" type="button">
           <span aria-hidden="true">◫</span>对话
         </button>
+        <button class="nav-button" data-view="mijia" type="button">
+          <span aria-hidden="true">⌁</span>米家
+        </button>
         <button class="nav-button" data-view="settings" type="button">
           <span aria-hidden="true">⚙</span>设置
         </button>
@@ -109,8 +112,9 @@
           <form id="bind-form" class="form-grid">
             <label>
               <span>设备序列号</span>
-              <input id="device-serial" value="K1-0001"
+              <input id="device-serial" value="K1-MOCK-0001"
                      minlength="4" maxlength="64" required>
+              <small>实机模式会自动读取本机序列号，无需手工修改</small>
             </label>
             <label>
               <span>宠物名称</span>
@@ -205,7 +209,7 @@
         </div>
 
         <div class="home-overview">
-          <img src="/static/ai-cat-avatar.png" alt="米色布偶猫宠物">
+          <img src="/static/ai-cat-avatar.png" alt="小狐狸智能伙伴">
           <div class="personality-summary">
             <span id="home-personality-id" class="personality-code">--</span>
             <h3 id="home-personality">等待性格盲盒</h3>
@@ -482,6 +486,100 @@
         </form>
       </section>
 
+      <section id="view-mijia" class="view" data-view-panel="mijia">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">全屋智能</p>
+            <h2>米家连接</h2>
+          </div>
+          <span id="mijia-status-badge" class="state-label">尚未准备</span>
+        </div>
+
+        <section class="mijia-overview">
+          <div class="mijia-overview-copy">
+            <p class="section-kicker">接入状态</p>
+            <h3>把小安加入米家</h3>
+            <p id="mijia-status-copy">
+              当前仅整理接入资料，不会连接米家账号；完成平台申请和授权后才进入正式连接。
+            </p>
+            <div class="mijia-actions">
+              <button id="mijia-prepare-button" class="button primary" type="button">
+                准备接入资料
+              </button>
+              <button id="mijia-remove-button" class="button danger-outline" type="button"
+                      disabled>
+                清除接入准备
+              </button>
+            </div>
+          </div>
+          <dl class="mijia-facts">
+            <div>
+              <dt>设备标识</dt>
+              <dd id="mijia-gateway-id">准备后生成</dd>
+            </div>
+            <div>
+              <dt>米家账号</dt>
+              <dd id="mijia-account-state">未连接</dd>
+            </div>
+            <div>
+              <dt>平台型号</dt>
+              <dd id="mijia-model">等待平台确认</dd>
+            </div>
+            <div>
+              <dt>能力版本</dt>
+              <dd id="mijia-spec-revision">--</dd>
+            </div>
+          </dl>
+        </section>
+
+        <div class="mijia-capability-grid">
+          <section class="mijia-capability-card">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>可查看状态</h3>
+                <p>平台确认后可同步变化</p>
+              </div>
+              <span id="mijia-property-count" class="state-label">0 项</span>
+            </div>
+            <ul id="mijia-property-list" class="mijia-capability-list"></ul>
+          </section>
+          <section class="mijia-capability-card">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>可执行操作</h3>
+                <p>只允许固定安全操作</p>
+              </div>
+              <span id="mijia-action-count" class="state-label">0 项</span>
+            </div>
+            <ul id="mijia-action-list" class="mijia-capability-list"></ul>
+          </section>
+          <section class="mijia-capability-card">
+            <div class="section-heading compact no-top-margin">
+              <div>
+                <h3>后续通知</h3>
+                <p>正式连接后再开启上报</p>
+              </div>
+              <span id="mijia-event-count" class="state-label">0 项</span>
+            </div>
+            <ul id="mijia-event-list" class="mijia-capability-list"></ul>
+          </section>
+        </div>
+
+        <section class="mijia-steps" aria-labelledby="mijia-steps-title">
+          <div class="section-heading compact no-top-margin">
+            <div>
+              <p class="section-kicker">连接路径</p>
+              <h3 id="mijia-steps-title">还需要完成三步</h3>
+            </div>
+          </div>
+          <ol>
+            <li><span>1</span><div><strong>准备接入资料</strong><p>生成隔离的设备标识和固定能力清单。</p></div></li>
+            <li><span>2</span><div><strong>完成平台申请</strong><p>确认产品型号、能力编号和审核要求。</p></div></li>
+            <li><span>3</span><div><strong>授权米家账号</strong><p>完成鉴权与通知校验后再开放正式连接。</p></div></li>
+          </ol>
+        </section>
+      </section>
+
       <section id="view-settings" class="view" data-view-panel="settings">
         <div class="page-heading">
           <div>
@@ -507,9 +605,9 @@
                 <input id="settings-volume" type="range" min="0" max="100" value="60">
               </label>
               <label>
-                <span>连续聊天时间 <output id="settings-follow-up-value">30 秒</output></span>
+                <span>连续聊天时间 <output id="settings-follow-up-value">25 秒</output></span>
                 <input id="settings-follow-up" type="range"
-                       min="5" max="120" step="5" value="30">
+                       min="5" max="120" step="5" value="25">
               </label>
               <label>
                 <span>访问密钥 <small>关闭页面后不会保留</small></span>
@@ -556,10 +654,20 @@
           <button id="unbind-button" class="button danger-outline" type="button">解除绑定</button>
         </section>
 
+        <section class="danger-zone">
+          <div>
+            <h3>清除全部记忆</h3>
+            <p>清除短期原文与长期结构化记忆；网页完整对话记录仍会保留，新对话会重新形成记忆。</p>
+          </div>
+          <button id="clear-memory-button" class="button danger-outline" type="button">
+            一键清除记忆
+          </button>
+        </section>
+
         <section class="danger-zone critical">
           <div>
             <h3>重新开始</h3>
-            <p>清除当前账号、设备绑定、性格、亲密度、动作、对话和反馈记录。云端授权与设备设置不会改变。</p>
+            <p>清除当前账号、设备绑定、性格、亲密度、记忆、动作、对话和反馈记录。云端授权与设备设置不会改变。</p>
           </div>
           <button id="reset-data-button" class="button danger" type="button">
             重置全部数据
@@ -575,6 +683,7 @@
       <button class="nav-button" data-view="growth" type="button"><span>↑</span>培养</button>
       <button class="nav-button" data-view="personality" type="button"><span>◇</span>性格</button>
       <button class="nav-button" data-view="history" type="button"><span>◫</span>对话</button>
+      <button class="nav-button" data-view="mijia" type="button"><span>⌁</span>米家</button>
       <button class="nav-button" data-view="settings" type="button"><span>⚙</span>设置</button>
     </nav>
   </div>
@@ -589,6 +698,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/control.js?v=20260812-2" defer></script>
+  <script src="/static/control.js?v=20260910-1" defer></script>
 </body>
 </html>

@@ -1,0 +1,6 @@
+<view class="nav-shell" role="navigation" aria-label="功能导航">
+  <button wx:for="{{items}}" wx:key="id" class="nav-item {{current === item.id ? 'active' : ''}}" hover-class="nav-item-pressed" hover-stay-time="80" data-id="{{item.id}}" data-path="{{item.path}}" bindtap="navigate" aria-label="{{item.label}}">
+    <image src="{{item.icon}}" class="nav-icon" aria-hidden="true" />
+    <text>{{item.label}}</text>
+  </button>
+</view>

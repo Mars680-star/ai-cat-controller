@@ -1,0 +1,13 @@
+:host { display: block; box-sizing: border-box; width: 100%; min-width: 0; }
+.wrap { display: flex; box-sizing: border-box; flex-direction: column; gap: var(--space-3); width: 100%; min-width: 0; margin: 0; padding: var(--space-5); border-radius: var(--radius-small); text-align: left; background: var(--color-surface-soft); }
+.top, .bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); }
+.identity { display: flex; flex-direction: column; gap: var(--space-1); }
+.label { color: var(--color-muted); font-size: 21rpx; letter-spacing: 1rpx; }
+.level { color: var(--color-title); font-size: 30rpx; font-weight: 700; }
+.points { color: var(--color-title); font-size: 34rpx; font-weight: 750; }
+.denominator { color: var(--color-muted); font-size: 21rpx; font-weight: 400; }
+.track { height: 16rpx; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-line); }
+.fill { height: 100%; border-radius: var(--radius-pill); background: var(--color-primary); }
+.bottom { align-items: center; color: var(--color-muted); font-size: 21rpx; }
+.level-badge { color: var(--color-primary-deep); font-weight: 650; }
+.compact { width: 100%; padding: var(--space-5); }

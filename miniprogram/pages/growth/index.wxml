@@ -1,0 +1,60 @@
+<app-page authKind="{{liveState.authKind}}" current="growth" liveDevice="{{liveMode}}" loading="{{false}}" error="{{liveMode ? '' : error}}" subtitle="{{pet ? pet.name + ' · ' + pet.personalityName : 'AI 狐狸伴侣'}}" online="{{liveMode ? liveOnline : true}}" statusText="{{liveMode ? liveStatusLabel : '界面预览'}}" bindretry="load">
+  <live-product-panel state="{{liveState}}" busy="{{productLoading || submittingEvent}}" error="{{productError}}" bindenable="useRealDevice" bindlogin="liveLogin" bindrefresh="liveProductRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="showPreview" />
+  <view wx:if="{{liveMode && (interactionNotice || interactionError)}}" class="interaction-notice" role="status"><text>{{interactionNotice}}</text><text wx:if="{{interactionError}}" class="interaction-error">{{interactionError}}</text><button wx:if="{{interactionRetry}}" class="btn btn-secondary retry-interaction" bindtap="retryInteraction" disabled="{{!intimacy || submittingEvent || interactionConfirm}}">检查或重试同一条互动</button></view>
+  <loading-skeleton wx:if="{{!liveMode && loading || liveMode && productLoading && !intimacy}}" />
+  <view wx:if="{{liveMode && !intimacy && !productLoading}}" class="cultivation-empty" role="status">
+    <text class="section-title">{{!liveState.signedIn ? '登录后查看培养数据' : !liveState.selectedPetId ? '请选择已授权设备' : '培养数据暂不可用'}}</text>
+    <text class="section-copy">{{!liveState.signedIn ? '请先在上方完成微信登录，再选择你的设备。' : !liveState.selectedPetId ? '点击上方的设备名称，加载它的真实培养记录。' : '网络或设备连接可能暂时不稳定，请稍后刷新；若持续失败，再检查授权配置。'}}</text>
+    <text class="section-copy">尚未加载真实数据，暂不能记录互动。</text>
+    <button wx:if="{{liveState.signedIn && liveState.selectedPetId}}" class="btn btn-secondary cultivation-retry" bindtap="liveProductRefresh" disabled="{{liveState.loading || liveState.listLoading || submittingEvent || interactionConfirm}}">重试加载培养数据</button>
+  </view>
+  <view wx:if="{{intimacy}}" class="growth-content">
+    <view class="page-heading">
+      <text class="eyebrow">宠物培养</text>
+      <view class="title-row"><text class="page-title">陪伴与亲密度</text><text class="level-badge">{{intimacy.badge}}</text></view>
+      <text class="page-description">从一次见面、一次互动开始，慢慢成为更熟悉的伙伴。</text>
+      <text wx:if="{{liveMode}}" class="section-copy">真实培养数据 · 更新于 {{sampledTime}}</text>
+    </view>
+
+    <view class="relationship-card">
+      <view class="score-row"><view><text class="field-label">当前亲密度</text><text class="score-value mono">{{intimacy.points}}</text></view><text class="level-name">{{intimacy.levelName}}</text></view>
+      <view class="progress-copy"><text>成长进度</text><text class="progress-value">{{intimacy.nextLevelPoints ? intimacy.points + ' / ' + intimacy.nextLevelPoints : '已达到最高等级'}}</text></view>
+      <view class="progress-track"><view style="width: {{intimacy.progressPercent}}%;"></view></view>
+      <view class="daily-summary"><text>{{liveMode ? '今日增长总数暂未提供' : '今日增长 ' + intimacy.dailyGrowth + ' / ' + intimacy.dailyCap}}</text><text>每日增长上限 {{intimacy.dailyCap}}</text></view>
+    </view>
+
+    <view class="section-heading"><text class="section-title">今日互动</text><text class="section-copy">{{liveMode ? '确认后记录真实互动，具体得分与每日限制由服务端决定。升级可能触发原有庆祝动作。' : '四种日常互动，体验不同的亲密度变化。'}}</text></view>
+    <text wx:if="{{liveMode && !interactionsEnabled}}" class="interaction-notice">真实培养读取已接入，互动写入尚未授权开启，四个按钮保持禁用。</text>
+    <view class="interaction-grid">
+      <button class="interaction-button" hover-class="interaction-pressed" hover-start-time="20" hover-stay-time="80" data-event="daily_check_in" bindtap="addInteraction" disabled="{{intimacy.today.met || submittingEvent || liveMode && (interactionBlocked || interactionConfirm)}}">
+        <text class="interaction-name">每日见面</text><text class="interaction-note">{{intimacy.today.met ? '今天已经见过面' : liveMode ? liveRules.daily_check_in.limitText : '每天一次，打个招呼'}}</text><text class="interaction-value">{{submittingEvent === 'daily_check_in' ? '记录中…' : intimacy.today.met ? '已完成' : liveMode ? liveRules.daily_check_in.pointsText : '+3 亲密度'}}</text>
+        <text class="interaction-action">{{intimacy.today.met ? '今日已完成' : submittingEvent ? '正在记录，请稍候' : liveMode && interactionConfirm ? '请完成弹窗确认' : liveMode && interactionBlocked ? (interactionUncertain ? '请先核对上次互动' : productLoading ? '正在刷新数据' : !interactionsEnabled ? '暂未开放记录' : '连接验证中') : liveMode ? '点击后确认记录 ›' : '点击体验互动 ›'}}</text>
+      </button>
+      <button class="interaction-button" hover-class="interaction-pressed" hover-start-time="20" hover-stay-time="80" data-event="touch" bindtap="addInteraction" disabled="{{submittingEvent || liveMode && (interactionBlocked || interactionConfirm)}}">
+        <text class="interaction-name">摸摸它</text><text class="interaction-note">{{liveMode ? liveRules.touch.limitText : '轻轻靠近，传递关心'}}</text><text class="interaction-value">{{submittingEvent === 'touch' ? '记录中…' : liveMode ? liveRules.touch.pointsText : '+1 亲密度'}}</text>
+        <text class="interaction-action">{{submittingEvent ? '正在记录，请稍候' : liveMode && interactionConfirm ? '请完成弹窗确认' : liveMode && interactionBlocked ? (interactionUncertain ? '请先核对上次互动' : productLoading ? '正在刷新数据' : !interactionsEnabled ? '暂未开放记录' : '连接验证中') : liveMode ? '点击后确认记录 ›' : '点击体验互动 ›'}}</text>
+      </button>
+      <button class="interaction-button" hover-class="interaction-pressed" hover-start-time="20" hover-stay-time="80" data-event="completed_task" bindtap="addInteraction" disabled="{{intimacy.today.taskCompleted || submittingEvent || liveMode && (interactionBlocked || interactionConfirm)}}">
+        <text class="interaction-name">一起完成任务</text><text class="interaction-note">{{intimacy.today.taskCompleted ? '今天的任务已记录' : liveMode ? liveRules.completed_task.limitText : '一起完成一件小事'}}</text><text class="interaction-value">{{submittingEvent === 'completed_task' ? '记录中…' : intimacy.today.taskCompleted ? '已完成' : liveMode ? liveRules.completed_task.pointsText : '+5 亲密度'}}</text>
+        <text class="interaction-action">{{intimacy.today.taskCompleted ? '今日已完成' : submittingEvent ? '正在记录，请稍候' : liveMode && interactionConfirm ? '请完成弹窗确认' : liveMode && interactionBlocked ? (interactionUncertain ? '请先核对上次互动' : productLoading ? '正在刷新数据' : !interactionsEnabled ? '暂未开放记录' : '连接验证中') : liveMode ? '点击后确认记录 ›' : '点击体验互动 ›'}}</text>
+      </button>
+      <button class="interaction-button subtract" hover-class="interaction-pressed" hover-start-time="20" hover-stay-time="80" data-event="ignored_greeting" bindtap="addInteraction" disabled="{{submittingEvent || liveMode && (interactionBlocked || interactionConfirm)}}">
+        <text class="interaction-name">错过问候</text><text class="interaction-note">{{liveMode ? liveRules.ignored_greeting.limitText : '偶尔的错过，也会记录'}}</text><text class="interaction-value">{{submittingEvent === 'ignored_greeting' ? '记录中…' : liveMode ? liveRules.ignored_greeting.pointsText : '-1 亲密度'}}</text>
+        <text class="interaction-action">{{submittingEvent ? '正在记录，请稍候' : liveMode && interactionConfirm ? '请完成弹窗确认' : liveMode && interactionBlocked ? (interactionUncertain ? '请先核对上次互动' : productLoading ? '正在刷新数据' : !interactionsEnabled ? '暂未开放记录' : '连接验证中') : liveMode ? '点击后确认记录 ›' : '点击体验互动 ›'}}</text>
+      </button>
+    </view>
+
+    <view class="section-heading"><text class="section-title">成长带来的新变化</text><text class="section-copy">查看当前能力，也期待下一次解锁。</text></view>
+    <view class="unlock-grid">
+      <view class="unlock-card"><text class="section-kicker">当前能力</text><text class="unlock-title">已经解锁</text><text wx:for="{{intimacy.currentUnlocks}}" wx:key="*this" class="unlock-item">{{item}}</text><text wx:if="{{!intimacy.currentUnlocks.length}}" class="unlock-empty">从日常陪伴开始积累</text></view>
+      <view class="unlock-card next-unlock"><text class="section-kicker">成长预告</text><text class="unlock-title">下一级解锁</text><text wx:for="{{intimacy.nextUnlocks}}" wx:key="*this" class="unlock-item">{{item}}</text><text wx:if="{{!intimacy.nextUnlocks.length}}" class="unlock-empty">{{liveMode && intimacy.nextLevelPoints ? '暂无下一级动作条目' : '当前能力已全部解锁'}}</text></view>
+    </view>
+
+    <view class="records"><record-disclosure title="最近互动" count="{{intimacy.recent.length}}">
+      <text wx:if="{{liveMode}}" class="section-copy history-scope">真实记录 · 仅最近 30 条，不代表今日合计。</text>
+      <view wx:for="{{intimacy.recent}}" wx:key="id" class="record-row"><view class="record-copy"><text class="record-title">{{item.title}}</text><text class="record-time">{{item.time}}</text><text wx:if="{{item.reason}}" class="record-time">{{item.reason}}</text></view><text class="record-value {{0 > item.value ? 'negative' : ''}}">{{item.value}}</text></view>
+      <text wx:if="{{!intimacy.recent.length}}" class="empty-copy">还没有互动记录，试着和它打个招呼。</text>
+    </record-disclosure></view>
+    <view wx:if="{{celebration}}" class="celebration"><image src="/assets/icons/zap.png"/><text>亲密度升级了</text></view>
+  </view>
+</app-page>

@@ -1,0 +1,45 @@
+<app-page gatewaySetup="{{true}}" noTab="{{true}}" subtitle="第二阶段 · 设备关联与状态" online="{{deviceOnline}}" statusText="本地接入检查">
+  <view class="setup-heading"><text class="eyebrow">GATEWAY SETUP · READ ONLY</text><text class="page-title">网关接入检查</text><text class="setup-copy">验证微信身份后，查看当前账号已授权的 AI 猫和真实状态。主页和连接页也可切换真实只读模式，其余六个入口仍为演示；本检查页独立登录，不提供设备控制。</text></view>
+  <view class="setup-card">
+    <text class="section-title">{{statusLabel}}</text>
+    <text class="gateway-address mono">{{gatewayAddress}}</text>
+    <text class="setup-copy">{{transportNotice}}</text>
+    <button class="setup-button secondary" bindtap="checkGateway" loading="{{busy}}" disabled="{{busy}}">检查网关配置</button>
+    <text wx:if="{{!configured}}" class="setup-note">AppSecret 尚未配置时不会发起微信登录；不要在小程序里填写 AppSecret、设备密钥或火山密钥。</text>
+    <button class="setup-button" bindtap="login" disabled="{{busy || !configured || signedIn}}">验证微信登录</button>
+    <text wx:if="{{error}}" class="error-copy" role="alert">{{error}}</text>
+  </view>
+  <view wx:if="{{signedIn}}" class="setup-card">
+    <text class="section-title">已验证的业务会话</text>
+    <view class="fact-row"><text>用户编号</text><text class="fact-value mono">{{userId}}</text></view>
+    <view class="fact-row"><text>到期时间（UTC）</text><text class="fact-value mono">{{expiresAt}}</text></view>
+    <view class="fact-row"><text>已授权宠物</text><text class="fact-value">{{petCount}} 只</text></view>
+    <text class="setup-note">设备由本机管理端显式登记到账号。没有授权时不自动认领，也不进行手机扫码或配网。</text>
+    <button class="setup-button secondary" bindtap="logout" disabled="{{busy}}">注销本次业务会话</button>
+  </view>
+  <view wx:if="{{signedIn}}" class="setup-card">
+    <view class="section-heading"><view><text class="section-title">我的授权设备</text><text class="section-count">{{petCount}} 只 · 仅当前账号可见</text></view><button class="setup-button secondary list-refresh" bindtap="refreshPets" loading="{{listLoading}}" disabled="{{busy || listLoading}}">刷新授权列表</button></view>
+    <text class="setup-note">管理员登记完成后刷新即可，不需要重新注销登录。点击设备读取它的真实状态。</text>
+    <text wx:if="{{listLoading}}" class="empty-copy" role="status">正在核对授权，暂停设备采样…</text>
+    <text wx:if="{{listError}}" class="error-copy" role="alert">{{listError}} · 不显示旧授权和旧快照，请重试。</text>
+    <text wx:if="{{!listLoading && !listError && petCount === 0}}" class="empty-copy">当前账号暂无授权设备。请由本机管理端明确登记后刷新；不会自动认领任何 AI 猫。</text>
+    <view class="pet-list">
+      <button wx:for="{{pets}}" wx:key="petId" class="pet-button {{selectedPetId === item.petId ? 'selected' : ''}}" data-pet-id="{{item.petId}}" bindtap="selectPet" disabled="{{busy || listLoading}}" aria-pressed="{{selectedPetId === item.petId}}"><text class="pet-name">{{item.name}}</text><text class="pet-action">{{selectedPetId === item.petId ? '已选择' : '查看状态'}} ›</text></button>
+    </view>
+    <text wx:if="{{petCount > 0 && !selectedPetId}}" class="setup-note">{{deviceStatusLabel}}</text>
+  </view>
+  <view wx:if="{{signedIn && selectedPetId}}" class="setup-card device-status-card">
+    <text class="section-title">{{selectedPetName}}</text>
+    <text class="device-status {{deviceOnline ? 'online' : ''}}" role="status">{{deviceStatusLabel}}</text>
+    <button class="setup-button secondary" bindtap="refreshStatus" loading="{{statusLoading}}" disabled="{{busy || listLoading || statusLoading}}">{{statusLoading ? '正在读取真实状态…' : '刷新设备状态'}}</button>
+    <text wx:if="{{statusError}}" class="error-copy" role="alert">{{statusError}}</text>
+    <block wx:if="{{snapshot}}">
+      <view class="reading-section"><text class="reading-title">设备与电源</text><view wx:for="{{deviceRows}}" wx:key="label" class="fact-row"><text>{{item.label}}</text><text class="fact-value">{{item.value}}</text></view></view>
+      <view class="reading-section"><text class="reading-title">语音状态（只读）</text><view wx:for="{{dialogRows}}" wx:key="label" class="fact-row"><text>{{item.label}}</text><text class="fact-value">{{item.value}}</text></view></view>
+      <view class="sample-note"><text>代理采样时间（UTC，并非设备最后在线时间）</text><text class="mono">{{sampledLabel}}</text></view>
+    </block>
+    <text wx:else class="empty-copy">暂无已验证的当前设备读数，不填充演示电量或连接状态。</text>
+    <text class="setup-note">仅在本页可见、已登录且选中授权设备时，每次读取结束后等待 5 秒再刷新。语音离线不等于设备断开；过期语音数据会明确标为未验证。</text>
+  </view>
+  <view class="setup-card"><text class="section-title">当前边界</text><text class="setup-copy">本页只提供登录、授权列表和真实状态读取。管理端授权不是手机扫码、配网或完整功能接入；不提供动作、语音控制、设置、清除记忆或重置。会话令牌只在内存，隐藏或离开页面后清除；未注销的服务端会话仍按有效期失效。</text></view>
+</app-page>

@@ -1,0 +1,14 @@
+<view class="blind-page">
+  <view wx:if="{{loading}}" class="loading">正在见面…</view>
+  <block wx:else>
+    <image class="cat" src="{{pet.avatarUrl}}" mode="aspectFill" />
+    <view class="result">
+      <text class="eyebrow">它的初始性格是</text>
+      <text class="name">{{pet.personalityName}}</text>
+      <text class="description">{{pet.personalityDescription}}</text>
+      <view class="language"><text class="language-label">语言风格</text><text class="language-value">{{pet.languageStyle}}</text></view>
+      <button class="enter {{entering ? 'is-disabled' : ''}}" bindtap="enterHome" disabled="{{entering}}">{{entering ? '正在进入…' : '认识它'}}</button>
+      <text class="note">仅展示首次性格揭晓界面，不改变任何真实宠物的性格。</text>
+    </view>
+  </block>
+</view>

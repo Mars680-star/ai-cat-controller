@@ -7,11 +7,9 @@ import pytest
 
 from ai_cat_controller.domain.personalities import PERSONALITIES
 from ai_cat_controller.local_speech import (
-    EVENT_PHRASES,
     LocalPhrasePlayer,
     LocalSpeechError,
     TOUCH_PHRASES,
-    event_phrase_asset_path,
     phrase_asset_path,
     touch_phrase_asset_path,
 )
@@ -84,11 +82,13 @@ def test_local_player_uses_fixed_touch_asset(tmp_path: Path) -> None:
     played = player.play_touch("nose")
 
     assert played == asset
-    assert commands[0][1:4] == [
+    assert commands == [[
+        "/usr/bin/paplay",
         "--device=alsa_output.platform-snd-card_1.stereo-fallback",
         "--client-name=ai-cat-local-speech",
         "--stream-name=touch-nose",
-    ]
+        str(asset),
+    ]]
     assert not marker.exists()
 
 
@@ -97,44 +97,6 @@ def test_local_player_rejects_unknown_touch_sensor(tmp_path: Path) -> None:
 
     with pytest.raises(LocalSpeechError, match="not allowlisted"):
         player.play_touch("arbitrary_gpio")
-
-
-def test_local_player_uses_fixed_level_up_event_asset(tmp_path: Path) -> None:
-    marker = tmp_path / "run" / "local-speech-active"
-    asset = event_phrase_asset_path(tmp_path, "level_up")
-    asset.parent.mkdir(parents=True)
-    asset.write_bytes(b"RIFF-event")
-    commands: list[list[str]] = []
-
-    def run_command(
-        command: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[bytes]:
-        commands.append(command)
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    player = LocalPhrasePlayer(
-        asset_root=tmp_path,
-        marker_path=marker,
-        player_path=Path("/usr/bin/paplay"),
-        run_command=run_command,
-    )
-
-    played = player.play_event("level_up")
-
-    assert played == asset
-    assert commands[0][1:4] == [
-        "--device=alsa_output.platform-snd-card_1.stereo-fallback",
-        "--client-name=ai-cat-local-speech",
-        "--stream-name=event-level_up",
-    ]
-    assert not marker.exists()
-
-
-def test_local_player_rejects_unknown_event(tmp_path: Path) -> None:
-    player = LocalPhrasePlayer(asset_root=tmp_path)
-
-    with pytest.raises(LocalSpeechError, match="not allowlisted"):
-        player.play_event("arbitrary_event")
 
 
 def test_repository_contains_all_fifteen_cloud_voice_assets() -> None:
@@ -212,22 +174,6 @@ def test_repository_contains_five_shared_touch_voice_assets() -> None:
     ]
 
     assert len(paths) == 5
-    for path in paths:
-        assert path.is_file()
-        with wave.open(str(path), "rb") as stream:
-            assert stream.getnchannels() == 2
-            assert stream.getsampwidth() == 2
-            assert stream.getframerate() == 48_000
-            assert stream.getnframes() > 48_000
-
-
-def test_repository_contains_shared_event_voice_assets() -> None:
-    paths = [
-        event_phrase_asset_path(REPOSITORY_ASSETS, event)
-        for event in EVENT_PHRASES
-    ]
-
-    assert len(paths) == 1
     for path in paths:
         assert path.is_file()
         with wave.open(str(path), "rb") as stream:

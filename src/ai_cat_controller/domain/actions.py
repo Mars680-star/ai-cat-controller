@@ -1,10 +1,4 @@
-"""Product action catalogue shared by the web UI and hardware adapter.
-
-Maintenance notes:
-- This file describes product-level actions and unlock rules, not raw GPIO.
-- K1 trajectories must remain fixed in the native helper and allowlisted by the
-  adapter before an action is exposed here.
-"""
+"""Safe preset action catalogue used by the product Mock."""
 
 from __future__ import annotations
 
@@ -219,6 +213,15 @@ ACTIONS = (
 )
 
 ACTION_BY_ID = {action.action_id: action for action in ACTIONS}
+
+
+def action_requires_tail(action: ActionDefinition) -> bool:
+    """Hardware presence, not unlock/debug policy; never shorten a preset."""
+    return any(
+        component.capability == Capability.WAG_TAIL
+        or component.actuator == "tail_lr"
+        for component in action.components
+    )
 
 
 def action_is_unlocked(

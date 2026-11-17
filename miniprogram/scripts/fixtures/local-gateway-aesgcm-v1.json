@@ -1,0 +1,52 @@
+{
+  "fixture": "synthetic-only-not-a-real-device-card",
+  "card": "AICAT-LOCAL:1:dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1212121212121212121212121212121212121212121212121212121212121212",
+  "challenge": {
+    "v": 1,
+    "deviceId": "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cardId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "challengeId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "requestId": "cccccccccccccccccccccccccccccccc",
+    "requestNonce": "000000000000000000000001",
+    "ttlSeconds": 30,
+    "proof": "1ee9b80b3d45733ab94ce2aea588dce1"
+  },
+  "requestPlain": {
+    "method": "POST",
+    "path": "/local/pair",
+    "body": {
+      "confirmation": "pair-local-device"
+    },
+    "accessToken": null
+  },
+  "request": {
+    "v": 1,
+    "deviceId": "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cardId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "challengeId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "requestId": "cccccccccccccccccccccccccccccccc",
+    "nonce": "000000000000000000000001",
+    "ciphertext": "96b538615fe6cd9e40650bef6ac7ede7c220ac879b2fed9aa2e832f8f9ac6e727bb5f75899b18bcc40f53b13d96c78fb7e5551b12f44224d16549f055a891db291ef1b5e683242b1290a924c84cdbe4ba299668cac6288a3b10d05cbbeda0e2e2121dda3d7b353e9d66be2ae51faa834ffdfb23ed0"
+  },
+  "responsePlain": {
+    "status": 200,
+    "body": {
+      "success": true,
+      "data": {
+        "userId": "loc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expiresAt": "2026-11-02T12:00:00Z",
+        "accessToken": "sssssssssssssssssssssssssssssssssssssssssss",
+        "ttlSeconds": 3600
+      }
+    }
+  },
+  "response": {
+    "v": 1,
+    "deviceId": "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cardId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "challengeId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "requestId": "cccccccccccccccccccccccccccccccc",
+    "nonce": "010000000000000000000001",
+    "ciphertext": "d53793ce9fed7dbd9f7c711a4662b1a2dc2d3a0918943b74f87c9140d03f3deb06566e8f485e30622ce6670cd1a6fa204a53352832fcb49dd9466b85583050a1fa69b1cbe066dd6a8b444812de75b4693fcb2d1c80b762ec32b60fe694879de3e9a107dd4c32437f621dbb80435c238479bf668f4240ef59bcd5d4150bda7cde2198b7952fbb25bc09f0c6b1cdf236de49bf678c36c6660b6f42c30143ba1439e9f5a386becdd950fa54d0a478278f435a7cb08a9751ecfcbeee1814450e32f246f58d47a0baa5af882bc007e0f841ea4a30763a3e9f794229f1cf08f0b3227c70e2f10a3bb9716c0d71da7e973117e77f244df1b371742090410204205f4d141f"
+  }
+}

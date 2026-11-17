@@ -16,6 +16,7 @@ from typing import Any
 
 from ai_cat_controller.adapters.base import AiCatAdapter, Capability
 from ai_cat_controller.core.config import Settings
+from ai_cat_controller.core.operation_gate import device_operation
 from ai_cat_controller.core.errors import (
     AiCatError,
     ActionConflictError,
@@ -26,7 +27,7 @@ from ai_cat_controller.core.errors import (
     OperationDisabledError,
     ResourceNotFoundError,
 )
-from ai_cat_controller.domain.actions import ACTIONS, ACTION_BY_ID, action_is_unlocked
+from ai_cat_controller.domain.actions import ACTIONS, ACTION_BY_ID, action_is_unlocked, action_requires_tail
 from ai_cat_controller.domain.growth import (
     GrowthEmotion,
     GrowthEventType,
@@ -34,6 +35,7 @@ from ai_cat_controller.domain.growth import (
 from ai_cat_controller.domain.intimacy import (
     INTERACTION_RULES,
     INTIMACY_LEVELS,
+    hardware_unlocks,
     level_for_points,
     level_progress,
 )
@@ -58,6 +60,7 @@ TOUCH_MOTION_READY_STATES = {"offline", "ready", "interrupted"}
 LEVEL_UP_READY_STATES = {"offline", "ready", "interrupted"}
 LEVEL_UP_READY_TIMEOUT_SECONDS = 90.0
 PRODUCT_DATA_RESET_READY_STATES = {"offline", "ready", "interrupted", "unavailable"}
+DIALOG_MEMORY_POLL_SECONDS = 2.0
 
 
 class ProductMockService:
@@ -70,12 +73,15 @@ class ProductMockService:
         settings: Settings,
         personality: PersonalityService,
         adapter: AiCatAdapter,
+        *,
+        maintenance_gate=None,
     ) -> None:
         self._repository = repository
         self._motion = motion
         self._settings = settings
         self._personality = personality
         self._adapter = adapter
+        self._maintenance_gate = maintenance_gate
         self._growth = GrowthService(repository)
         self._touch_phrase_player = LocalPhrasePlayer(
             asset_root=settings.touch_speech_asset_root,
@@ -89,12 +95,18 @@ class ProductMockService:
         self._touch_speech_lock = asyncio.Lock()
         self._level_up_celebration_lock = asyncio.Lock()
         self._level_up_celebration_tasks: set[asyncio.Task[None]] = set()
+        self._touch_speech_tasks: set[asyncio.Task[None]] = set()
         self._product_data_reset_lock = asyncio.Lock()
+        # Only lifecycle changes/runtime synchronization share this gate. It is
+        # not a global maintenance gate for dialog, volume, motion or Mijia.
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_tasks: set[asyncio.Task] = set()
         self._last_touch_motion_at = 0.0
         self._last_touch_speech_at: dict[str, float] = {}
         self._dialog_source_signatures: dict[
             tuple[str, str], tuple[int, int]
         ] = {}
+        self._dialog_memory_monitor_task: asyncio.Task[None] | None = None
 
     @property
     def physical_touch_input_guard_active(self) -> bool:
@@ -103,35 +115,174 @@ class ProductMockService:
         return (
             self._motion.sensor_noise_guard_active
             or self._settings.touch_speech_marker_path.exists()
+            or self._settings.dialog_audio_marker_path.exists()
+            or self._settings.dialog_session_marker_path.exists()
         )
 
+    @device_operation
     async def initialize(self) -> None:
         await asyncio.to_thread(self._repository.initialize)
-        await self._initialize_personality()
+        await self._reconcile_local_device_binding()
         await self._sync_bound_native_dialog_events()
+        await self._initialize_personality()
+        if self._settings.hardware_driver == "local_k1":
+            coroutine = self._monitor_native_dialog_memory()
+            self._dialog_memory_monitor_task = (
+                self._maintenance_gate.detached_task(coroutine, name="k1-dialog-memory-monitor")
+                if self._maintenance_gate is not None else asyncio.create_task(coroutine, name="k1-dialog-memory-monitor"))
 
-    async def _initialize_personality(self) -> None:
+    async def _local_device_serial(self) -> str | None:
         if self._settings.hardware_driver != "local_k1":
-            return
-        serial = await asyncio.to_thread(
+            return None
+        return await asyncio.to_thread(
             self._personality.read_device_serial,
             self._settings.device_serial_path,
         )
-        if serial is None:
-            LOGGER.warning("cannot synchronize personality: device serial unavailable")
-            return
-        pet = await asyncio.to_thread(self._repository.get_pet_by_serial, serial)
-        if pet is None:
-            LOGGER.info("no pet is bound to local device %s", serial)
-            return
-        await self._sync_personality(pet)
 
+    @device_operation
+    async def _reconcile_local_device_binding(self) -> None:
+        serial = await self._local_device_serial()
+        if serial is None:
+            LOGGER.warning("cannot reconcile local device binding: serial unavailable")
+            return
+        result = await asyncio.to_thread(
+            self._repository.reconcile_single_bound_device_serial,
+            serial,
+        )
+        if result["status"] == "migrated":
+            LOGGER.warning(
+                "reconciled local device binding for pet %s: %s -> %s",
+                result["pet_id"],
+                result["previous_serial_number"],
+                result["serial_number"],
+            )
+        elif result["status"] == "ambiguous" and result["bound_device_count"]:
+            LOGGER.warning(
+                "cannot reconcile local device binding: %s bound devices",
+                result["bound_device_count"],
+            )
+        elif result["status"] == "conflict":
+            LOGGER.warning(
+                "cannot reconcile local device binding: hardware serial is already in use"
+            )
+
+    async def _monitor_native_dialog_memory(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(DIALOG_MEMORY_POLL_SECONDS)
+                await self._sync_bound_native_dialog_events()
+            except asyncio.CancelledError:
+                raise
+            except ActionConflictError:
+                LOGGER.debug("native dialog synchronization deferred during maintenance")
+            except Exception:
+                LOGGER.exception("native dialog memory synchronization failed")
+
+    @device_operation
+    async def _initialize_personality(self) -> None:
+        if self._settings.hardware_driver != "local_k1":
+            return
+        async with self._lifecycle_lock:
+            serial = await self._local_device_serial()
+            if serial is None:
+                LOGGER.warning("cannot synchronize personality: device serial unavailable")
+                await self._personality.clear_runtime()
+                return
+            pet = await asyncio.to_thread(self._repository.get_pet_by_serial, serial)
+            if pet is None or not pet.get("owner_user_id"):
+                LOGGER.info("no pet is bound to local device %s", serial)
+                # Cache is empty after restart, but an old private runtime file
+                # may remain. Clean it based on the physical binding, not cache.
+                await self._personality.clear_runtime()
+                return
+            await self._sync_personality_locked(pet)
+
+    async def _run_lifecycle(self, operation):
+        """A disconnected caller cannot abandon a committed lifecycle change."""
+        task = asyncio.create_task(operation)
+        self._lifecycle_tasks.add(task)
+        def done(future):
+            self._lifecycle_tasks.discard(future)
+            if not future.cancelled():
+                future.exception()
+        task.add_done_callback(done)
+        return await asyncio.shield(task)
+
+    async def _locked_lifecycle(self, operation):
+        async with self._lifecycle_lock:
+            return await operation
+
+    def _checkpoint(self) -> None:
+        if self._maintenance_gate is not None:
+            self._maintenance_gate.checkpoint()
+
+    def _spawn_operation(self, operation, *, name: str, cancellable: bool = False):
+        if self._maintenance_gate is not None:
+            return self._maintenance_gate.spawn(operation, name=name, cancellable=cancellable)
+        return asyncio.create_task(operation, name=name)
+
+    @staticmethod
+    async def _settled_side_effect(operation, *args):
+        # Cancelling optional speech must not release its lease while paplay's
+        # actual thread can still use old owner/personality data or resources.
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError()
+        return result
+
+    @device_operation
     async def _sync_personality(self, pet: dict[str, Any]) -> dict[str, Any]:
+        async with self._lifecycle_lock:
+            return await self._sync_personality_locked(pet)
+
+    async def _sync_personality_locked(self, pet: dict[str, Any]) -> dict[str, Any]:
+        # A caller can carry a pre-unbind/pre-reset snapshot across any await.
+        # Re-read under the same gate as bind/unbind/memory-clear/reset before
+        # reading memories, and never expose the replacement owner's profile.
+        if not pet.get("owner_user_id"):
+            return {"sync_state": "superseded"}
+        try:
+            current = await asyncio.to_thread(self._repository.get_owned_pet,
+                str(pet["owner_user_id"]), str(pet["pet_id"]))
+        except ResourceNotFoundError:
+            return {"sync_state": "superseded"}
+        if (current.get("bound_at") != pet.get("bound_at")
+                or current.get("serial_number") != pet.get("serial_number")):
+            return {"sync_state": "superseded"}
+        pet = current
         behavior_profile = None
         if self._settings.enable_growth_personality_v1:
             behavior_profile = await self._growth.behavior_profile(pet)
-        return await self._personality.sync_pet(pet, behavior_profile)
+        dialog_memory: list[dict[str, Any]] = []
+        long_term_memory: list[dict[str, Any]] = []
+        if pet.get("owner_user_id"):
+            dialog_memory = await asyncio.to_thread(
+                self._repository.list_recent_dialog_memory,
+                str(pet["owner_user_id"]),
+                str(pet["pet_id"]),
+            )
+            long_term_memory = await asyncio.to_thread(
+                self._repository.list_long_term_memories,
+                str(pet["owner_user_id"]),
+                str(pet["pet_id"]),
+            )
+        return await self._personality.sync_pet(
+            pet,
+            behavior_profile,
+            dialog_memory,
+            long_term_memory,
+        )
 
+    @device_operation
     async def _sync_bound_native_dialog_events(self) -> None:
         events = await asyncio.to_thread(self._read_native_dialog_events)
         device_serials = sorted({event["device_serial"] for event in events})
@@ -150,10 +301,23 @@ class ProductMockService:
     def _action_is_unlocked(
         self, action: Any, personality_id: str, intimacy_level: int
     ) -> bool:
-        return self._settings.debug_unlock_all_actions or action_is_unlocked(
-            action, personality_id, intimacy_level
+        return self.action_hardware_present(action) and (
+            self._settings.debug_unlock_all_actions or action_is_unlocked(
+                action, personality_id, intimacy_level
+            )
         )
 
+    @property
+    def has_tail(self) -> bool:
+        return self._motion.has_tail
+
+    def action_hardware_present(self, action: Any) -> bool:
+        return self.has_tail or not action_requires_tail(action)
+
+    def _level_payload(self, level: Any) -> dict[str, Any]:
+        return {**level.model_dump(), "unlocks": hardware_unlocks(level.unlocks, has_tail=self.has_tail)}
+
+    @device_operation
     async def login(self, login_code: str, nickname: str) -> dict[str, Any]:
         user = await asyncio.to_thread(
             self._repository.login_user, login_code, nickname
@@ -174,8 +338,7 @@ class ProductMockService:
             raise AuthenticationError("Mock 会话无效，请重新登录")
         return self._sessions[session_token]
 
-    @staticmethod
-    def list_personalities() -> list[dict[str, Any]]:
+    def list_personalities(self) -> list[dict[str, Any]]:
         return [
             {
                 "personality_id": item.personality_id,
@@ -183,8 +346,14 @@ class ProductMockService:
                 "description": item.description,
                 "language_style": item.language_style,
                 "voice_id": item.voice_id,
-                "default_actions": item.default_actions,
-                "action_triggers": item.action_triggers,
+                "default_actions": tuple(
+                    name for name in item.default_actions
+                    if self.action_hardware_present(ACTION_BY_ID[name])
+                ),
+                "action_triggers": {
+                    trigger: name for trigger, name in item.action_triggers.items()
+                    if self.action_hardware_present(ACTION_BY_ID[name])
+                },
                 "intimacy_styles": [
                     style.model_dump() for style in item.intimacy_styles
                 ],
@@ -199,6 +368,7 @@ class ProductMockService:
         pets = await asyncio.to_thread(self._repository.list_user_pets, user_id)
         return [self._pet_summary(pet) for pet in pets]
 
+    @device_operation
     async def bind_pet(
         self,
         *,
@@ -207,6 +377,21 @@ class ProductMockService:
         pet_name: str,
         network_name: str,
     ) -> dict[str, Any]:
+        return await self._run_lifecycle(self._locked_lifecycle(self._bind_pet_locked(
+            user_id=user_id, serial_number=serial_number, pet_name=pet_name, network_name=network_name)))
+
+    async def _bind_pet_locked(
+        self, *, user_id: str, serial_number: str, pet_name: str, network_name: str,
+    ) -> dict[str, Any]:
+        if self._settings.hardware_driver == "local_k1":
+            local_serial = await self._local_device_serial()
+            if local_serial is None:
+                raise DeviceUnavailableError("无法读取本机设备序列号，暂时不能绑定")
+            if serial_number != local_serial:
+                LOGGER.info(
+                    "using local K1 serial instead of submitted binding serial"
+                )
+            serial_number = local_serial
         selected = secrets.choice(PERSONALITIES)
         pet, personality_created = await asyncio.to_thread(
             self._repository.bind_pet,
@@ -216,7 +401,7 @@ class ProductMockService:
             network_name=network_name,
             personality_id=selected.personality_id,
         )
-        personality_sync = await self._sync_personality(pet)
+        personality_sync = await self._sync_personality_locked(pet)
         return {
             "pet": self._pet_summary(pet),
             "blind_box_revealed": personality_created,
@@ -244,7 +429,7 @@ class ProductMockService:
             "personality": self._personality_summary(personality),
             "intimacy": {
                 "points": points,
-                "level": level.model_dump(),
+                "level": self._level_payload(level),
                 "progress": level_progress(points),
                 "address": personality.style_for_level(level.level).address,
             },
@@ -280,8 +465,8 @@ class ProductMockService:
             "rules": [rule.model_dump() for rule in INTERACTION_RULES.values()],
             "daily_check_in_completed": daily_check_in_completed,
             "history": history,
-            "current_unlocks": current_level.unlocks,
-            "next_unlocks": next_level.unlocks if next_level else (),
+            "current_unlocks": hardware_unlocks(current_level.unlocks, has_tail=self.has_tail),
+            "next_unlocks": hardware_unlocks(next_level.unlocks, has_tail=self.has_tail) if next_level else (),
         }
 
     def _growth_debug_enabled(self) -> bool:
@@ -304,6 +489,7 @@ class ProductMockService:
             **state,
         }
 
+    @device_operation
     async def debug_growth(
         self,
         *,
@@ -344,6 +530,7 @@ class ProductMockService:
             "growth": await self.growth_state(user_id, pet_id),
         }
 
+    @device_operation
     async def add_interaction(
         self,
         *,
@@ -379,7 +566,7 @@ class ProductMockService:
             request_id=request_id,
             metadata=metadata,
         )
-        event["level"] = level_for_points(event["points_after"]).model_dump()
+        event["level"] = self._level_payload(level_for_points(event["points_after"]))
         event["progress"] = level_progress(event["points_after"])
         previous_points = max(
             int(event["points_after"]) - int(event["points_delta"]),
@@ -490,6 +677,8 @@ class ProductMockService:
         level = level_for_points(int(pet["intimacy_points"])).level
         catalog: list[dict[str, Any]] = []
         for action in ACTIONS:
+            if not self.action_hardware_present(action):
+                continue
             capabilities = tuple(
                 component.capability for component in action.components
             )
@@ -514,6 +703,7 @@ class ProductMockService:
             )
         return catalog
 
+    @device_operation
     async def execute_action(
         self,
         *,
@@ -528,6 +718,10 @@ class ProductMockService:
         if action is None:
             raise ResourceNotFoundError("预设动作不存在")
         pet = await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id)
+        if not self.action_hardware_present(action):
+            raise AdapterNotImplementedError("当前设备没有尾部机构，无法执行此固定动作")
+        if not self._motion.motion_enabled:
+            raise AdapterNotImplementedError("动作已暂停，当前不接受运动请求")
         if not bool(pet["online"]):
             raise DeviceUnavailableError("设备离线，无法执行动作")
         level = level_for_points(int(pet["intimacy_points"])).level
@@ -590,7 +784,7 @@ class ProductMockService:
             status="running",
         )
         token = result["execution_token"]
-        finalizer = asyncio.create_task(
+        finalizer = self._spawn_operation(
             self._finalize_action(
                 execution["execution_id"],
                 token,
@@ -606,6 +800,7 @@ class ProductMockService:
             "duplicate": False,
         }
 
+    @device_operation
     async def _finalize_action(
         self,
         execution_id: str,
@@ -629,12 +824,16 @@ class ProductMockService:
             )
             if status == "completed" and local_event_after_completion is not None:
                 try:
+                    self._checkpoint()
                     async with self._touch_speech_lock:
-                        path = await asyncio.to_thread(
+                        self._checkpoint()
+                        path = await self._settled_side_effect(
                             self._touch_phrase_player.play_event,
                             local_event_after_completion,
                         )
                     LOGGER.info("local event phrase played: %s", path)
+                except ActionConflictError:
+                    LOGGER.info("local event phrase skipped during maintenance")
                 except Exception:
                     LOGGER.exception(
                         "local event phrase playback skipped after completed action"
@@ -657,7 +856,13 @@ class ProductMockService:
         interaction_event_id: str,
         to_level: int,
     ) -> bool:
-        task = asyncio.create_task(
+        if not self._motion.motion_enabled or not self.action_hardware_present(ACTION_BY_ID["celebration_combo"]):
+            return False
+        try:
+            self._checkpoint()
+        except ActionConflictError:
+            return False
+        task = self._spawn_operation(
             self._run_level_up_celebration(
                 user_id=user_id,
                 pet_id=pet_id,
@@ -665,6 +870,7 @@ class ProductMockService:
                 to_level=to_level,
             ),
             name=f"level-up-celebration-{interaction_event_id}",
+            cancellable=True,
         )
         self._finalizers.add(task)
         self._level_up_celebration_tasks.add(task)
@@ -672,6 +878,7 @@ class ProductMockService:
         task.add_done_callback(self._level_up_celebration_tasks.discard)
         return True
 
+    @device_operation
     async def _run_level_up_celebration(
         self,
         *,
@@ -681,9 +888,11 @@ class ProductMockService:
         to_level: int,
     ) -> None:
         try:
+            self._checkpoint()
             async with self._level_up_celebration_lock:
                 deadline = time.monotonic() + LEVEL_UP_READY_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
+                    self._checkpoint()
                     try:
                         await self._motion.wait_until_idle(
                             timeout=min(
@@ -693,7 +902,9 @@ class ProductMockService:
                         )
                     except ActionTimeoutError:
                         continue
+                    self._checkpoint()
                     dialog_status = await self._adapter.get_dialog_status()
+                    self._checkpoint()
                     dialog_state = str(
                         dialog_status.get("state", "unavailable")
                     )
@@ -717,7 +928,8 @@ class ProductMockService:
                 await asyncio.sleep(
                     self._settings.motion_cooldown_seconds + 0.05
                 )
-                await self.execute_action(
+                self._checkpoint()
+                action = self.execute_action(
                     user_id=user_id,
                     pet_id=pet_id,
                     action_id="celebration_combo",
@@ -725,6 +937,16 @@ class ProductMockService:
                     system_trigger=True,
                     local_event_after_completion="level_up",
                 )
+                if self._maintenance_gate is not None:
+                    # The celebration is optional while waiting, but creating
+                    # an execution row and dispatching an admitted action is a
+                    # non-cancellable commit. Keep its independent lease even
+                    # if maintenance cancels the optional scheduling body.
+                    submission = self._spawn_operation(action,
+                        name=f"level-up-submit-{interaction_event_id}")
+                    await asyncio.shield(submission)
+                else:
+                    await action
                 LOGGER.info(
                     "level-up celebration submitted: level=%s event=%s",
                     to_level,
@@ -732,6 +954,8 @@ class ProductMockService:
                 )
         except asyncio.CancelledError:
             raise
+        except ActionConflictError:
+            LOGGER.info("level-up celebration skipped during maintenance")
         except Exception:
             LOGGER.exception(
                 "level-up celebration skipped: level=%s event=%s",
@@ -746,6 +970,7 @@ class ProductMockService:
             self._repository.list_action_executions, user_id, pet_id, 20
         )
 
+    @device_operation
     async def send_dialog(
         self,
         *,
@@ -762,7 +987,7 @@ class ProductMockService:
             len(content) % len(personality.response_templates)
         ]
         assistant_content = (
-            f"{template.format(address=style.address)} "
+            f"{template} "
             f"你刚才提到“{content[:60]}”，这是本地产品 Mock 回应。"
         )
         conversation_id, messages = await asyncio.to_thread(
@@ -832,6 +1057,7 @@ class ProductMockService:
             "action": action_result,
         }
 
+    @device_operation
     async def dialog_history(
         self, user_id: str, pet_id: str
     ) -> list[dict[str, Any]]:
@@ -840,6 +1066,65 @@ class ProductMockService:
             self._repository.list_dialogs, user_id, pet_id, 50
         )
 
+    async def clear_dialog_memory(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+    ) -> dict[str, Any]:
+        if self._maintenance_gate is not None:
+            # A rejected non-owner must not close device-wide admission or
+            # invalidate other requests' epochs. This is only preflight; the
+            # destructive repository transaction still rechecks ownership.
+            await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        operation = self._clear_dialog_memory_lifecycle(user_id=user_id, pet_id=pet_id, request_id=request_id)
+        return await self._maintenance_gate.maintenance(operation) if self._maintenance_gate is not None else await operation
+
+    async def _clear_dialog_memory_lifecycle(self, *, user_id: str, pet_id: str, request_id: str):
+        return await self._run_lifecycle(self._locked_lifecycle(self._clear_dialog_memory_locked(
+            user_id=user_id, pet_id=pet_id, request_id=request_id)))
+
+    async def _clear_dialog_memory_locked(
+        self, *, user_id: str, pet_id: str, request_id: str,
+    ) -> dict[str, Any]:
+        # Recheck before observing private voice status, not only when mutating
+        # memory. Ownership may have changed after the outer read-only preflight.
+        await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        dialog_status = await self._adapter.get_dialog_status()
+        dialog_state = str(dialog_status.get("state", "unavailable"))
+        stale_active_state = bool(
+            dialog_status.get("stale")
+        ) and dialog_state not in {"offline", "unavailable"}
+        if (
+            dialog_status.get("session_active")
+            or stale_active_state
+            or dialog_state not in PRODUCT_DATA_RESET_READY_STATES
+        ):
+            raise ActionConflictError(
+                "语音对话正在进行，请先打断并结束后再清除记忆",
+                details={"dialog_state": dialog_state},
+            )
+
+        result = await asyncio.to_thread(
+            self._repository.clear_dialog_memory,
+            user_id=user_id,
+            pet_id=pet_id,
+            request_id=request_id,
+        )
+        pet = await asyncio.to_thread(
+            self._repository.get_owned_pet,
+            user_id,
+            pet_id,
+        )
+        personality_sync = await self._sync_personality_locked(pet)
+        return {
+            **result,
+            "history_preserved": True,
+            "personality_sync": personality_sync,
+        }
+
+    @device_operation
     async def dialog_conversations(
         self, user_id: str, pet_id: str, limit: int = 30
     ) -> dict[str, Any]:
@@ -855,6 +1140,30 @@ class ProductMockService:
             "sync": sync,
         }
 
+    async def dialog_readonly_status(self, user_id: str, pet_id: str) -> dict[str, Any]:
+        """No sync/control: authorization precedes the adapter's status read."""
+        await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        result = await self._adapter.get_dialog_status()
+        await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        return {"capability": "persisted_dialog_readonly_v1", "read_only": True, "status": result}
+
+    async def dialog_readonly_conversations(self, user_id: str, pet_id: str) -> dict[str, Any]:
+        # list_dialog_conversations validates ownership before its SELECTs.
+        rows = await asyncio.to_thread(self._repository.list_dialog_conversations, user_id, pet_id, 30, read_only=True)
+        await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        return {"capability": "persisted_dialog_readonly_v1", "read_only": True,
+                "scope": "persisted_only", "limit": 30,
+                "conversations": [self._conversation_summary(row) for row in rows]}
+
+    async def dialog_readonly_conversation(self, user_id: str, pet_id: str, conversation_id: str) -> dict[str, Any]:
+        result = await asyncio.to_thread(self._repository.get_dialog_conversation_readonly,
+                                         user_id, pet_id, conversation_id, 100)
+        await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        return {"capability": "persisted_dialog_readonly_v1", "read_only": True,
+                "scope": "persisted_only", "limit": 100, "truncated": result["truncated"],
+                "conversation": self._conversation_summary(result["summary"]), "messages": result["messages"]}
+
+    @device_operation
     async def dialog_conversation(
         self, user_id: str, pet_id: str, conversation_id: str
     ) -> dict[str, Any]:
@@ -871,6 +1180,7 @@ class ProductMockService:
             "sync": sync,
         }
 
+    @device_operation
     async def _sync_native_dialog_events(
         self, user_id: str, pet_id: str
     ) -> dict[str, Any]:
@@ -917,7 +1227,7 @@ class ProductMockService:
                 pet_id,
             )
 
-        if growth_changed:
+        if imported or growth_changed:
             pet = await asyncio.to_thread(
                 self._repository.get_owned_pet,
                 user_id,
@@ -1130,6 +1440,7 @@ class ProductMockService:
             event.pop("source_conversation_id", None)
         return events
 
+    @device_operation
     async def update_settings(
         self,
         *,
@@ -1161,6 +1472,7 @@ class ProductMockService:
         await self._sync_personality(pet)
         return self._pet_summary(pet)
 
+    @device_operation
     async def add_device_touch(
         self,
         *,
@@ -1217,6 +1529,11 @@ class ProductMockService:
             return {"status": "skipped", "reason": "duplicate_touch"}
         if action_id is None:
             return {"status": "skipped", "reason": "unknown_sensor"}
+
+        if not self._motion.motion_enabled:
+            result = {"status": "skipped", "reason": "motion_disabled"}
+            self._add_touch_speech_status(result, sensor, request_id)
+            return result
 
         dialog_status = await self._adapter.get_dialog_status()
         dialog_state = str(dialog_status.get("state", "unavailable"))
@@ -1299,6 +1616,10 @@ class ProductMockService:
     def _schedule_touch_speech(self, sensor: str, request_id: str) -> bool:
         if not self._settings.enable_touch_speech:
             return False
+        try:
+            self._checkpoint()
+        except ActionConflictError:
+            return False
         now = time.monotonic()
         if (
             now - self._last_touch_speech_at.get(sensor, 0.0)
@@ -1307,23 +1628,29 @@ class ProductMockService:
             LOGGER.info("touch phrase suppressed by sensor cooldown: %s", sensor)
             return False
         self._last_touch_speech_at[sensor] = now
-        speech_task = asyncio.create_task(
+        speech_task = self._spawn_operation(
             self._play_touch_phrase_after_motion(sensor),
             name=f"touch-speech-{request_id}",
+            cancellable=True,
         )
         self._finalizers.add(speech_task)
+        self._touch_speech_tasks.add(speech_task)
         speech_task.add_done_callback(self._finalizers.discard)
+        speech_task.add_done_callback(self._touch_speech_tasks.discard)
         return True
 
+    @device_operation
     async def _play_touch_phrase_after_motion(
         self,
         sensor: str,
     ) -> None:
         try:
+            self._checkpoint()
             async with self._touch_speech_lock:
                 await self._motion.wait_until_idle(
                     timeout=self._settings.command_timeout_seconds + 5.0
                 )
+                self._checkpoint()
                 dialog_status = await self._adapter.get_dialog_status()
                 if (
                     dialog_status.get("session_active")
@@ -1333,19 +1660,50 @@ class ProductMockService:
                 ):
                     LOGGER.info("touch phrase skipped because dialog became busy")
                     return
-                path = await asyncio.to_thread(
+                self._checkpoint()
+                path = await self._settled_side_effect(
                     self._touch_phrase_player.play_touch,
                     sensor,
                 )
                 LOGGER.info("touch phrase played: %s", path)
         except asyncio.CancelledError:
             raise
+        except ActionConflictError:
+            LOGGER.info("touch phrase skipped during maintenance")
         except Exception:
             LOGGER.exception("touch phrase playback skipped")
 
     async def unbind(self, user_id: str, pet_id: str) -> None:
-        await asyncio.to_thread(self._repository.unbind_pet, user_id, pet_id)
+        if self._maintenance_gate is not None:
+            await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id, read_only=True)
+        operation = self._unbind_lifecycle(user_id, pet_id)
+        if self._maintenance_gate is not None:
+            await self._maintenance_gate.maintenance(operation)
+        else:
+            await operation
 
+    async def _unbind_lifecycle(self, user_id: str, pet_id: str):
+        return await self._run_lifecycle(self._locked_lifecycle(self._unbind_locked(user_id, pet_id)))
+
+    async def _unbind_locked(self, user_id: str, pet_id: str) -> None:
+        pet = await asyncio.to_thread(self._repository.get_owned_pet, user_id, pet_id)
+        status = await self._adapter.get_dialog_status()
+        if (status.get("session_active") is not False or status.get("stale") is not False
+                or status.get("state") not in {"offline", "ready", "interrupted", "waiting_wake"}):
+            raise ActionConflictError("语音对话仍在进行或状态未验证，请先结束对话后再解绑")
+        if self._settings.hardware_driver == "local_k1":
+            serial = await self._local_device_serial()
+            if serial is None:
+                raise DeviceUnavailableError("无法校验本机设备标识，暂时不能解绑")
+            clear_runtime = serial == pet["serial_number"]
+        else:
+            profile = await self._personality.status()
+            clear_runtime = profile.get("pet_id") == pet_id
+        await asyncio.to_thread(self._repository.unbind_pet, user_id, pet_id)
+        if clear_runtime:
+            await self._personality.clear_runtime()
+
+    @device_operation
     async def feedback(
         self,
         *,
@@ -1362,6 +1720,7 @@ class ProductMockService:
             content=content,
         )
 
+    @device_operation
     async def update_mock_device_status(
         self,
         *,
@@ -1433,6 +1792,36 @@ class ProductMockService:
     async def reset_product_data(self, *, user_id: str) -> dict[str, Any]:
         if not self._settings.enable_product_data_reset:
             raise OperationDisabledError("当前部署未启用体验数据格式化功能")
+        if self._maintenance_gate is not None:
+            return await self._maintenance_gate.maintenance(
+                self._reset_product_data_after_drain(user_id=user_id), quiesce=self._quiesce_reset)
+        return await self._run_lifecycle(self._reset_product_data(user_id=user_id))
+
+    async def _quiesce_reset(self) -> None:
+        # Admission has already closed, but exclusive maintenance has not begun.
+        # Stop is a safety bypass. Optional work is cancelled cooperatively and
+        # retains its lease until any real playback thread finishes cleanup.
+        dialog_status = await self._adapter.get_dialog_status()
+        dialog_state = str(dialog_status.get("state", "unavailable"))
+        stale_active = bool(dialog_status.get("stale")) and dialog_state not in {"offline", "unavailable"}
+        if (dialog_status.get("session_active") or stale_active
+                or dialog_state not in PRODUCT_DATA_RESET_READY_STATES):
+            raise ActionConflictError("语音对话正在进行，请先打断并结束后再格式化",
+                details={"dialog_state": dialog_state})
+        if self._adapter.supports(Capability.STOP_MOTION):
+            await self._motion.stop()
+        for task in tuple(self._level_up_celebration_tasks | self._touch_speech_tasks):
+            task.cancel()
+        if self._finalizers:
+            await asyncio.gather(*tuple(self._finalizers), return_exceptions=True)
+
+    async def _reset_product_data_after_drain(self, *, user_id: str):
+        async with self._product_data_reset_lock:
+            return await self._run_lifecycle(self._locked_lifecycle(self._reset_product_data_locked(user_id=user_id)))
+
+    async def _reset_product_data(self, *, user_id: str) -> dict[str, Any]:
+        if not self._settings.enable_product_data_reset:
+            raise OperationDisabledError("当前部署未启用体验数据格式化功能")
 
         async with self._product_data_reset_lock:
             dialog_status = await self._adapter.get_dialog_status()
@@ -1457,42 +1846,50 @@ class ProductMockService:
                     *tuple(self._finalizers),
                     return_exceptions=True,
                 )
+            # Finalizers may themselves need personality synchronization. Wait
+            # outside the shared gate, then recheck voice before destructive IO.
+            return await self._locked_lifecycle(self._reset_product_data_locked(user_id=user_id))
 
-            backup = await asyncio.to_thread(self._repository.backup_product_data)
-            archived = await asyncio.to_thread(
-                self._archive_runtime_data,
-                backup["backup_directory"],
-            )
-            try:
-                deleted = await asyncio.to_thread(
-                    self._repository.clear_product_data
-                )
-            except Exception:
-                await asyncio.to_thread(self._restore_runtime_data, archived)
-                raise
-
-            await self._personality.clear_runtime()
-            self._sessions.clear()
-            self._dialog_source_signatures.clear()
-            self._last_touch_motion_at = 0.0
-            self._last_touch_speech_at.clear()
-            LOGGER.warning(
-                "product experience data reset by %s; backup=%s",
-                user_id,
-                backup["backup_id"],
-            )
-            return {
-                "reset": True,
-                "backup_id": backup["backup_id"],
-                "deleted": deleted,
-                "archived_files": [path.name for _, path in archived],
-            }
+    async def _reset_product_data_locked(self, *, user_id: str) -> dict[str, Any]:
+        dialog_status = await self._adapter.get_dialog_status()
+        dialog_state = str(dialog_status.get("state", "unavailable"))
+        stale_active_state = bool(dialog_status.get("stale")) and dialog_state not in {"offline", "unavailable"}
+        if (dialog_status.get("session_active") or stale_active_state
+                or dialog_state not in PRODUCT_DATA_RESET_READY_STATES):
+            raise ActionConflictError("语音对话正在进行，请先打断并结束后再格式化",
+                details={"dialog_state": dialog_state})
+        backup = await asyncio.to_thread(self._repository.backup_product_data)
+        archived = await asyncio.to_thread(self._archive_runtime_data, backup["backup_directory"])
+        try:
+            deleted = await asyncio.to_thread(self._repository.clear_product_data)
+        except Exception:
+            await asyncio.to_thread(self._restore_runtime_data, archived)
+            raise
+        await self._personality.clear_runtime()
+        self._sessions.clear()
+        self._dialog_source_signatures.clear()
+        self._last_touch_motion_at = 0.0
+        self._last_touch_speech_at.clear()
+        LOGGER.warning("product experience data reset by %s; backup=%s", user_id, backup["backup_id"])
+        return {"reset": True, "backup_id": backup["backup_id"], "deleted": deleted,
+            "archived_files": [path.name for _, path in archived]}
 
     async def shutdown(self) -> None:
+        if self._dialog_memory_monitor_task is not None:
+            self._dialog_memory_monitor_task.cancel()
+            await asyncio.gather(
+                self._dialog_memory_monitor_task,
+                return_exceptions=True,
+            )
+            self._dialog_memory_monitor_task = None
         for task in tuple(self._level_up_celebration_tasks):
+            task.cancel()
+        for task in tuple(self._touch_speech_tasks):
             task.cancel()
         if self._finalizers:
             await asyncio.gather(*tuple(self._finalizers), return_exceptions=True)
+        if self._lifecycle_tasks:
+            await asyncio.gather(*tuple(self._lifecycle_tasks), return_exceptions=True)
 
     @staticmethod
     def _personality_summary(personality: Any) -> dict[str, Any]:

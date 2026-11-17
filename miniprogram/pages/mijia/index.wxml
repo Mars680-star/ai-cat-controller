@@ -1,0 +1,44 @@
+<app-page current="mijia" loading="{{loading}}" error="{{error}}" subtitle="{{pet ? pet.name + ' · ' + pet.personalityName : '陪伴你的 AI 狐狸'}}" online="{{false}}" statusText="本地预览" bindretry="load">
+  <view wx:if="{{status && spec}}">
+    <view class="page-heading-row"><view><text class="eyebrow">全屋智能</text><text class="page-title">米家连接</text></view><text class="state-label {{status.status === 'prepared' ? 'prepared' : ''}}">{{status.status === 'prepared' ? '预览资料就绪' : '尚未准备'}}</text></view>
+    <view class="preview-note"><text class="preview-mark">UI</text><text>只展示接入流程，不连接米家账号、不调用网关，也不会控制真实设备。</text></view>
+
+    <view class="mijia-overview">
+      <text class="section-kicker">让陪伴走进你的家</text>
+      <text class="overview-title">把 {{pet.name}} 加入米家</text>
+      <text class="overview-description">{{status.status === 'prepared' ? '本地预览资料已生成。真实接入仍需完成平台申请、能力编号确认及账号授权。' : '先看看设备将提供哪些状态和操作。准备资料只生成演示标识，不代表已经连接米家。'}}</text>
+      <view class="connection-note"><view class="unlinked-dot"></view><text>米家账号未授权 · 实际连接尚未开放</text></view>
+      <button class="btn btn-primary" bindtap="prepare" loading="{{changing && !removeSheet}}" disabled="{{changing || status.status === 'prepared'}}">{{status.status === 'prepared' ? '预览资料已准备' : '准备接入资料'}}</button>
+      <button class="btn btn-secondary clear-action" bindtap="showRemove" disabled="{{changing || status.status !== 'prepared'}}">清除接入准备</button>
+    </view>
+
+    <view class="section-heading"><text class="section-title">接入信息</text><text class="section-copy">独立标识仅用于本地流程展示。</text></view>
+    <view class="mijia-facts">
+      <view class="fact-row"><text>设备标识</text><text class="fact-value mono">{{status.gatewayDeviceId || '准备后生成'}}</text></view>
+      <view class="fact-row"><text>米家账号</text><text class="fact-value muted-state">未连接 / 未授权</text></view>
+      <view class="fact-row"><text>平台型号</text><text class="fact-value">{{status.miotModel || '等待平台确认'}}</text></view>
+      <view class="fact-row"><text>能力版本</text><text class="fact-value mono">{{status.specRevision || '--'}}</text></view>
+    </view>
+
+    <view class="capability-section">
+      <view class="capability-heading"><view><text class="section-title">可查看状态</text><text class="section-copy">正式接入后可同步变化</text></view><text class="capability-count">{{spec.properties.length}} 项</text></view>
+      <view class="capability-list"><view wx:for="{{spec.properties}}" wx:key="*this"><text>{{item}}</text><text class="capability-note">{{item === '音量' ? '可查看、可设置' : '可查看'}}</text></view><view wx:if="{{spec.properties.length === 0}}" class="empty-copy">暂无状态能力</view></view>
+    </view>
+    <view class="capability-section">
+      <view class="capability-heading"><view><text class="section-title">可执行操作</text><text class="section-copy">固定能力清单，当前不可远程执行</text></view><text class="capability-count">{{spec.actions.length}} 项</text></view>
+      <view class="capability-list"><view wx:for="{{spec.actions}}" wx:key="*this"><text>{{item}}</text><text class="capability-note">固定操作</text></view><view wx:if="{{spec.actions.length === 0}}" class="empty-copy">暂无操作能力</view></view>
+    </view>
+    <view class="capability-section">
+      <view class="capability-heading"><view><text class="section-title">后续通知</text><text class="section-copy">完成正式连接后再开放上报</text></view><text class="capability-count">{{spec.events.length}} 项</text></view>
+      <view class="capability-list"><view wx:for="{{spec.events}}" wx:key="*this"><text>{{item}}</text><text class="capability-note">待正式连接</text></view><view wx:if="{{spec.events.length === 0}}" class="empty-copy">暂无通知能力</view></view>
+    </view>
+
+    <view class="mijia-steps">
+      <text class="section-kicker">连接路径</text><text class="section-title">距离正式连接，还有三步</text>
+      <view class="step"><text class="step-number {{status.status === 'prepared' ? 'done' : ''}}">01</text><view><text class="step-title">准备接入资料</text><text class="step-copy">{{status.status === 'prepared' ? '预览资料已就绪；真实标识待接入时确认。' : '生成隔离的设备标识和固定能力清单。'}}</text></view></view>
+      <view class="step"><text class="step-number">02</text><view><text class="step-title">完成平台申请</text><text class="step-copy">确认产品型号、能力编号与审核要求。</text></view></view>
+      <view class="step"><text class="step-number">03</text><view><text class="step-title">授权米家账号</text><text class="step-copy">完成鉴权与通知校验后，再开放正式连接。</text></view></view>
+    </view>
+    <confirm-sheet visible="{{removeSheet}}" title="清除本地接入准备？" description="仅清除本地预览资料和演示标识；重新准备会生成新的演示标识。不影响真实设备、米家账号或任何平台授权。" confirmText="清除本地预览" danger loading="{{changing}}" bindcancel="hideRemove" bindconfirm="remove" />
+  </view>
+</app-page>

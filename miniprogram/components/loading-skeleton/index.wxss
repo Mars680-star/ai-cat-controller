@@ -1,0 +1,6 @@
+.skeleton { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-1) 0; }
+.hero { height: 260rpx; border-radius: var(--radius-card); }
+.line { height: 112rpx; border-radius: var(--radius-control); }
+.shimmer { position: relative; overflow: hidden; background: var(--color-skeleton); }
+.shimmer::after { position: absolute; top: 0; bottom: 0; left: -30%; width: 28%; background: var(--color-skeleton-glow); animation: move 1.2s ease-in-out infinite; content: ""; }
+@keyframes move { to { left: 110%; } }

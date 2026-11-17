@@ -1,0 +1,5 @@
+<button wx:if="{{intimacy}}" class="wrap {{compact ? 'compact' : ''}}" bindtap="open" aria-label="查看亲密度详情">
+  <view class="top"><view class="identity"><text class="label">亲密度</text><text class="level">{{intimacy.levelName}}</text></view><text class="points mono">{{intimacy.points}}<text class="denominator">/{{intimacy.nextLevelPoints || '已满级'}}</text></text></view>
+  <view class="track"><view class="fill" style="width: {{intimacy.progressPercent}}%;"></view></view>
+  <view class="bottom"><text class="level-badge">{{intimacy.badge}}</text><text>{{intimacy.nextLevelPoints ? '再获得 ' + (intimacy.nextLevelPoints - intimacy.points) + ' 点升级' : '已达到最高等级'}}</text></view>
+</button>

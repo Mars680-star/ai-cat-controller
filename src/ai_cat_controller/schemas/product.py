@@ -71,6 +71,10 @@ class ProductDataResetRequest(BaseModel):
     confirmation: Literal["RESET_PRODUCT_DATA"]
 
 
+class ClearDialogMemoryRequest(BaseModel):
+    request_id: str = Field(default_factory=_request_id, min_length=4, max_length=80)
+
+
 class DebugGrowthRequest(BaseModel):
     request_id: str = Field(default_factory=_request_id, min_length=4, max_length=80)
     event_type: Literal[

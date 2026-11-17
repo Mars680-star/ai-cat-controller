@@ -1,0 +1,6 @@
+<button class="card {{action.state}} {{offline ? 'is-offline' : ''}}" disabled="{{offline || action.state !== 'available'}}" bindtap="select" aria-label="执行{{action.name}}">
+  <view class="icon-shell"><image class="action-icon icon-action" src="{{action.icon}}" /><image wx:if="{{action.state === 'locked'}}" class="lock-icon icon-action-lock" src="/assets/icons/lock.png" /></view>
+  <text class="name">{{action.name}}</text>
+  <text class="desc">{{action.description}}</text>
+  <status-badge wx:if="{{action && action.state}}" state="{{offline ? 'unavailable' : action.state}}" text="{{offline ? '暂不可用' : action.state === 'available' ? '可执行' : action.state === 'running' ? '执行中' : action.state === 'locked' ? 'Lv.' + action.minLevel + ' 解锁' : '暂不可用'}}" />
+</button>

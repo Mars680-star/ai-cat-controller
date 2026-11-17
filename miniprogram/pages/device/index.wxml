@@ -1,0 +1,53 @@
+<app-page authKind="{{liveState.authKind}}" current="connection" liveDevice="{{liveMode}}" hideModeBanner="{{true}}" loading="{{false}}" error="" subtitle="连接与网络" online="{{liveMode && liveState.authKind === 'local' && liveOnline}}" statusText="{{liveState.authKind === 'local' ? liveStatusLabel : '选择连接方式'}}">
+  <view class="connection-heading"><text class="page-title">我的设备</text><text class="section-copy">扫码连接后，直接控制或设置 Wi-Fi。</text></view>
+  <local-connect bindpaired="localPaired" bindcontinue="localContinue" bindnetwork="localNetwork" bindcomputer="localComputer" />
+  <text wx:if="{{connectionNotice}}" class="connection-notice" role="status">{{connectionNotice}}</text>
+  <button class="connection-more" bindtap="toggleAdvanced">{{advancedOpen ? '收起其他方式与工具' : '其他连接方式与工具'}} {{advancedOpen ? '⌃' : '⌄'}}</button>
+  <view wx:if="{{advancedOpen}}" class="connection-options">
+    <text class="section-title">电脑微信网关</text><text class="section-copy">保留原开发连接方式，需要电脑开机。与手机机身卡直连相互独立。</text>
+    <live-device-panel wx:if="{{liveMode && liveState.authKind !== 'local'}}" state="{{liveState}}" bindlogin="liveLogin" bindrefresh="liveRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="openPreviewTools" />
+    <button wx:else class="btn btn-secondary" bindtap="useComputerConnection" loading="{{connectionSwitching}}" disabled="{{connectionSwitching}}">启用电脑微信网关</button>
+    <view class="tool-links">
+      <button class="tool-link" bindtap="openGatewaySetup" disabled="{{openingGateway || openingDebug}}">网关接入检查</button>
+      <button class="tool-link" bindtap="openDeviceDebug" disabled="{{openingDebug || openingGateway}}">AI猫只读联调</button>
+      <button class="tool-link" bindtap="openProvision">操作员扫码配网 · 原入口</button>
+      <button class="tool-link" bindtap="openPreviewTools">{{previewToolsOpen ? '收起界面预览' : '界面预览与演示工具'}}</button>
+    </view>
+  </view>
+  <block wx:if="{{previewToolsOpen && !liveMode}}">
+    <view class="preview-note"><text class="preview-mark">预览</text><text>以下仅为演示数据，不会绑定实机、切换 Wi-Fi 或替代真实读数。</text></view>
+    <loading-skeleton wx:if="{{loading}}" />
+    <block wx:else>
+      <view wx:if="{{!mockReady}}" class="form-section"><text class="section-copy">需要演示账号才能修改预览资料，不影响上方机身卡连接。</text><button class="btn btn-secondary" bindtap="openPreviewAuth">进入界面预览</button></view>
+      <view wx:if="{{!bound && mockReady}}" class="form-section">
+        <text class="section-title">创建演示宠物</text>
+        <view class="field"><text class="field-label">演示序列号</text><input class="field-input mono" value="{{deviceSerial}}" disabled="{{binding}}" maxlength="64" bindinput="inputSerial" /></view>
+        <view class="field"><text class="field-label">宠物名字</text><input class="field-input" value="{{petName}}" disabled="{{binding}}" maxlength="20" bindinput="inputPetName" /></view>
+        <view class="field"><text class="field-label">演示 Wi-Fi 名称</text><input class="field-input" value="{{networkName}}" disabled="{{binding}}" maxlength="64" bindinput="inputNetworkName" /></view>
+        <button class="btn btn-primary bind-action" bindtap="bindPet" loading="{{binding}}" disabled="{{binding}}">绑定并预览性格盲盒</button>
+      </view>
+      <block wx:if="{{bound}}">
+        <view class="device-overview">
+          <view class="overview-heading"><text class="device-name">{{pet.name}}</text><text class="network-state">{{networkLabel}} · 演示</text></view>
+          <view class="fact-row"><text>设备标识</text><text class="fact-value mono">{{pet.deviceId}}</text></view>
+          <view class="fact-row"><text>序列号</text><text class="fact-value mono">{{pet.serialMasked}}</text></view>
+          <view class="fact-row"><text>Wi-Fi 名称</text><text class="fact-value">{{pet.networkName || '暂无网络'}}</text></view>
+          <view class="fact-row"><text>最后在线</text><text class="fact-value">{{lastSeenLabel}}</text></view>
+        </view>
+        <view class="section-heading-row"><text class="section-title">演示电源与连接状态</text></view>
+        <view class="power-panel">
+          <view class="battery-overview"><view><text class="metric-label">电量</text><text class="battery-value mono">{{batteryLabel}}</text></view><view class="battery-detail"><text class="battery-state">{{batteryStateLabel}}</text><text>{{voltageLabel}}</text></view></view>
+          <view class="power-facts"><view><text class="metric-label">充电器</text><text class="power-value">{{chargerLabel}}</text></view><view><text class="metric-label">电池检测</text><text class="power-value">{{batteryPresentLabel}}</text></view></view>
+        </view>
+        <view class="device-state-form">
+          <view class="control-row"><text>设备在线</text><switch checked="{{mockOnline}}" disabled="{{updating || reconnecting}}" color="#967023" bindchange="onOnlineChange" /></view>
+          <view class="control-row"><text>网络状态</text><picker range="{{networkOptions}}" value="{{networkIndex}}" disabled="{{updating || reconnecting}}" bindchange="onNetworkChange"><view class="picker-value">{{networkOptions[networkIndex]}} ⌄</view></picker></view>
+          <view class="range-control"><view class="range-copy"><text>电量</text><text class="range-value mono">{{batteryPercent}}%</text></view><slider min="0" max="100" value="{{batteryPercent}}" disabled="{{updating || reconnecting}}" activeColor="#967023" bindchanging="onBatteryChange" bindchange="onBatteryChange" /></view>
+          <view class="control-row"><text>正在充电</text><switch checked="{{charging}}" disabled="{{updating || reconnecting}}" color="#967023" bindchange="onChargingChange" /></view>
+          <view class="status-actions"><button class="btn btn-primary" bindtap="updateStatus" loading="{{updating}}" disabled="{{updating || reconnecting}}">更新状态预览</button><button class="btn btn-secondary" bindtap="reconnect" loading="{{reconnecting}}" disabled="{{reconnecting || updating}}">演示重新连接</button></view>
+        </view>
+      </block>
+    </block>
+    <text wx:if="{{error}}" class="connection-notice" role="alert">{{error}}</text>
+  </block>
+</app-page>

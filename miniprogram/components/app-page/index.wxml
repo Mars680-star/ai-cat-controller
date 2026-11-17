@@ -1,0 +1,29 @@
+<view class="product-topbar">
+  <view class="brand-mark">A</view>
+  <view class="brand-copy"><text class="brand-title">AI 狐狸伴侣</text><text class="brand-subtitle">{{subtitle}}</text></view>
+  <view class="top-status"><view class="status-dot {{online ? '' : 'offline'}}"></view><text>{{readOnlyDebug || gatewaySetup || liveDevice || current === 'connection' ? statusText : statusText === '本地预览' || statusText === '界面预览' ? '界面预览' : online ? '演示在线' : '演示离线'}}</text></view>
+</view>
+<view wx:if="{{!localProvisioning && (!hideModeBanner || ((liveDevice || gatewaySetup) && phoneLan && authKind !== 'local') || (liveDevice && authKind === 'local'))}}" class="preview-banner" role="status">
+  <view class="mode-summary">
+    <view class="preview-pill">{{liveDevice ? authKind === 'local' ? '机身卡' : '真实设备' : gatewaySetup ? '接入检查' : readOnlyDebug ? '只读联调' : '界面预览'}}</view>
+    <text wx:if="{{liveDevice && authKind === 'local'}}" class="mode-copy">本地加密 · 同 Wi-Fi · 电脑可关闭</text>
+    <text wx:elif="{{(liveDevice || gatewaySetup) && phoneLan}}" class="mode-copy">电脑中转 · HTTP 明文 · 受信 Wi-Fi · 电脑须开机</text>
+    <text wx:elif="{{liveDevice}}" class="mode-copy">{{current === 'motion' ? '微信授权 · 真实数据 · 运动单击执行' : '微信授权 · 真实数据 · 控制需确认'}}</text>
+    <text wx:elif="{{gatewaySetup}}" class="mode-copy">检查连接，不提供设备控制</text>
+    <text wx:elif="{{readOnlyDebug}}" class="mode-copy">只读状态，不提供设备控制</text>
+    <text wx:else class="mode-copy">界面预览 · 未连接设备</text>
+    <button class="mode-info" bindtap="toggleConnectionDetails" aria-expanded="{{showConnectionDetails}}">{{showConnectionDetails ? '收起' : '说明'}}</button>
+  </view>
+  <view wx:if="{{showConnectionDetails}}" class="mode-details">
+    <text wx:if="{{liveDevice}}">{{current === 'motion' ? '真实运动 · 固定预设，执行前请现场观察' : current === 'history' ? '真实对话 · 状态与记录只读，控制需授权确认' : current === 'settings' ? '真实设置 · 保存与反馈需授权确认，危险操作未接入' : '真实数据 · 培养互动需确认，动作另有开关'}}</text>
+    <text wx:if="{{(liveDevice || gatewaySetup) && phoneLan && authKind !== 'local'}}">{{transportNotice}}</text>
+    <text wx:if="{{liveDevice && authKind === 'local'}}">机身卡本地配对不是微信身份或异地控制。离开微信后须重新扫码，未决请求不会清除。</text>
+    <text wx:if="{{!liveDevice}}">{{gatewaySetup || readOnlyDebug ? '仅检查连接与读取，不认领设备或更改机器。' : '这里的示例数据和演示操作不会控制真实设备。'}}</text>
+  </view>
+</view>
+<view class="page-shell {{noTab ? 'no-tab' : ''}}">
+  <view wx:if="{{error}}" class="error"><text class="error-copy">{{error}}</text><button class="retry" bindtap="retry">重试</button></view>
+  <loading-skeleton wx:if="{{loading}}" />
+  <slot wx:else />
+</view>
+<product-nav wx:if="{{!noTab}}" current="{{current}}" />

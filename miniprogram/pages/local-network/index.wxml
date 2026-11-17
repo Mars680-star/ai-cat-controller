@@ -1,0 +1,74 @@
+<app-page noTab="{{true}}" liveDevice="{{true}}" localProvisioning="{{true}}" hideModeBanner="{{true}}" subtitle="连接与配网" online="{{wizard.connectionVerified}}" statusText="{{wizard.connectionLabel}}">
+  <view class="wizard-heading"><text class="page-title">为狐狸连接 Wi-Fi</text><text class="wizard-intro">跟着当前一步操作，不用来回找页面。</text></view>
+  <view class="wizard-steps" aria-label="配网进度">
+    <view class="wizard-step {{wizard.step === 1 ? 'active' : ''}} {{wizard.stepOneDone ? 'done' : ''}}"><text class="step-dot">1</text><text>连接设备</text></view>
+    <view class="step-line"></view>
+    <view class="wizard-step {{wizard.step === 2 ? 'active' : ''}} {{wizard.stepTwoDone ? 'done' : ''}}"><text class="step-dot">2</text><text>设置网络</text></view>
+    <view class="step-line"></view>
+    <view class="wizard-step {{wizard.step === 3 ? 'active' : ''}}"><text class="step-dot">3</text><text>确认完成</text></view>
+  </view>
+  <block wx:if="{{!flowMode}}">
+    <view class="network-card current-step">
+      <text class="step-kicker">{{wizard.complete ? '已完成' : '当前步骤'}}</text>
+      <text class="section-title">{{wizard.title}}</text>
+      <text class="section-copy">{{wizard.copy}}</text>
+      <text wx:if="{{!available}}" class="notice">请用安卓微信开发版操作；此环境只预览，不开启热点或发送资料。</text>
+      <view wx:if="{{wizard.showHotspot}}" class="hotspot-summary">
+        <text class="field-note">本次设备热点</text><text class="ap-name">{{network.record.apName}}</text>
+        <text class="hotspot-password">测试密码：88888888</text>
+        <text class="field-note">系统提示“无互联网”时保持连接，再回这里继续。先加载小程序，不要在热点下重新扫开发者工具预览码。</text>
+      </view>
+      <view wx:if="{{wizard.showPair}}" class="inline-pair">
+        <view class="location-choice" aria-label="手机当前连接位置">
+          <button class="location-button {{wizard.pairLocation === 'station' ? 'selected' : ''}}" bindtap="pairStation" disabled="{{!available || network.busy || confirming || pairingBusy}}">普通 Wi-Fi</button>
+          <button class="location-button {{wizard.pairLocation === 'hotspot' ? 'selected' : ''}}" bindtap="pairHotspot" disabled="{{!available || network.busy || confirming || pairingBusy || wizard.reviewPending}}">设备热点</button>
+        </view>
+        <local-connect address-hint="{{wizard.pairAddressHint}}" compact="{{true}}" bindpaired="paired" bindstatechange="pairStateChanged" />
+      </view>
+      <text wx:if="{{network.busy}}" class="working" role="status">正在核对当前状态，请稍候…</text>
+      <button wx:if="{{wizard.action && !wizard.showPair}}" class="network-button" bindtap="primaryAction" loading="{{network.busy}}" disabled="{{!wizard.actionEnabled}}">{{confirming ? '请完成确认' : wizard.actionLabel}}</button>
+      <button wx:if="{{wizard.complete}}" class="network-button" bindtap="finish">完成，返回设备</button>
+      <view wx:if="{{wizard.showReconnect}}" class="reconnect-option"><text class="field-note">手机已换到目标 Wi-Fi？</text><button class="text-button" bindtap="pairStation" disabled="{{network.busy || confirming}}">在这里重新扫码连接</button></view>
+      <text wx:if="{{network.legacyHint}}" class="notice" role="alert">{{network.legacyHint}}</text>
+      <text wx:if="{{error || network.error}}" class="error-copy" role="alert">{{error || network.error}}</text>
+      <view wx:if="{{wizard.showControlExit}}" class="reconnect-option"><text class="field-note">原配网结果未定，不影响同网恢复后使用控制功能；再次配网仍暂停。</text><button class="text-button" bindtap="returnToControl" disabled="{{!wizard.controlExitEnabled}}">保留原记录，返回运动控制</button></view>
+    </view>
+    <view wx:if="{{wizard.showCloseout}}" class="network-card closeout-card">
+      <text class="step-kicker">人工收尾 · 不判断联网成败</text>
+      <text class="section-title">{{wizard.closeoutArchived ? '旧测试已归档，结果仍未知' : wizard.closeoutRecovering ? '完成手机端归档' : '结束本次测试并归档'}}</text>
+      <text class="section-copy">{{wizard.closeoutArchived ? '设备端与手机端均已核验留档。旧编号保留，旧窗口和二维码不能再用；未自动开启新热点。' : wizard.closeoutRecovering ? '设备端已留档，手机端还未完成；再次配网仍暂停。请只读核对，再确认完成手机端归档。' : '先核对原未知回执和本机状态。仅在本轮测试已停止、网络稳定且机器空闲时，才能由你明确确认归档；不会把未知改成成功或失败。'}}</text>
+      <button wx:if="{{!wizard.closeoutArchived}}" class="network-button secondary" bindtap="refreshCloseout" loading="{{network.closeout.loading}}" disabled="{{!wizard.closeoutReviewEnabled || confirming || pairingBusy}}">{{network.closeout.loading ? '只读核对中…' : '核对本次收尾条件'}}</button>
+      <text wx:if="{{!wizard.closeoutArchived && !network.closeout.eligible && !network.closeout.remoteArchived}}" class="field-note">条件尚未通过。核对不发送 Wi-Fi，不开启新窗口，也不会替你勾选事实。</text>
+      <text wx:if="{{network.closeout.error}}" class="error-copy" role="alert">{{network.closeout.error}}</text>
+      <text wx:if="{{closeoutMessage}}" class="notice" role="status">{{closeoutMessage}}</text>
+      <text wx:if="{{closeoutReviewRequired && !wizard.closeoutArchived}}" class="notice">收尾结果仍待核验，请先点“核对本次收尾条件”；不会自动重复归档。</text>
+      <block wx:if="{{!wizard.closeoutArchived && (network.closeout.eligible || network.closeout.remoteArchived || closeoutPreparing || closeoutPosting)}}">
+        <text class="field-note">请逐项确认本次真实情况。程序仍会复查，勾选不能代替设备核验。</text>
+        <checkbox-group class="closeout-facts" bindchange="closeoutFactsChanged">
+          <label class="closeout-fact"><checkbox value="window-ended" checked="{{closeoutWindowEnded}}" disabled="{{!wizard.closeoutChecksEnabled || confirming}}" color="#967023"/><text>本次测试已停止、旧热点已结束；旧窗口和二维码不能复用。</text></label>
+          <label class="closeout-fact"><checkbox value="network-stable" checked="{{closeoutNetworkStable}}" disabled="{{!wizard.closeoutChecksEnabled || confirming}}" color="#967023"/><text>手机与机器已恢复到当前稳定的普通 Wi-Fi，并且能读取机器状态。</text></label>
+          <label class="closeout-fact"><checkbox value="device-idle" checked="{{closeoutDeviceIdle}}" disabled="{{!wizard.closeoutChecksEnabled || confirming}}" color="#967023"/><text>机器没有正在执行的动作或语音会话；服务端还会再次检查。</text></label>
+          <label class="closeout-fact"><checkbox value="accept-unknown" checked="{{closeoutAcceptUnknown}}" disabled="{{!wizard.closeoutChecksEnabled || confirming}}" color="#967023"/><text>我接受结果仍未知、网络资料可能已保存；只归档，不记成败，也不自动开启新配网。</text></label>
+        </checkbox-group>
+        <button class="network-button closeout-submit" bindtap="requestCloseout" loading="{{closeoutPreparing || closeoutPosting || network.closeout.submitting}}" disabled="{{!wizard.closeoutChecksEnabled || closeoutAcks.length !== 4 || confirming}}">{{closeoutPreparing ? '正在准备确认…' : closeoutPosting ? '正在核验归档…' : wizard.closeoutActionLabel}}</button>
+      </block>
+    </view>
+  </block>
+  <view wx:if="{{flowMode}}" class="inline-provision">
+    <provision-flow revision="{{flowRevision}}" bindstate="flowStateChanged" bindterminal="flowTerminal" bindback="flowBack" binderror="flowUnavailable" />
+  </view>
+  <view wx:if="{{!flowMode}}" class="disclosure-card">
+    <button class="disclosure-toggle" bindtap="toggleDetails" aria-expanded="{{showDetails}}">{{showDetails ? '收起' : '查看'}}配网记录与诊断 <text>{{showDetails ? '−' : '+'}}</text></button>
+    <view wx:if="{{showDetails}}" class="details-content">
+      <text wx:if="{{wizard.statusLabel}}" class="field-note">当前记录：{{wizard.statusLabel}}</text>
+      <text wx:if="{{network.deviceAddress}}" class="field-note">当前设备地址：{{network.deviceAddress}}</text>
+      <view wx:if="{{network.marker}}" class="identifiers"><text>原开启请求</text><text selectable="{{true}}">{{network.marker.requestId}}</text><text wx:if="{{network.marker.windowId}}">原窗口</text><text wx:if="{{network.marker.windowId}}" selectable="{{true}}">{{network.marker.windowId}}</text><text>{{network.marker.settled ? '原记录已收尾' : '原编号保留；未核实前不新开窗口'}}</text></view>
+      <text wx:if="{{network.notice}}" class="field-note">{{network.notice}}</text>
+      <button wx:if="{{network.canRead}}" class="network-button secondary" bindtap="refreshWindow" disabled="{{network.busy || confirming}}">只读刷新原记录</button>
+    </view>
+  </view>
+  <view wx:if="{{!flowMode}}" class="disclosure-card">
+    <button class="disclosure-toggle" bindtap="toggleHelp" aria-expanded="{{showHelp}}">{{showHelp ? '收起' : '使用'}}说明与安全提示 <text>{{showHelp ? '−' : '+'}}</text></button>
+    <view wx:if="{{showHelp}}" class="details-content"><text class="field-note">切系统 Wi-Fi 或进入后台会清除内存授权，回来只需在本页重扫同一机身卡。窗口约180秒，不因刷新续期；中文Wi-Fi名称直接输入。</text><text class="field-note">只读核对和扫码不会发送目标网络。开启热点和发送 Wi-Fi 都仍需单独确认。结果未知时保留原编号，不重发、换号或清缓存。</text><text class="field-note">首次切网请保留USB恢复通道；不会改固件、云端密钥或电机参数。固定热点密码仅供本地测试，不用于正式部署。</text></view>
+  </view>
+</app-page>

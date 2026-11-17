@@ -1,0 +1,5 @@
+<button class="setting-item" catchtap="activate">
+  <view class="setting-copy"><text class="setting-title">{{title}}</text><text wx:if="{{description}}" class="setting-description">{{description}}</text></view>
+  <text wx:if="{{value}}" class="setting-value">{{value}}</text>
+  <image wx:if="{{arrow}}" class="setting-arrow icon-setting-arrow" src="/assets/icons/chevron-right.png" />
+</button>

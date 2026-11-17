@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "猫端本地配对",
+  "enablePullDownRefresh": false,
+  "usingComponents": { "app-page": "/components/app-page/index" }
+}

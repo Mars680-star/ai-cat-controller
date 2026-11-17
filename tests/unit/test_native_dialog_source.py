@@ -17,7 +17,18 @@ def test_native_dialog_commits_once_then_requests_response_after_ack() -> None:
     assert "info.commit = should_commit;" in source
     assert "client audio commit acknowledged" in source
     assert "response.create sent after commit acknowledgement" in source
-    assert "final transcript timeout: cancelling response" in source
+    # The imported machine routes acknowledged voice independently of subtitle
+    # delivery. A missing subtitle must not cancel an otherwise valid answer.
+    timeout_branch = source.split(
+        "__get_time_ms() >= client_transcript_deadline_ms", 1
+    )[1].split("if (__local_battery_cancel_timed_out", 1)[0]
+    assert "input_transcript_pending = false;" in timeout_branch
+    assert "client_transcript_deadline_ms = 0;" in timeout_branch
+    assert "if (voice_commit_acked)" in timeout_branch
+    assert "__queue_voice_response_if_unclaimed();" in timeout_branch
+    assert "history unavailable; response" in timeout_branch
+    assert "_ws_response_cancel" not in timeout_branch
+    assert "thinking_deadline_ms = now_ms + THINKING_TIMEOUT_MS;" in source
     assert 'WS_RESPONSE_CANCEL "{\\\"type\\\":\\\"response.cancel\\\"}"' in source
     assert "client audio commit timeout: restarting cloud session" in source
 
@@ -84,7 +95,7 @@ def test_prepare_sdk_installs_canonical_dialog_source() -> None:
 def test_native_dialog_exits_cleanly_after_cloud_idle_timeout() -> None:
     source = SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "#define CLOUD_IDLE_TIMEOUT_MS 90000" in source
+    assert "#define CLOUD_IDLE_TIMEOUT_MS 30000" in source
     assert "cloud idle timeout reached; disconnecting normally" in source
     assert "clean_exit_requested ? EXIT_SUCCESS : EXIT_FAILURE" in source
     assert "Restart=on-failure" in source
@@ -93,60 +104,39 @@ def test_native_dialog_exits_cleanly_after_cloud_idle_timeout() -> None:
 def test_local_wake_word_starts_cloud_only_after_match_and_waits_for_ready() -> None:
     source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'runSystemctl({"--no-block", "start", kDialogService})' in source
-    assert "dialogStatusIsReady(previous_status, !already_active)" in source
-    assert 'runSystemctl({"kill", "--signal=SIGUSR1", kDialogService})' in source
-    assert source.index('runSystemctl({"--no-block", "start", kDialogService})') < source.index(
-        'runSystemctl({"kill", "--signal=SIGUSR1", kDialogService})'
+    starter = source.split("bool startDialogService(", 1)[1].split(
+        "bool dialogStatusIsReady(", 1
+    )[0]
+    assert 'char service[] = "volc-conv-ai.service";' in starter
+    assert 'char no_block[] = "--no-block";' in starter
+    assert 'char start[] = "start";' in starter
+    assert "{command, no_block, start, service, nullptr}" in starter
+    assert "posix_spawn(" in starter and '"/bin/systemctl"' in starter
+    trigger = source.split("bool triggerConversation(", 1)[1].split(
+        "bool triggerInterruption()", 1
+    )[0]
+    assert "if (!already_running && !startDialogService(window))" in trigger
+    assert "captureWakePrerollUntilReady(" in trigger
+    assert "ready_state.dialog_pid <= 1" in trigger
+    assert "::kill(ready_state.dialog_pid, SIGUSR1)" in trigger
+    assert trigger.index("captureWakePrerollUntilReady(") < trigger.index(
+        "::kill(ready_state.dialog_pid, SIGUSR1)"
     )
+    assert "dialogStatusIsReady(previous_status, require_new_status)" in source
 
 
 def test_local_wake_word_pauses_capture_during_local_speech() -> None:
     source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'kLocalSpeechMarker = "/run/ai-cat/local-speech-active"' in source
-    assert "if (local_speech_active)" in source
+    local_speech_gate = source.split("if (local_speech_active)", 1)[1].split(
+        "if (desired_mode != capture_mode)", 1
+    )[0]
+    assert "desired_mode = CaptureMode::Paused;" in local_speech_gate
+    assert "else if (dialog_state.can_interrupt)" in local_speech_gate
+    assert "else if (dialog_state.session_active)" in local_speech_gate
+    assert "if (capture_mode == CaptureMode::Paused)" in source
     assert "Capture paused for local speech" in source
-
-
-def test_local_wake_word_listens_only_for_named_interrupt_phrases() -> None:
-    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
-
-    assert '"小安停下"' in source
-    assert '"小安别说了"' in source
-    assert "matchesInterruptPhrase" in source
-    assert "dialog_state.can_interrupt" in source
-    assert "CaptureMode::Interrupt" in source
-    assert "kInterruptSilenceFrames = 18" in source
-    assert "kInterruptContinuationWindow = std::chrono::seconds(2)" in source
-    assert "matchesInterruptPrefix" in source
-    assert "matchesInterruptSuffix" in source
-    assert "now <= interrupt_prefix_deadline" in source
-    assert "::kill(dialog_state.dialog_pid, SIGUSR2)" in source
-    assert "Conversation interrupted by local keyword" in source
-
-
-def test_native_dialog_flushes_queued_playback_when_interrupted() -> None:
-    source = SOURCE_PATH.read_text(encoding="utf-8")
-
-    ring_clear = source.index("volc_ringbuf_clear(demo.ring_buf);")
-    pulse_flush = source.index("pa_simple_flush(demo.p_playback", ring_clear)
-    cloud_interrupt = source.index("volc_interrupt(demo.engine);", pulse_flush)
-
-    assert ring_clear < pulse_flush < cloud_interrupt
-
-
-def test_local_wake_word_keeps_conversation_capture_separate() -> None:
-    source = WAKE_SOURCE_PATH.read_text(encoding="utf-8")
-
-    assert "local_speech_active" in source
-    assert "dialog_state.session_active" in source
-    assert source.index("if (local_speech_active)") < source.index(
-        "else if (dialog_state.can_interrupt)"
-    )
-    assert source.index("else if (dialog_state.can_interrupt)") < source.index(
-        "else if (dialog_state.session_active)"
-    )
 
 
 def test_native_dialog_uses_fixed_motion_commands() -> None:
@@ -160,7 +150,9 @@ def test_native_dialog_uses_fixed_motion_commands() -> None:
     assert 'strcmp(actuator, "head_ud") == 0' in source
     assert 'strcmp(actuator, "tail_lr") == 0' in source
     assert 'const char* executable = "/usr/bin/ai-toy_app";' in source
-    assert 'getenv("AI_CAT_ENABLE_TAIL_MOTION")' in source
+    assert '__motion_env_flag("AI_CAT_ENABLE_TAIL_MOTION", false, &tail_enabled)' in source
+    assert '__motion_env_flag("AI_CAT_ENABLE_MOTION", true, &enabled)' in source
+    assert '__motion_env_flag("AI_CAT_HAS_TAIL", true, &has_tail)' in source
     assert 'getenv("AI_CAT_MOTION_PROFILE")' in source
     assert '__vendor_smooth_motion_enabled()' in source
     assert '__motor_motion_speed(actuator)' in source

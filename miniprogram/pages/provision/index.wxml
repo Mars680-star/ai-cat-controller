@@ -1,0 +1,115 @@
+<app-page noTab="{{true}}" liveDevice="{{true}}" localProvisioning="{{true}}" hideModeBanner="{{true}}" subtitle="安卓手机 · 本地安全配网" online="{{status === 'connected'}}" statusText="{{androidAvailable ? '安卓本地配网' : '仅界面预览'}}">
+  <view class="provision-banner" role="status"><text class="mode-pill">{{androidAvailable ? 'LOCAL' : 'PREVIEW'}}</text><text>{{androidAvailable ? '真实网络配置 · 每次发送须确认' : '电脑与非安卓环境仅预览，不发送配网包'}}</text></view>
+  <view class="provision-heading"><text class="eyebrow">ANDROID · SOFTAP</text><text class="page-title">为 AI 猫连接 Wi-Fi</text><text class="section-copy">安卓微信真机使用。只给猫配置网络，不等于云账号绑定或小程序设备归属建立。</text></view>
+  <text class="field-note">配网界面版本：20261030.5</text>
+  <view wx:if="{{localNetworkSource}}" class="provision-card">
+    <text class="section-title">已从猫端安全取回原{{localNetworkReceipt ? '邀请与收尾回执' : '配网邀请'}}</text>
+    <text class="section-copy">机身卡配对的加密通道仅在内存一次性交接原码，仍由本页原控制器验证；不是公开发现接口，也没有自动发送目标网络。</text>
+    <text class="field-note">切换系统 Wi-Fi 或离页后会清空私有码。请回猫端配网页，重扫同一机身卡并核对原窗口；不再需要电脑终端显示本次二维码。</text>
+    <button class="provision-button secondary" bindtap="returnToLocalNetwork" disabled="{{busy || confirming}}">返回猫端配网与原回执</button>
+  </view>
+  <view wx:for="{{cameraKeys}}" wx:key="*this" class="scanner-overlay" role="dialog" aria-label="本次配网二维码扫描">
+    <view class="scanner-sheet">
+      <text class="section-title">对准电脑终端上的二维码</text>
+      <text class="field-note">页内扫码，不会跳转离开或自动配网。二维码须完整显示，请勿截图转发。</text>
+      <camera class="scanner-camera" mode="scanCode" device-position="back" flash="off" data-scan-id="{{item}}" bindscancode="cameraDecoded" binderror="cameraError" bindstop="cameraStopped" />
+      <button class="provision-button secondary" data-scan-id="{{item}}" bindtap="cancelEmbeddedScan">取消扫码</button>
+    </view>
+  </view>
+  <view class="provision-card">
+    <text class="step-label">第 1 步 · 本次配网码</text><text class="section-title">{{pending ? '先核对原窗口' : '先由操作员开启窗口'}}</text>
+    <text wx:if="{{pending}}" class="section-copy">当前先核对原未决请求。请扫描原配网码与原 unknown 收尾码；不要为解除等待而重开热点或新建请求。</text>
+    <text wx:else class="section-copy">操作员在猫端显式开启约 180 秒配网窗口并显示本次二维码。本页面不会自动启动热点，也不能使用设备编号、其他窗口二维码或普通网页链接。</text>
+    <button wx:if="{{!localNetworkSource}}" class="provision-button secondary" bindtap="scanInvitation" loading="{{busy && !status && !scanned}}" disabled="{{!androidAvailable || busy || confirming}}">{{pending ? '重新扫描原配网码' : '扫描本次配网二维码'}}</button>
+    <text class="field-note">二维码含短时配网密钥，请勿截图转发或公开。扫码后本页不展示其原文。</text>
+    <text wx:if="{{scanned}}" class="scan-success" role="status">二维码已校验，请按下方当前状态继续。</text>
+    <text wx:if="{{error}}" class="error-copy" role="alert">{{error}}</text>
+    <text wx:if="{{notice}}" class="notice" role="status">{{notice}}</text>
+  </view>
+  <view class="provision-card">
+    <text class="step-label">第 2 步 · 手动连接设备热点</text><text class="section-title">连接 AI-CAT-XXXXXX</text>
+    <text class="section-copy">在安卓系统 Wi-Fi 中手动连接本次 AI-CAT-XXXXXX 热点，测试密码统一为 88888888；如提示“无互联网”，请保持连接后返回微信。本页不代你切换手机网络。</text>
+    <text class="field-note">先在手机有网时打开本页并完成相机授权，再连接设备热点；可保持移动数据开启供微信加载。返回已打开的小程序后再扫猫端配网码，不要断网后重扫开发者工具预览码。离开本页仍会清空密钥和资料，请在窗口内重扫同一个原配网码。</text>
+    <checkbox-group bindchange="hotspotChanged"><label class="hotspot-check"><checkbox value="hotspot" checked="{{hotspotReady}}" disabled="{{!androidAvailable || busy || confirming}}" color="#967023"/><text>我已手动连接本次设备热点</text></label></checkbox-group>
+    <text class="field-note">可以先勾选再扫码；只有校验二维码并填写目标网络后才允许确认发送。固定弱口令仅用于本地测试，不用于正式部署。</text>
+    <text class="field-note">勾选仅代表你的确认，实际是否可达仍由固定设备通道验证。</text>
+    <text class="field-note">自检、确认发送或核对原请求时，会读取手机当前 Wi-Fi 名称和热点标识（BSSID），只在内存核对设备热点，不保存或上传到业务接口，不会自动切换手机网络。</text>
+  </view>
+  <view class="provision-card transport-card">
+    <text class="step-label">本地通道 · 默认标准绑定</text><text class="section-title">选择本次连接方式</text>
+    <text class="section-copy">标准模式保持原有 Wi-Fi 绑定。仅在绑定异常时，由你主动选择兼容模式；失败不会自动回退或自动配网。</text>
+    <radio-group class="transport-options" bindchange="transportChanged">
+      <label class="transport-option {{transportMode === 'bound' ? 'selected' : ''}}"><radio class="transport-radio" value="bound" checked="{{transportMode === 'bound'}}" disabled="{{!androidAvailable || !transportAvailable || busy}}" color="#967023"/><view><text class="transport-title">标准 Wi-Fi 绑定</text><text class="field-note">默认方式，将本地通道绑定到当前 Wi-Fi。</text></view></label>
+      <label class="transport-option {{transportMode === 'direct' ? 'selected' : ''}}"><radio class="transport-radio" value="direct" checked="{{transportMode === 'direct'}}" disabled="{{!androidAvailable || !transportAvailable || busy}}" color="#967023"/><view><text class="transport-title">本地直连兼容 · 可选</text><text class="field-note">绕过原生绑定，由系统选路；不是强制 Wi-Fi。</text></view></label>
+    </radio-group>
+    <text wx:if="{{!transportAvailable}}" class="notice" role="status">当前控制器未提供兼容自检，请更新后使用；不会自动启用直连。</text>
+    <view wx:if="{{transportMode === 'direct'}}" class="compatibility-panel">
+      <view class="compatibility-risk" role="alert"><text>兼容模式由系统选路，不强制使用 Wi-Fi。请保持连接本次设备热点；自检不是身份认证，也不代表配网成功。后续仍须校验原二维码并确认加密发送。</text></view>
+      <text class="section-copy">只检查固定地址 10.47.0.1:8766，零配网数据写入、不修改目标 Wi-Fi。自检通过后仅短时有效（最多 60 秒）；离开页面或切换模式后需要重新自检。</text>
+      <text class="probe-state {{compatibilityReady ? 'ready' : ''}}" role="status">{{probeLabel}}</text>
+      <text wx:if="{{probeHint}}" class="field-note" role="status">{{probeHint}}</text>
+      <text wx:if="{{!hotspotReady}}" class="notice">请先勾选“我已手动连接本次设备热点”，再主动自检。</text>
+      <button class="provision-button secondary" bindtap="probeCompatibility" loading="{{probeStatus === 'testing'}}" disabled="{{!canProbe || busy || confirming}}">检查本地端口 · 不发送资料</button>
+      <text wx:if="{{pending}}" class="field-note">未决请求仍只核对原编号；切换模式或自检不会解除未决记录、不会允许重复配置。</text>
+    </view>
+  </view>
+  <view wx:if="{{pending || archiveCount > 0}}" class="provision-card archive-card">
+    <text class="step-label">人工收尾 · 仅限受信本地试点</text><text class="section-title">未知结果与归档记录</text>
+    <view wx:if="{{pending}}">
+      <text class="section-copy">原请求仍待核对。人工归档只保存操作员声明，不代表配网成功，也不会删除历史、自动配网或删除设备上可能已保存的凭据。</text>
+      <view wx:if="{{reviewIdentity}}" class="archive-identifiers">
+        <text class="field-note">以下是原请求的公开编号，不含二维码密钥。</text>
+        <text class="archive-id-label">设备编号</text><text class="archive-id-value" selectable="{{true}}">{{reviewIdentity.deviceId}}</text>
+        <text class="archive-id-label">原窗口编号</text><text class="archive-id-value" selectable="{{true}}">{{reviewIdentity.sessionId}}</text>
+        <text class="archive-id-label">原请求编号</text><text class="archive-id-value" selectable="{{true}}">{{reviewIdentity.requestId}}</text>
+      </view>
+      <text wx:if="{{!archiveAvailable}}" class="notice" role="status">当前控制器没有受信人工归档接口，请更新后继续；不会忽略或清除未决记录。</text>
+      <text wx:elif="{{!archiveReady}}" class="notice" role="status">本次进入页面后，先扫描原配网码，再验证原 unknown 收尾码；无需重新开启热点。缺少原码时请让操作员处理，不要新建请求绕过。</text>
+      <text wx:else class="archive-state" role="status">原 unknown 收尾码已验证；结果仍未知。归档还需三项人工声明及可用容量。</text>
+      <text wx:if="{{archiveLimitReached}}" class="notice" role="alert">已达到 20 条人工归档记录上限，本次无法继续归档。请保留原编号及全部历史，由受信操作员处理；本页不会删除记录或解除未决状态。</text>
+      <view class="archive-scan-actions">
+        <button class="provision-button secondary" bindtap="scanInvitation" disabled="{{!androidAvailable || busy || confirming}}">扫描原配网码</button>
+        <button class="provision-button secondary" bindtap="scanFinalReceipt" disabled="{{!canScanReceipt || busy || confirming}}">验证原收尾码</button>
+      </view>
+      <view class="archive-warning" role="alert"><text>这三项只是你的人工声明，不是程序自动 USB 核验。只有受信操作员完成现场检查后才能勾选；未决结果仍可能对应已经保存的目标网络。</text></view>
+      <checkbox-group class="archive-checks" bindchange="archiveAcksChanged">
+        <label class="archive-check"><checkbox class="archive-checkbox" value="window-ended" checked="{{archiveWindowEnded}}" disabled="{{!androidAvailable || !archiveAvailable || archiveLimitReached || busy || confirming}}" color="#967023"/><text>我确认原配网程序已结束，不是只关闭手机页面。</text></label>
+        <label class="archive-check"><checkbox class="archive-checkbox" value="usb-checked" checked="{{archiveUSBChecked}}" disabled="{{!androidAvailable || !archiveAvailable || archiveLimitReached || busy || confirming}}" color="#967023"/><text>受信操作员已通过 USB 核对无配网任务、无检查点，且当前网络稳定；这不是程序自动检查。</text></label>
+        <label class="archive-check"><checkbox class="archive-checkbox" value="accept-unknown" checked="{{archiveAcceptUnknown}}" disabled="{{!androidAvailable || !archiveAvailable || archiveLimitReached || busy || confirming}}" color="#967023"/><text>我接受结果仍未知，目标凭据可能已保存；归档不等于联网成功，也不删除这些凭据。</text></label>
+      </checkbox-group>
+      <text class="field-note">三项声明齐全后仍需确认弹窗，确认仅 30 秒内有效。取消、离页或过期不会按本次确认写入归档。</text>
+      <button class="provision-button secondary" bindtap="archiveRequest" loading="{{archiveSubmitting}}" disabled="{{!canArchive || busy || confirming}}">{{confirming ? '请完成当前确认' : '人工归档原请求 · 需确认'}}</button>
+    </view>
+    <view wx:if="{{archiveCount > 0}}" class="archive-history" role="status">
+      <text class="archive-state">已保留 {{archiveCount}} 条人工归档记录</text>
+      <view wx:if="{{lastArchiveIdentity}}" class="archive-identifiers">
+        <text class="section-copy">最近记录：结果未知 · 操作员人工归档，不代表配网成功。</text>
+        <text class="archive-id-label">原设备编号</text><text class="archive-id-value" selectable="{{true}}">{{lastArchiveIdentity.deviceId}}</text>
+        <text class="archive-id-label">原窗口编号</text><text class="archive-id-value" selectable="{{true}}">{{lastArchiveIdentity.sessionId}}</text>
+        <text class="archive-id-label">原请求编号</text><text class="archive-id-value" selectable="{{true}}">{{lastArchiveIdentity.requestId}}</text>
+      </view>
+      <text class="field-note">历史不会因新请求被删除。已归档的旧窗口不能复用；再次配置必须由操作员显式开启新窗口，扫描新二维码并重新确认。</text>
+    </view>
+  </view>
+  <view class="provision-card">
+    <text class="step-label">第 3 步 · 目标 WPA2 网络</text><text class="section-title">填写猫之后使用的 Wi-Fi</text>
+    <text wx:if="{{networkLockReason}}" class="notice" role="status">{{networkLockReason}}</text>
+    <text wx:else class="scan-success" role="status">输入框已解锁，可以填写目标 Wi-Fi。</text>
+    <view wx:for="{{formKeys}}" wx:key="*this" class="network-fields">
+      <view class="field"><text class="field-label">Wi-Fi 名称</text><input class="field-input" value="{{ssid}}" maxlength="32" disabled="{{!canEditNetwork}}" bindinput="inputSSID" placeholder="直接输入 Wi-Fi 名称，支持中文" aria-label="目标Wi-Fi名称"/></view>
+      <view class="field"><text class="field-label">Wi-Fi 密码</text><input class="field-input" password="{{true}}" maxlength="64" disabled="{{!canEditNetwork}}" bindinput="inputPassword" placeholder="填写该 Wi-Fi 的实际密码" aria-label="目标Wi-Fi密码"/></view>
+    </view>
+    <text class="field-note">中文 Wi-Fi 名称直接输入，不用转码，也不要填写 nmcli、printf 或整段命令。名称保留原空格，最多 32 个 UTF-8 字节。</text>
+    <text class="field-note">仅支持 WPA2 个人网络。密码不会进入页面数据、日志或持久存储；离开本页会清空，发送后也不会保留在输入框。</text>
+    <view class="risk-note"><text>这会改变猫的真实 Wi-Fi，SSH 和网页可能暂时断开。请先确认原连接的恢复方式；不会修改固件、云端密钥或电机参数。</text></view>
+    <button class="provision-button" bindtap="configure" loading="{{busy && !canQuery && scanned}}" disabled="{{!canConfigure || busy || confirming}}">{{confirming ? '请完成弹窗确认' : '配置目标网络 · 需确认'}}</button>
+  </view>
+  <view class="provision-card result-card" role="status">
+    <text class="section-title">{{phaseLabel}}</text><text class="section-copy">{{statusHint}}</text>
+    <text wx:if="{{notice}}" class="notice">{{notice}}</text><text wx:if="{{error}}" class="error-copy" role="alert">{{error}}</text>
+    <button class="provision-button secondary" bindtap="queryOriginal" loading="{{busy && pending}}" disabled="{{!canQuery || busy || confirming}}">核对原配网请求</button>
+    <button class="provision-button secondary" bindtap="scanFinalReceipt" disabled="{{localNetworkSource ? busy || confirming : !canScanReceipt || busy || confirming}}">{{localNetworkSource ? '回猫端核对原收尾回执' : '扫描收尾回执'}}</button>
+    <text class="field-note">网络切换可能断开热点，操作员会显示加密的收尾回执二维码。请先扫描原配网码，再扫描收尾回执核验；热点不可达不等于配网失败。</text>
+    <text class="field-note">未知结果只核对原编号，不自动重配。若原码过期或收尾回执不可用，请让操作员核对；不要清缓存或删除未决记录绕过。</text>
+  </view>
+</app-page>

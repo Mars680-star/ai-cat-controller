@@ -1,0 +1,13 @@
+{
+  "navigationBarTitleText": "主页",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "app-page": "/components/app-page/index",
+    "live-device-panel": "/components/live-device-panel/index",
+    "live-product-panel": "/components/live-product-panel/index",
+    "loading-skeleton": "/components/loading-skeleton/index",
+    "pet-header": "/components/pet-header/index",
+    "intimacy-progress": "/components/intimacy-progress/index",
+    "metric-item": "/components/metric-item/index"
+  }
+}

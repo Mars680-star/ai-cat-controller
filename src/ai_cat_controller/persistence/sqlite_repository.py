@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
+from urllib.parse import quote
 import uuid
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from ai_cat_controller.core.errors import ActionConflictError, ResourceNotFoundError
+from ai_cat_controller.domain.dialog_memory import extract_long_term_memories
 from ai_cat_controller.domain.growth import (
     ATTRIBUTE_MAX_UNITS,
     GrowthAttribute,
@@ -18,6 +21,9 @@ from ai_cat_controller.domain.growth import (
     GrowthEventType,
     GrowthSourceType,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -64,6 +70,18 @@ class SQLiteRepository:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
 
+    def _connect_readonly(self) -> sqlite3.Connection:
+        """Never create a missing database; preserve visibility of live WAL."""
+        uri = "file:" + quote(str(self._path.absolute()), safe="/") + "?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=3.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        # Python's sqlite3 does not begin a transaction for SELECT implicitly.
+        # Keep ownership, aggregate counts and the bounded message window on
+        # one read snapshot while another connection appends an answer.
+        connection.execute("BEGIN")
+        return connection
+
     @staticmethod
     def _as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
@@ -104,6 +122,28 @@ class SQLiteRepository:
                     intimacy_points INTEGER NOT NULL DEFAULT 0,
                     bound_at TEXT,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mijia_integrations (
+                    pet_id TEXT PRIMARY KEY REFERENCES pets(pet_id),
+                    user_id TEXT NOT NULL REFERENCES users(user_id),
+                    gateway_device_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN ('prepared', 'removed')),
+                    spec_revision TEXT NOT NULL,
+                    miot_model TEXT,
+                    last_request_id TEXT NOT NULL,
+                    prepared_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mijia_gateway_requests (
+                    gateway_device_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(gateway_device_id, request_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS interaction_events (
@@ -173,6 +213,45 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS dialog_memory_state (
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    user_id TEXT NOT NULL REFERENCES users(user_id),
+                    cleared_at TEXT NOT NULL,
+                    last_request_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(pet_id, user_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS dialog_memory_clear_requests (
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    user_id TEXT NOT NULL REFERENCES users(user_id),
+                    request_id TEXT NOT NULL,
+                    cleared_at TEXT NOT NULL,
+                    excluded_message_count INTEGER
+                        CHECK(excluded_message_count >= 0),
+                    deleted_long_term_memory_count INTEGER
+                        CHECK(deleted_long_term_memory_count >= 0),
+                    PRIMARY KEY(pet_id, user_id, request_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS dialog_long_term_memories (
+                    memory_id TEXT PRIMARY KEY,
+                    pet_id TEXT NOT NULL REFERENCES pets(pet_id),
+                    user_id TEXT NOT NULL REFERENCES users(user_id),
+                    category TEXT NOT NULL CHECK(
+                        category IN ('name', 'preference', 'habit', 'important_event')
+                    ),
+                    memory_key TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    confidence_milli INTEGER NOT NULL
+                        CHECK(confidence_milli BETWEEN 0 AND 1000),
+                    source_message_id TEXT NOT NULL,
+                    source_created_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(pet_id, user_id, category, memory_key)
+                );
+
                 CREATE TABLE IF NOT EXISTS action_executions (
                     execution_id TEXT PRIMARY KEY,
                     pet_id TEXT NOT NULL REFERENCES pets(pet_id),
@@ -212,6 +291,25 @@ class SQLiteRepository:
                     );
                 CREATE INDEX IF NOT EXISTS idx_actions_pet_time
                     ON action_executions(pet_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_long_term_memory_owner_time
+                    ON dialog_long_term_memories(
+                        pet_id, user_id, updated_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_mijia_integrations_user
+                    ON mijia_integrations(user_id, updated_at DESC);
+                """
+            )
+            # Legacy state only remembers its latest ID. Preserve precisely
+            # that known receipt, with unknown original counts represented by
+            # NULL; earlier IDs cannot be reconstructed from the old schema.
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dialog_memory_clear_requests(
+                    pet_id, user_id, request_id, cleared_at,
+                    excluded_message_count, deleted_long_term_memory_count
+                )
+                SELECT pet_id, user_id, last_request_id, cleared_at, NULL, NULL
+                FROM dialog_memory_state
                 """
             )
 
@@ -246,8 +344,12 @@ class SQLiteRepository:
 
     def clear_product_data(self) -> dict[str, int]:
         tables = (
+            "mijia_gateway_requests",
+            "mijia_integrations",
             "feedback",
             "action_executions",
+            "dialog_long_term_memories",
+            "dialog_memory_state",
             "dialog_history",
             "growth_tags",
             "growth_events",
@@ -267,10 +369,21 @@ class SQLiteRepository:
                 )
                 for table in tables
             }
+            # Internal receipts participate in the same reset transaction but
+            # do not change the existing public 14-table deleted-count shape.
+            connection.execute("DELETE FROM dialog_memory_clear_requests")
             for table in tables:
                 connection.execute(f"DELETE FROM {table}")
             connection.commit()
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                # The destructive transaction is already committed. Treating
+                # a best-effort checkpoint failure as a rollback would let a
+                # caller restore old runtime files against an empty database.
+                LOGGER.warning(
+                    "Product data was cleared; optional WAL checkpoint did not complete"
+                )
         return counts
 
     def login_user(self, login_code: str, nickname: str) -> dict[str, Any]:
@@ -318,8 +431,7 @@ class SQLiteRepository:
         personality_id: str,
     ) -> tuple[dict[str, Any], bool]:
         now = _utc_now()
-        device_id = _stable_id("dev", serial_number)
-        pet_id = _stable_id("pet", device_id)
+        proposed_device_id = _stable_id("dev", serial_number)
         personality_created = False
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -336,14 +448,26 @@ class SQLiteRepository:
                     network_name = excluded.network_name,
                     last_seen_at = excluded.last_seen_at
                 """,
-                (device_id, serial_number, network_name, now, now),
+                (proposed_device_id, serial_number, network_name, now, now),
             )
+            device = connection.execute(
+                "SELECT device_id FROM devices WHERE serial_number = ?",
+                (serial_number,),
+            ).fetchone()
+            if device is None:
+                raise RuntimeError("device row disappeared during binding")
+            device_id = str(device["device_id"])
             existing = connection.execute(
-                "SELECT owner_user_id, personality_id FROM pets WHERE pet_id = ?",
-                (pet_id,),
+                """
+                SELECT pet_id, owner_user_id, personality_id
+                FROM pets
+                WHERE device_id = ?
+                """,
+                (device_id,),
             ).fetchone()
             if existing is None:
                 personality_created = True
+                pet_id = _stable_id("pet", device_id)
                 connection.execute(
                     """
                     INSERT INTO pets(
@@ -363,6 +487,7 @@ class SQLiteRepository:
                     ),
                 )
             else:
+                pet_id = str(existing["pet_id"])
                 current_owner = existing["owner_user_id"]
                 if current_owner is not None and current_owner != user_id:
                     raise ActionConflictError("该设备已经绑定到其他用户")
@@ -376,6 +501,74 @@ class SQLiteRepository:
                 )
             row = self._owned_pet_row(connection, user_id, pet_id)
         return dict(row), personality_created
+
+    def reconcile_single_bound_device_serial(
+        self,
+        serial_number: str,
+    ) -> dict[str, Any]:
+        """Align a sole bound local pet with the K1 hardware serial.
+
+        Early control-page builds prefilled a demo serial.  On a local K1 that
+        left the pet attached to the demo device while native events carried
+        the board serial.  Preserve the existing pet and all of its dependent
+        data, changing only the device identity used to match local events.
+        """
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            matching = connection.execute(
+                """
+                SELECT p.pet_id, p.owner_user_id, d.device_id, d.serial_number
+                FROM devices d
+                JOIN pets p ON p.device_id = d.device_id
+                WHERE d.serial_number = ? AND p.owner_user_id IS NOT NULL
+                """,
+                (serial_number,),
+            ).fetchone()
+            if matching is not None:
+                return {
+                    "status": "already_aligned",
+                    "pet_id": matching["pet_id"],
+                    "serial_number": serial_number,
+                }
+
+            serial_in_use = connection.execute(
+                "SELECT 1 FROM devices WHERE serial_number = ?",
+                (serial_number,),
+            ).fetchone()
+            if serial_in_use is not None:
+                return {
+                    "status": "conflict",
+                    "serial_number": serial_number,
+                }
+
+            bound = connection.execute(
+                """
+                SELECT p.pet_id, p.owner_user_id, d.device_id, d.serial_number
+                FROM pets p
+                JOIN devices d ON d.device_id = p.device_id
+                WHERE p.owner_user_id IS NOT NULL
+                ORDER BY p.bound_at DESC, p.created_at DESC
+                """
+            ).fetchall()
+            if len(bound) != 1:
+                return {
+                    "status": "ambiguous",
+                    "bound_device_count": len(bound),
+                    "serial_number": serial_number,
+                }
+
+            current = bound[0]
+            connection.execute(
+                "UPDATE devices SET serial_number = ? WHERE device_id = ?",
+                (serial_number, current["device_id"]),
+            )
+            return {
+                "status": "migrated",
+                "pet_id": current["pet_id"],
+                "previous_serial_number": current["serial_number"],
+                "serial_number": serial_number,
+            }
 
     @staticmethod
     def _owned_pet_row(
@@ -395,10 +588,211 @@ class SQLiteRepository:
             raise ResourceNotFoundError("宠物不存在或未绑定到当前用户")
         return row
 
-    def get_owned_pet(self, user_id: str, pet_id: str) -> dict[str, Any]:
-        with self._connect() as connection:
+    def get_owned_pet(self, user_id: str, pet_id: str, *, read_only: bool = False) -> dict[str, Any]:
+        with (self._connect_readonly() if read_only else self._connect()) as connection:
             row = self._owned_pet_row(connection, user_id, pet_id)
         return dict(row)
+
+    def get_mijia_integration(
+        self,
+        user_id: str,
+        pet_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            row = connection.execute(
+                """
+                SELECT pet_id, user_id, gateway_device_id, status,
+                       spec_revision, miot_model, last_request_id,
+                       prepared_at, updated_at
+                FROM mijia_integrations
+                WHERE pet_id = ? AND user_id = ?
+                """,
+                (pet_id, user_id),
+            ).fetchone()
+        return self._as_dict(row)
+
+    def prepare_mijia_integration(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+        spec_revision: str,
+    ) -> tuple[dict[str, Any], bool, bool]:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._owned_pet_row(connection, user_id, pet_id)
+            existing = connection.execute(
+                "SELECT * FROM mijia_integrations WHERE pet_id = ?",
+                (pet_id,),
+            ).fetchone()
+            if (
+                existing is not None
+                and existing["user_id"] == user_id
+                and existing["status"] == "prepared"
+            ):
+                duplicate = existing["last_request_id"] == request_id
+                if not duplicate:
+                    connection.execute(
+                        """
+                        UPDATE mijia_integrations
+                        SET last_request_id = ?, updated_at = ?
+                        WHERE pet_id = ?
+                        """,
+                        (request_id, now, pet_id),
+                    )
+                row = connection.execute(
+                    "SELECT * FROM mijia_integrations WHERE pet_id = ?",
+                    (pet_id,),
+                ).fetchone()
+                return dict(row), False, duplicate
+
+            gateway_device_id = _random_id("mijia")
+            connection.execute(
+                """
+                INSERT INTO mijia_integrations(
+                    pet_id, user_id, gateway_device_id, status, spec_revision,
+                    miot_model, last_request_id, prepared_at, updated_at
+                )
+                VALUES (?, ?, ?, 'prepared', ?, NULL, ?, ?, ?)
+                ON CONFLICT(pet_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    gateway_device_id = excluded.gateway_device_id,
+                    status = 'prepared',
+                    spec_revision = excluded.spec_revision,
+                    miot_model = NULL,
+                    last_request_id = excluded.last_request_id,
+                    prepared_at = excluded.prepared_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    pet_id,
+                    user_id,
+                    gateway_device_id,
+                    spec_revision,
+                    request_id,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM mijia_integrations WHERE pet_id = ?",
+                (pet_id,),
+            ).fetchone()
+        return dict(row), True, False
+
+    def remove_mijia_integration(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+    ) -> tuple[dict[str, Any] | None, bool, bool]:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._owned_pet_row(connection, user_id, pet_id)
+            existing = connection.execute(
+                "SELECT * FROM mijia_integrations WHERE pet_id = ? AND user_id = ?",
+                (pet_id, user_id),
+            ).fetchone()
+            if existing is None:
+                return None, False, False
+            duplicate = (
+                existing["status"] == "removed"
+                and existing["last_request_id"] == request_id
+            )
+            changed = existing["status"] == "prepared"
+            if not duplicate:
+                connection.execute(
+                    """
+                    UPDATE mijia_integrations
+                    SET status = 'removed', last_request_id = ?, updated_at = ?
+                    WHERE pet_id = ? AND user_id = ?
+                    """,
+                    (request_id, now, pet_id, user_id),
+                )
+            row = connection.execute(
+                "SELECT * FROM mijia_integrations WHERE pet_id = ? AND user_id = ?",
+                (pet_id, user_id),
+            ).fetchone()
+        return dict(row), changed, duplicate
+
+    def get_mijia_gateway_context(
+        self,
+        gateway_device_id: str,
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT mi.gateway_device_id, mi.spec_revision, mi.miot_model,
+                       mi.updated_at AS integration_updated_at,
+                       p.pet_id, p.owner_user_id AS user_id, p.name,
+                       p.personality_id, p.intimacy_points, p.device_id,
+                       d.online, d.battery_percent, d.charging, d.volume
+                FROM mijia_integrations mi
+                JOIN pets p ON p.pet_id = mi.pet_id
+                JOIN devices d ON d.device_id = p.device_id
+                WHERE mi.gateway_device_id = ?
+                  AND mi.status = 'prepared'
+                  AND p.owner_user_id = mi.user_id
+                """,
+                (gateway_device_id,),
+            ).fetchone()
+        if row is None:
+            raise ResourceNotFoundError("米家网关设备不存在或已撤销")
+        return dict(row)
+
+    def get_mijia_gateway_request(
+        self,
+        gateway_device_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT gateway_device_id, request_id, operation, payload_hash,
+                       result_json, created_at
+                FROM mijia_gateway_requests
+                WHERE gateway_device_id = ? AND request_id = ?
+                """,
+                (gateway_device_id, request_id),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["result"] = json.loads(result.pop("result_json"))
+        return result
+
+    def save_mijia_gateway_request(
+        self,
+        *,
+        gateway_device_id: str,
+        request_id: str,
+        operation: str,
+        payload_hash: str,
+        result: dict[str, Any],
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO mijia_gateway_requests(
+                    gateway_device_id, request_id, operation, payload_hash,
+                    result_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    gateway_device_id,
+                    request_id,
+                    operation,
+                    payload_hash,
+                    json.dumps(result, ensure_ascii=False, sort_keys=True),
+                    _utc_now(),
+                ),
+            )
 
     def get_pet_by_serial(self, serial_number: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -417,10 +811,22 @@ class SQLiteRepository:
 
     def unbind_pet(self, user_id: str, pet_id: str) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             self._owned_pet_row(connection, user_id, pet_id)
             connection.execute(
-                "UPDATE pets SET owner_user_id = NULL, bound_at = NULL WHERE pet_id = ?",
-                (pet_id,),
+                """
+                UPDATE mijia_integrations
+                SET status = 'removed', updated_at = ?
+                WHERE pet_id = ? AND user_id = ?
+                """,
+                (_utc_now(), pet_id, user_id),
+            )
+            connection.execute(
+                """
+                UPDATE pets SET owner_user_id = NULL, bound_at = NULL
+                WHERE pet_id = ? AND owner_user_id = ?
+                """,
+                (pet_id, user_id),
             )
 
     def update_pet_settings(
@@ -1010,7 +1416,100 @@ class SQLiteRepository:
                 """,
                 (user_message, assistant_message),
             )
+            self._store_long_term_memories(
+                connection,
+                user_id=user_id,
+                pet_id=pet_id,
+                source_message_id=str(user_message["message_id"]),
+                source_created_at=now,
+                content=user_content,
+            )
         return conversation_id, [user_message, assistant_message]
+
+    @staticmethod
+    def _store_long_term_memories(
+        connection: sqlite3.Connection,
+        *,
+        user_id: str,
+        pet_id: str,
+        source_message_id: str,
+        source_created_at: str,
+        content: str,
+    ) -> int:
+        cutoff = connection.execute(
+            """
+            SELECT cleared_at FROM dialog_memory_state
+            WHERE pet_id = ? AND user_id = ?
+            """,
+            (pet_id, user_id),
+        ).fetchone()
+        # Native source time is canonical UTC, as is the recent-memory SQL
+        # cutoff. Late import time must never resurrect cleared user facts.
+        if cutoff is not None and source_created_at <= str(cutoff["cleared_at"]):
+            return 0
+        candidates = extract_long_term_memories(content)
+        if not candidates:
+            return 0
+        now = _utc_now()
+        for candidate in candidates:
+            memory_id = _stable_id(
+                "memory",
+                (
+                    f"{pet_id}:{user_id}:{candidate.category}:"
+                    f"{candidate.memory_key}"
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO dialog_long_term_memories(
+                    memory_id, pet_id, user_id, category, memory_key,
+                    content, confidence_milli, source_message_id,
+                    source_created_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pet_id, user_id, category, memory_key) DO UPDATE SET
+                    content = excluded.content,
+                    confidence_milli = excluded.confidence_milli,
+                    source_message_id = excluded.source_message_id,
+                    source_created_at = excluded.source_created_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    memory_id,
+                    pet_id,
+                    user_id,
+                    candidate.category,
+                    candidate.memory_key,
+                    candidate.content,
+                    candidate.confidence_milli,
+                    source_message_id,
+                    source_created_at,
+                    now,
+                    now,
+                ),
+            )
+        connection.execute(
+            """
+            DELETE FROM dialog_long_term_memories
+            WHERE memory_id IN (
+                SELECT memory_id
+                FROM dialog_long_term_memories
+                WHERE pet_id = ? AND user_id = ?
+                ORDER BY
+                    CASE category
+                        WHEN 'name' THEN 0
+                        WHEN 'preference' THEN 1
+                        WHEN 'habit' THEN 2
+                        ELSE 3
+                    END,
+                    updated_at DESC,
+                    memory_id DESC
+                LIMIT -1 OFFSET 64
+            )
+            """,
+            (pet_id, user_id),
+        )
+        return len(candidates)
 
     def import_native_dialog_events(
         self,
@@ -1055,6 +1554,15 @@ class SQLiteRepository:
                     ),
                 )
                 imported += int(cursor.rowcount == 1)
+                if cursor.rowcount == 1 and event["role"] == "user":
+                    self._store_long_term_memories(
+                        connection,
+                        user_id=user_id,
+                        pet_id=pet_id,
+                        source_message_id=message_id,
+                        source_created_at=str(event["created_at"]),
+                        content=str(event["content"]),
+                    )
                 connection.execute(
                     """
                     UPDATE dialog_history
@@ -1089,10 +1597,189 @@ class SQLiteRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_dialog_conversations(
-        self, user_id: str, pet_id: str, limit: int = 30
+    def list_recent_dialog_memory(
+        self,
+        user_id: str,
+        pet_id: str,
+        limit: int = 16,
     ) -> list[dict[str, Any]]:
+        resolved_limit = max(1, min(int(limit), 20))
         with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            rows = connection.execute(
+                """
+                WITH memory_cutoff AS (
+                    SELECT COALESCE(MAX(cleared_at), '') AS cleared_at
+                    FROM dialog_memory_state
+                    WHERE pet_id = ? AND user_id = ?
+                ),
+                complete_conversations AS (
+                    SELECT conversation_id, MAX(created_at) AS updated_at
+                    FROM dialog_history, memory_cutoff
+                    WHERE pet_id = ? AND user_id = ?
+                      AND created_at > memory_cutoff.cleared_at
+                    GROUP BY conversation_id
+                    HAVING SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) > 0
+                       AND SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) > 0
+                )
+                SELECT h.role, h.content, h.created_at, h.conversation_id,
+                       h.rowid AS message_rowid
+                FROM dialog_history AS h
+                JOIN complete_conversations AS c
+                  ON c.conversation_id = h.conversation_id
+                CROSS JOIN memory_cutoff
+                WHERE h.pet_id = ? AND h.user_id = ?
+                  AND h.role IN ('user', 'assistant')
+                  AND h.created_at > memory_cutoff.cleared_at
+                ORDER BY h.created_at DESC, h.rowid DESC
+                LIMIT ?
+                """,
+                (
+                    pet_id,
+                    user_id,
+                    pet_id,
+                    user_id,
+                    pet_id,
+                    user_id,
+                    resolved_limit,
+                ),
+            ).fetchall()
+        return [
+            {
+                key: row[key]
+                for key in ("role", "content", "created_at", "conversation_id")
+            }
+            for row in reversed(rows)
+        ]
+
+    def list_long_term_memories(
+        self,
+        user_id: str,
+        pet_id: str,
+        limit: int = 24,
+    ) -> list[dict[str, Any]]:
+        resolved_limit = max(1, min(int(limit), 64))
+        with self._connect() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            rows = connection.execute(
+                """
+                SELECT category, content, confidence_milli,
+                       source_created_at, updated_at
+                FROM dialog_long_term_memories
+                WHERE pet_id = ? AND user_id = ?
+                ORDER BY
+                    CASE category
+                        WHEN 'name' THEN 0
+                        WHEN 'preference' THEN 1
+                        WHEN 'habit' THEN 2
+                        ELSE 3
+                    END,
+                    updated_at DESC,
+                    memory_id DESC
+                LIMIT ?
+                """,
+                (pet_id, user_id, resolved_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def clear_dialog_memory(
+        self,
+        *,
+        user_id: str,
+        pet_id: str,
+        request_id: str,
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._owned_pet_row(connection, user_id, pet_id)
+            receipt = connection.execute(
+                """
+                SELECT cleared_at FROM dialog_memory_clear_requests
+                WHERE pet_id = ? AND user_id = ? AND request_id = ?
+                """,
+                (pet_id, user_id, request_id),
+            ).fetchone()
+            if receipt is not None:
+                return {
+                    "cleared": False,
+                    "duplicate": True,
+                    "excluded_message_count": 0,
+                    "deleted_long_term_memory_count": 0,
+                    "cleared_at": receipt["cleared_at"],
+                }
+            existing = connection.execute(
+                """
+                SELECT cleared_at, last_request_id, updated_at
+                FROM dialog_memory_state
+                WHERE pet_id = ? AND user_id = ?
+                """,
+                (pet_id, user_id),
+            ).fetchone()
+            previous_cutoff = existing["cleared_at"] if existing is not None else ""
+            messages = connection.execute(
+                """
+                SELECT COUNT(*) AS excluded_message_count,
+                       MAX(created_at) AS latest_created_at
+                FROM dialog_history
+                WHERE pet_id = ? AND user_id = ? AND created_at > ?
+                """,
+                (pet_id, user_id, previous_cutoff),
+            ).fetchone()
+            excluded_message_count = int(messages["excluded_message_count"])
+            now = _utc_now()
+            # Clearing means all currently stored owner-scoped messages, even
+            # after an offline clock rollback. This logical cutoff may be ahead
+            # of wall-clock now; never revive an earlier excluded transcript.
+            cleared_at = max(
+                now, str(previous_cutoff), str(messages["latest_created_at"] or ""),
+            )
+            deleted_long_term_memory_count = int(
+                connection.execute(
+                    """
+                    DELETE FROM dialog_long_term_memories
+                    WHERE pet_id = ? AND user_id = ?
+                    """,
+                    (pet_id, user_id),
+                ).rowcount
+            )
+            connection.execute(
+                """
+                INSERT INTO dialog_memory_state(
+                    pet_id, user_id, cleared_at, last_request_id, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(pet_id, user_id) DO UPDATE SET
+                    cleared_at = excluded.cleared_at,
+                    last_request_id = excluded.last_request_id,
+                    updated_at = excluded.updated_at
+                """,
+                (pet_id, user_id, cleared_at, request_id, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO dialog_memory_clear_requests(
+                    pet_id, user_id, request_id, cleared_at,
+                    excluded_message_count, deleted_long_term_memory_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pet_id, user_id, request_id, cleared_at,
+                    excluded_message_count, deleted_long_term_memory_count,
+                ),
+            )
+        return {
+            "cleared": True,
+            "duplicate": False,
+            "excluded_message_count": excluded_message_count,
+            "deleted_long_term_memory_count": deleted_long_term_memory_count,
+            "cleared_at": cleared_at,
+        }
+
+    def list_dialog_conversations(
+        self, user_id: str, pet_id: str, limit: int = 30, *, read_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        with (self._connect_readonly() if read_only else self._connect()) as connection:
             self._owned_pet_row(connection, user_id, pet_id)
             rows = connection.execute(
                 """
@@ -1186,6 +1873,43 @@ class SQLiteRepository:
                 (pet_id, user_id),
             ).fetchone()
         return dict(row)
+
+    def get_dialog_conversation_readonly(
+        self, user_id: str, pet_id: str, conversation_id: str, limit: int = 100,
+    ) -> dict[str, Any]:
+        """SELECT only: bounded latest messages, never import runtime events."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid conversation window")
+        with self._connect_readonly() as connection:
+            self._owned_pet_row(connection, user_id, pet_id)
+            row = connection.execute(
+                """
+                WITH messages AS (
+                    SELECT rowid AS message_rowid, * FROM dialog_history
+                    WHERE user_id=? AND pet_id=? AND conversation_id=?
+                )
+                SELECT COUNT(*) AS message_count, MIN(created_at) AS started_at,
+                    MAX(created_at) AS updated_at,
+                    SUM(CASE WHEN role='user' THEN 1 ELSE 0 END) AS user_message_count,
+                    SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) AS assistant_message_count,
+                    MAX(CASE WHEN voice_id='volcengine_tts' OR conversation_id LIKE 'native-%' THEN 1 ELSE 0 END) AS device_source,
+                    COALESCE((SELECT content FROM messages WHERE role='user' ORDER BY created_at,message_rowid LIMIT 1),
+                             (SELECT content FROM messages ORDER BY created_at,message_rowid LIMIT 1)) AS preview,
+                    (SELECT content FROM messages WHERE role='assistant' ORDER BY created_at DESC,message_rowid DESC LIMIT 1) AS assistant_preview
+                FROM messages
+                """, (user_id, pet_id, conversation_id),
+            ).fetchone()
+            if row is None or not row["message_count"]:
+                raise ResourceNotFoundError("对话会话不存在")
+            rows = connection.execute(
+                """SELECT message_id,conversation_id,role,content,voice_id,created_at
+                   FROM dialog_history WHERE user_id=? AND pet_id=? AND conversation_id=?
+                   ORDER BY created_at DESC,rowid DESC LIMIT ?""",
+                (user_id, pet_id, conversation_id, limit),
+            ).fetchall()
+        return {"summary": {**dict(row), "conversation_id": conversation_id},
+                "messages": [dict(item) for item in reversed(rows)],
+                "limit": limit, "truncated": int(row["message_count"]) > limit}
 
     def create_action_execution(
         self,

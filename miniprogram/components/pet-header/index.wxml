@@ -1,0 +1,7 @@
+<view wx:if="{{pet}}" class="pet-header">
+  <image class="avatar icon-pet-avatar" src="{{pet.avatarUrl}}" mode="aspectFill" />
+  <view class="copy">
+    <view class="name-row"><text class="name">{{pet.name}}</text><status-badge state="{{pet.connectionState}}" text="{{pet.connectionState === 'online' ? '在线' : pet.connectionState === 'weak' ? '连接不稳定' : '暂时离线'}}" /></view>
+    <button class="personality" bindtap="openPersonality" aria-label="查看或调整陪伴性格"><text>{{pet.personalityName}}</text><image class="arrow" src="/assets/icons/chevron-right.png" /></button>
+  </view>
+</view>

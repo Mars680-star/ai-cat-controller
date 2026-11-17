@@ -1,0 +1,43 @@
+<view class="live-panel">
+  <view class="panel-heading"><view class="heading-copy"><text class="panel-title">{{view.selectedName || (view.live ? '连接你的设备' : '连接我的 AI 猫')}}</text></view><text class="mode-pill">{{view.live ? view.local ? '本地加密' : '微信授权' : '界面预览'}}</text></view>
+  <view wx:if="{{!view.live}}" class="preview-entry">
+    <text class="panel-copy">{{view.local ? '扫描机身卡，查看这台猫的真实状态。' : '连接后查看已授权设备；下方预览不代表实机状态。'}}</text>
+    <button class="panel-button" bindtap="enable" disabled="{{!view.canEnable}}">连接真实设备</button>
+  </view>
+  <block wx:else>
+    <text class="connection-label {{view.online ? 'online' : ''}}" role="status">{{view.statusLabel}}</text>
+    <text wx:if="{{view.message && !view.hasSnapshot && view.message !== view.statusLabel}}" class="panel-copy">{{view.message}}</text>
+    <view wx:if="{{view.error}}" class="error-block" role="alert"><text>{{view.error}}</text><button class="panel-button secondary" bindtap="refresh" disabled="{{!view.canRetry}}">重试连接</button></view>
+    <view wx:if="{{!view.signedIn}}" class="login-card">
+      <text class="panel-copy">{{view.local ? '请重新扫描机身卡；离开微信后本地凭证会清除。' : '微信验证后选择你的设备，不会自动认领或配网。'}}</text>
+      <button wx:if="{{view.local}}" class="panel-button" bindtap="localPair" disabled="{{view.loading}}">扫描机身卡配对</button>
+      <button wx:else class="panel-button" bindtap="login" loading="{{view.loading}}" disabled="{{!view.canLogin}}">微信登录并查看设备</button>
+      <button wx:if="{{!view.configured && !view.error}}" class="panel-button secondary" bindtap="refresh" loading="{{view.loading}}" disabled="{{!view.canRetry}}">检查本地连接</button>
+      <text wx:if="{{!view.configured}}" class="small-copy">连接尚未就绪。不要在小程序内填写任何密钥。</text>
+      <button class="text-button preview-button" bindtap="preview" disabled="{{!view.canPreview}}">切回界面预览</button>
+    </view>
+    <view wx:else class="authorized-section">
+      <text wx:if="{{view.listLoading}}" class="small-copy" role="status">正在核对授权，暂停显示旧读数…</text>
+      <view wx:if="{{view.selectedPetId}}" class="device-card">
+        <view wx:if="{{view.hasSnapshot}}" class="compact-metrics"><text>电量 {{view.batteryLabel}} · {{view.chargeLabel}}</text><text>{{view.voiceLabel}}</text></view>
+        <text wx:else class="empty-copy">暂无已验证的当前读数，不显示演示电量或旧设备状态。</text>
+        <button class="panel-button secondary" bindtap="refresh" loading="{{view.statusLoading}}" disabled="{{!view.canRefresh}}">{{view.statusLoading ? '正在读取…' : '刷新真实状态'}}</button>
+        <block wx:if="{{view.hasSnapshot}}">
+          <block wx:if="{{!summary}}">
+            <button class="fold-button" bindtap="toggleDetails" aria-expanded="{{detailsOpen}}"><text class="fold-label">设备详情 · 只读</text><text class="fold-indicator">{{detailsOpen ? '收起 −' : '展开 +'}}</text></button>
+            <view wx:if="{{detailsOpen}}" class="details"><text class="section-title">设备与电源</text><view wx:for="{{view.deviceRows}}" wx:key="label" class="fact-row"><text class="fact-label">{{item.label}}</text><text class="fact-value">{{item.value}}</text></view><text class="section-title voice-heading">语音状态</text><view wx:for="{{view.dialogRows}}" wx:key="label" class="fact-row"><text class="fact-label">{{item.label}}</text><text class="fact-value">{{item.value}}</text></view><view class="sample-note"><text>{{view.sampledCaption}}</text><text class="sample-time">{{view.sampledLabel}}</text></view></view>
+          </block>
+        </block>
+      </view>
+      <button wx:if="{{view.selectedPetId}}" class="fold-button connection-fold" bindtap="toggleOptions" aria-expanded="{{optionsOpen}}"><text class="fold-label">设备与连接选项</text><text class="fold-indicator">{{optionsOpen ? '收起 −' : '展开 +'}}</text></button>
+      <view wx:if="{{optionsOpen || !view.selectedPetId}}" class="connection-options">
+        <view class="section-heading"><text class="section-title">我的授权设备</text><button class="text-button" bindtap="list" loading="{{view.listLoading}}" disabled="{{!view.canList}}">刷新列表</button></view>
+        <text wx:if="{{!view.listLoading && view.pets.length === 0}}" class="empty-copy">暂无授权设备，请由管理端关联后刷新；不会自动认领。</text>
+        <view class="pet-list"><button wx:for="{{view.pets}}" wx:key="petId" class="pet-button {{item.selected ? 'selected' : ''}}" data-pet-id="{{item.petId}}" bindtap="select" disabled="{{!view.canSelect}}" aria-pressed="{{item.selected}}"><text class="pet-name">{{item.name}}</text><text class="pet-action">{{item.selected ? '已选择' : '查看状态'}} ›</text></button></view>
+        <text class="small-copy">本卡片只读；切换设备不会自动发送动作或语音。</text>
+        <button class="text-button option-button" bindtap="logout" disabled="{{!view.canLogout}}">退出真实设备登录</button>
+        <button class="text-button option-button" bindtap="preview" disabled="{{!view.canPreview}}">切回界面预览</button>
+      </view>
+    </view>
+  </block>
+</view>

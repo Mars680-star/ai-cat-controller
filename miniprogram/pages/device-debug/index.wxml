@@ -1,0 +1,21 @@
+<app-page readOnlyDebug="{{true}}" noTab="{{true}}" subtitle="电脑开发者工具 · 独立只读联调" online="{{online}}" statusText="{{statusLabel}}">
+  <view class="debug-heading"><text class="eyebrow">READ ONLY · LOCAL GATEWAY</text><text class="page-title">设备只读联调</text><text class="debug-copy">本页独立读取本机代理，不使用八入口的演示数据，也不提供设备控制。</text></view>
+  <view class="status-panel {{statusTone}}" role="status"><text class="status-title">{{statusLabel}}</text><text class="status-copy">{{snapshot ? '以下仅为代理返回的已校验读数；未取得的字段明确标注未验证。' : '尚无可展示的已校验实机状态，不填充演示值。'}}</text></view>
+  <view class="gateway-card">
+    <text class="section-title">连接本机只读代理</text>
+    <text class="gateway-address mono">http://127.0.0.1:8765</text>
+    <text class="field-note">仅请求 GET /v1/status。此地址指电脑上的代理，不是设备地址；只适用于电脑开发者工具。</text>
+    <text class="field-label">临时联调令牌</text>
+    <input wx:if="{{tokenInputVisible}}" class="token-input" password="{{true}}" maxlength="256" placeholder="24–256 位临时令牌，仅保留本页" bindinput="onTokenInput" />
+    <text class="field-note">令牌不写入存储、链接或日志；切到后台或离开本页即清空，并停止请求。请勿输入其他平台密钥。</text>
+    <button class="read-button" bindtap="refresh" loading="{{requesting}}" disabled="{{!hasToken || requesting}}">{{requesting ? '正在读取只读状态…' : snapshot ? '立即刷新状态' : '验证并读取状态'}}</button>
+    <text wx:if="{{error}}" class="error-copy" role="alert">{{error}}</text>
+    <text class="field-note">读取后每 5 秒串行刷新；超时或验证失败可再次点击读取。不会自动切换到 Mock。</text>
+  </view>
+  <block wx:if="{{snapshot}}">
+    <view class="reading-section"><text class="section-title">健康信息</text><view class="reading-row" wx:for="{{healthRows}}" wx:key="label"><text>{{item.label}}</text><text class="reading-value">{{item.value}}</text></view></view>
+    <view class="reading-section"><text class="section-title">设备读数</text><view class="reading-row" wx:for="{{deviceRows}}" wx:key="label"><text>{{item.label}}</text><text class="reading-value">{{item.value}}</text></view></view>
+    <view class="reading-section"><text class="section-title">对话状态</text><view class="reading-row" wx:for="{{dialogRows}}" wx:key="label"><text>{{item.label}}</text><text class="reading-value">{{item.value}}</text></view></view>
+    <view class="sample-note"><text>代理采样时间（不是设备最后在线时间）</text><text class="mono">{{sampledLabel}}</text></view>
+  </block>
+</app-page>

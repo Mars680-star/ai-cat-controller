@@ -20,7 +20,7 @@ async def health(
     services: AppServices = Depends(get_services),
 ) -> ApiResponse[HealthData]:
     return ApiResponse(
-        message="AI Cat Controller is running",
+        message="AI Fox Controller is running",
         data=HealthData(
             status="ok",
             version=__version__,

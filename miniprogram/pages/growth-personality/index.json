@@ -1,0 +1,1 @@
+{ "navigationBarTitleText": "性格", "enablePullDownRefresh": true, "usingComponents": { "app-page": "/components/app-page/index", "live-product-panel": "/components/live-product-panel/index", "loading-skeleton": "/components/loading-skeleton/index", "record-disclosure": "/components/record-disclosure/index", "empty-state": "/components/empty-state/index" } }

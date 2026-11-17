@@ -87,7 +87,7 @@ def test_dialog_follow_up_config_is_persisted(client: TestClient) -> None:
     current = client.get("/api/v1/dialog/config")
 
     assert initial.status_code == 200
-    assert initial.json()["data"]["follow_up_seconds"] == 30
+    assert initial.json()["data"]["follow_up_seconds"] == 25
     assert initial.json()["data"]["source"] == "default"
     assert updated.status_code == 200
     assert updated.json()["data"]["follow_up_seconds"] == 45

@@ -1,0 +1,7 @@
+<view class="setting-slider">
+  <view class="slider-heading"><view class="slider-copy"><text class="slider-title">{{title}}</text><text class="slider-description">{{description}}</text></view><text class="slider-value mono">{{value}}{{suffix}}</text></view>
+  <view class="slider-control" role="slider" aria-valuemin="{{min}}" aria-valuemax="{{max}}" aria-valuenow="{{value}}" bindtouchstart="startDrag" catchtouchmove="drag" bindtouchend="endDrag">
+    <view class="slider-track"><view class="slider-fill" style="width: {{percent}}%;"></view></view>
+    <view class="slider-thumb" style="left: {{percent}}%;"></view>
+  </view>
+</view>

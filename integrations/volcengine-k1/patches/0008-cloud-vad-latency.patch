@@ -1,0 +1,17 @@
+diff --git a/volc_conv_ai/src/transports/low_load/src/volc_ws.c b/volc_conv_ai/src/transports/low_load/src/volc_ws.c
+--- a/volc_conv_ai/src/transports/low_load/src/volc_ws.c
++++ b/volc_conv_ai/src/transports/low_load/src/volc_ws.c
+@@ -269,11 +269,11 @@
+     cJSON_AddItemToObject(config, "ASRConfig", asr_config);
+     cJSON_AddNumberToObject(asr_config, "TurnDetectionMode", 1);
+     cJSON_AddItemToObject(asr_config, "VADConfig", vad_config);
+-    cJSON_AddNumberToObject(vad_config, "SilenceTime", 800);
++    cJSON_AddNumberToObject(vad_config, "SilenceTime", 900);
+     cJSON_AddBoolToObject(vad_config, "AIVAD", false);
+     cJSON_AddNumberToObject(vad_config, "ExpireTime", 1200);
+     cJSON_AddItemToObject(asr_config, "InterruptConfig", interrupt_config);
+-    cJSON_AddNumberToObject(interrupt_config, "InterruptSpeechDuration", 600);
++    cJSON_AddNumberToObject(interrupt_config, "InterruptSpeechDuration", 350);
+     cJSON_AddItemToObject(config, "SubtitleConfig", subtitle_config);
+     cJSON_AddBoolToObject(subtitle_config, "DisableRTSSubtitle", false);
+     cJSON_AddNumberToObject(subtitle_config, "SubtitleMode", 1);

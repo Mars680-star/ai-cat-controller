@@ -17,10 +17,168 @@ GitHub 克隆后可用以下命令完成开发环境安装、全量测试和 Moc
 
 ## 更新记录
 
+### 2026-11-03
+
+- 修正新配网切后台后误选普通网地址的引导；连接失败补固定诊断码，查找结束提示
+  保持可见，不改变加密、权限或配网窗口，见[测试说明](docs/wechat-mini-program-cat-local.md)。
+
+### 2026-11-02
+
+- 配网新增双端人工收尾入口：四项事实确认后保留unknown审计，再显式开启新窗口；
+  不自动归档、重发或复用旧码，见[收尾与测试](docs/wechat-mini-program-cat-local.md)。
+- 动作软件冷却缩至0.4秒，配网补保存超时保护及切网后同卡核验引导；不自动重试
+  或清除未知请求，见[配网说明](docs/wechat-mini-program-cat-local.md)。
+- 手机运动页改为单击执行、紧凑排版与明确未决状态；配网补显式绑定兼容自检和
+  猫端离线提示音，见[动作说明](docs/wechat-mini-program-motion-control.md)与[配网说明](docs/wechat-mini-program-cat-local.md)。
+- 简化小程序连接与配网：页内扫码、同页三步向导，设备卡和调试说明按需展开，
+  保留确认与未决保护；见[新版操作说明](docs/wechat-mini-program-cat-local.md)。
+- 新增安卓开发版猫端本地加密网关、私有机身卡配对和无电脑配网入口；
+  不影响原云端大模型，手机新链路尚待现场验收，见[猫端直连说明](docs/wechat-mini-program-cat-local.md)。
+- 设备与授权已恢复，安卓手机真实状态、点头、开始聆听及打断已由用户实测通过，
+  见[恢复记录](docs/wechat-mini-program-phone-lan.md#2026-11-02-连接恢复与授权状态)。
+
+### 2026-10-30
+
+- 增加安卓开发版手机同网控制入口，保留微信登录和操作确认；仅受信 Wi-Fi
+  临时联调，非公网发布，见[手机联调](docs/wechat-mini-program-phone-lan.md)。
+- 配网20261030.5补受信操作员核验后的unknown归档，保留原记录且新测试须新窗
+  口，不自动重发；见[人工收尾](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-受信操作员归档原unknown请求)。
+- 独立配网程序增加保存／提交等阶段的本地固定诊断，不改变超时、网络参数或
+  未决保护；见[设备端诊断](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-关联后回滚的设备端诊断)。
+- 配网20261030.4新增显式可选直连兼容与零资料端口自检，默认绑定/加密/未决
+  保护保留；尚待安卓真机验收。见[兼容模式](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-可选本地直连兼容模式)。
+- 配网20261030.3补当前设备热点核对与绑定阶段诊断码，保留未决保护；真机绑定
+  尚待验收。见[绑定诊断](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-绑定失败阶段诊断与当前热点核对)。
+- 修复安卓配网绑定缺少必填BSSID，补发送前分阶段提示，页面版本20261030.2；
+  见[发送修复](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-安卓发送前-bssid-绑定修复)。
+- 配网第三步增加输入锁定原因，统一输入状态判断并说明中文名称直接填写；保留
+  未决请求保护。见[输入提示](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-第三步输入锁定提示与中文名称)。
+- USB 单次实测热点启动、配网端口及原网络恢复通过；用户反馈的快速退出暂未
+  复现，尚非手机配网验收。见[诊断记录](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-usb-单次热点启动诊断)。
+- 配网终端二维码补4格留白、固定黑白及宽度提示；相机兼容二维码类型元数据差异，
+  异常即时提示且不放松原请求校验。见[扫码显示修复](docs/wechat-mini-program-provisioning-ux-20261029.md#2026-10-30-终端二维码显示与相机元数据兼容)。
+
+### 2026-10-29
+
+- 安卓配网改页内相机扫码、允许先确认手动热点，临时AP测试密码按用户要求统一
+  `88888888`（不用于正式部署）；见[扫码修复](docs/wechat-mini-program-provisioning-ux-20261029.md)。
+- 修复连接页新增配网入口打断WXML条件分支的编译错误，已同步桌面；保留原界面
+  顺序与真实/预览隔离，见[编译修复记录](docs/wechat-mini-program-wxml-compile-fix-20261029.md)。
+
+### 2026-10-28
+
+- 安卓扫码配网新增独立小程序页及K1本地操作员程序，已安装、同步桌面，尚未开启
+  热点或做手机切网实测；清记忆/解绑/格式化仅发布禁用的网关合同，执行组件未完成。
+  使用与部署边界见[配网与数据操作](docs/wechat-mini-program-provisioning-lifecycle-20261028.md)。
+- 发布培养互动、普通设置与本地反馈的小程序确认修复，已同步桌面；剩余范围与
+  验收见[部署记录](docs/wechat-mini-program-feature-deployment-20261028.md)。
+- 修复小程序对话弹窗参数超限、旧回调及确认轮询竞态，补明确失败提示，保留
+  发送前实时核权及去重。见[确认修复](docs/wechat-mini-program-dialog-control.md)。
+- 发布小程序对话/历史、普通设置与文字反馈的设备接口和本地网关开关；危险操作
+  仍禁用，授权与实机验收边界见[部署记录](docs/wechat-mini-program-feature-deployment-20261028.md)。
+- 恢复电脑小程序网关与真实状态读取，用户更新的网页授权已校验并加载；不新增
+  控制权限。见[恢复记录](docs/wechat-mini-program-device-registration.md#7-2026-10-28-临时网关单位消失后的恢复)。
+
+### 2026-10-22
+
+- 小程序培养页补断线/未选设备提示、只读重试与互动卡片操作反馈；读取失败仍
+  禁止写入，保留未知回执。见[三页数据接入](docs/wechat-mini-program-live-product-data.md)。
+- 当前联调设备按用户要求临时暂停物理触摸动作、播报和计分；后续明确要求后再
+  恢复，不改其它设备默认值。见[暂停与恢复](docs/k1-touch-pause-20261022.md)。
+
+### 2026-10-21
+
+- 新增固定角色的已验证内存 Python 导入检查；不启动服务、不代表整机就绪，见
+  [受控导入边界](docs/verified-python-import.md)。语音初始化退出锁已补本地回归。
+- 新增离线Python源码候选包的构建、外部SHA核验与只读暂存工具；不含依赖/原生
+  制品，不部署或切换服务。见[离线候选包](docs/offline-release-candidate.md)。
+- 本地跨进程维护协议补唤醒词窗口、直接设备调用和旧上下文保护，未部署；
+  全参与者活核验与真机验收仍待完成，见[协议范围](docs/process-maintenance-protocol.md)。
+- 本地补Python单实例维护门，等待设置/动作后台写入收尾后再清理，保留独立停止；
+  跨进程与生产危险授权仍待补齐，未部署。见[维护门边界](docs/device-operation-gate.md)。
+- 本地修复清记忆去重/旧事实复活及解绑后的旧运行时隐私边界；小程序危险操作
+  仍禁用，原生变更待构建部署。见[数据生命周期安全](docs/product-data-lifecycle-safety.md)。
+- 小程序普通设置与设备端反馈已补本地真实接口，区分实际音量和保存值、显示
+  分步保存结果；危险操作仍禁用，尚未部署。见[设置与反馈](docs/wechat-mini-program-preferences.md)。
+- 本地补齐小程序真实文字、聆听与打断控制，修复语音过渡状态遗漏；Python全量
+  1435项及小程序回归通过，控制默认关闭、暂未部署。见[对话接入边界](docs/wechat-mini-program-dialog-control.md)。
+- 本地补齐动作总开关、无尾适配与原生入口安全门，Python全量1363项和小程序
+  全套回归通过；真机仅在线备份，暂不重启部署。见[安全门与验证](docs/k1-no-tail-device.md#2026-10-21-源码安全门恢复与验证)。
+- 已开启产品上线持续goal，补对话纯读取与长记录预算、发布包卫生检查；新真机
+  接口与配套实机验收仍待完成。见[接入与上线门槛](docs/wechat-mini-program-local-gateway.md#8-2026-10-21-上线-goal对话纯读取)。
+- 小程序主页、培养、性格已接真实资料与成长记录；培养互动需逐次确认，不自动签到。
+  使用及验证边界见[三页数据接入](docs/wechat-mini-program-live-product-data.md)。
+- 本机已加载小程序动作的真实网页授权，当前可用5项动作联调获用户正常反馈，2项仍锁定。
+  接入与现场验收步骤见[动作说明](docs/wechat-mini-program-motion-control.md)。
+- 小程序运动接口扩展到网页端七种固定动作；新增服务端网页授权关联，按真实解锁和
+  硬件能力启用，停止与去重保护保持。接入与验收边界见[动作说明](docs/wechat-mini-program-motion-control.md)。
+- 完善运动页局部刷新、记录读取状态与停止拦截提示，减少重复渲染，保留原安全保护；
+  不新增硬件动作或调整参数。见[动作说明](docs/wechat-mini-program-motion-control.md)。
+
+### 2026-10-20
+
+- 运动页已把真实控制融入原产品排版，移除独立模式入口；保留状态卡、两种头部动作、
+  停止及最近20条真实记录，其他动作禁用标注未接入。见[动作说明](docs/wechat-mini-program-motion-control.md)。
+- 修复真实运动确认期间状态失效后静默取消：明确“动作未发送”及原因，保留安全拦截，
+  不自动补发。受限开关经用户批准启用，点头、摇头、停止本轮联调反馈正常。见[动作说明](docs/wechat-mini-program-motion-control.md)。
+- 小程序运动页已准备点头、摇头、停止及请求状态，沿用原硬件预设；新增受限网关与
+  持久化去重，实机执行默认关闭，待现场试动确认。见[动作接入说明](docs/wechat-mini-program-motion-control.md)。
+- 恢复退出的电脑端只读代理，两个本地网关改为临时用户服务托管；用户确认真实
+  电量/连接恢复，不改K1数据。见[状态链路运维](docs/wechat-mini-program-device-registration.md#6-真实状态服务暂不可用的恢复记录)。
+- 修复小程序开发工具漏登记新增模块导致的主页白屏，关闭开发裁剪/热重载并补充
+  严格模块加载回归；用户已确认恢复。见[白屏记录](docs/wechat-mini-program-live-home-connection.md#新增模块加载白屏已修复)。
+- 小程序主页/连接页可切换真实只读状态，共享前台微信登录并在切页后重新核权；
+  演示功能保留，不开放实机写操作。见[第三阶段说明](docs/wechat-mini-program-live-home-connection.md)。
+- 已完成本机管理端授权关联，新增主页“查看我的真实设备”入口与授权后的状态页，
+  包含完整设备标识校验和5秒串行刷新；只写电脑网关库，不改K1或开放控制。见
+  [第二阶段说明](docs/wechat-mini-program-device-registration.md)。
+- 已在微信开发者工具完成真实微信登录、业务会话和已授权宠物列表验证；设备关联
+  与只读同步进展见上条，原预览与K1数据不变。见
+  [本地网关说明](docs/wechat-mini-program-local-gateway.md)。
+
+### 2026-10-19
+
+- 小程序接入第一阶段新增独立本地登录/权限网关和“网关接入检查”页；缺AppSecret
+  明确拒绝登录，保留原预览和只读联调，未开放设备控制。步骤与边界见
+  [本地网关说明](docs/wechat-mini-program-local-gateway.md)。
+- 新增电脑开发者工具专用“AI猫只读联调”入口与回环代理，已读取真实K1状态，
+  原八入口继续Mock，未开放实机写操作或更改K1配置；步骤见
+  [小程序联调说明](miniprogram/docs/UI-PREVIEW-GUIDE.md#7-电脑开发者工具ai猫只读联调)。
+- 新版微信小程序纯UI已覆盖当前网页版8入口，默认展示小安预览数据；包含米家、
+  记忆与重置界面，不连接设备。已修复底部导航、重复切页、刷新/草稿和运动进度体验，
+  同步桌面并保留旧版备份，
+  [导入与验证说明](docs/wechat-mini-program-ui-preview-20261019.md)。
+- 按用户选择，从已授权的 K1 设备回收机器版源码并覆盖本地源码
+  同名文件，保留本地独有文件；含外置对话/唤醒/电机源码及SDK补丁。已备份，
+  未改设备或运行数据；全量334通过/16失败（契约差异待复核），验证结果及差异见
+  [`源码回收记录`](docs/k1-source-recovery-20261019.md)。
+
 ### 2026-08-12
 
 修改人：Mars
 
+- 新增两层持久记忆：SQLite 继续保存完整对话，最近 16 条完整问答消息以有界、不可信
+  引用进入人格运行时；用户明确表达的姓名、喜好、习惯和重要事件会在本地提炼为按
+  用户/宠物隔离的结构化长期事实。设置页可清除两层记忆而保留对话记录，完整格式化
+  也会清除记忆；不完整半轮、前一位所有者的历史和无界长文本不会被注入。
+  详细边界见 [`docs/persistent-dialog-memory.md`](docs/persistent-dialog-memory.md)。
+- 修复真机收到云端 WebSocket `error` 后网页仍停留在“正在思考”的状态机缺口：
+  原生进程现在立即发布重连状态并交由 systemd 重建会话，不再等待 30 秒思考超时；
+  重复出现的服务端拒绝仍需按错误码检查对应服务配置，详见
+  [`docs/voice-dialog-testing.md`](docs/voice-dialog-testing.md)。
+- 新增网页“米家连接”页和接入前网关契约：可持久化准备/撤销隔离设备标识，查询
+  8 个固定属性，幂等写入音量并调用 6 个安全动作；解绑会同步撤销旧标识。当前不
+  连接米家账号、不保存平台凭据，MIoT 型号及实例编号等待正式产品 SPEC 确认，详见
+  [`docs/mijia-integration-gateway.md`](docs/mijia-integration-gateway.md)。当前 Python
+  全量回归为 `260 passed`，小程序资源构建和严格 TypeScript 检查通过。
+- 新增微信小程序第一阶段原生 TypeScript 工程：包含授权、三步绑定、一次性性格揭晓、
+  5 个 Tab、5 个二级详情/反馈页和 10 个公共组件；页面统一通过 `PetService` 访问
+  14 个可切换本地场景，不直接读取 Mock 文件。动作、任务、对话、设置、反馈、绑定
+  和解绑等写操作生成稳定 `request_id`，失败重试复用原 ID；页面隐藏后清理轮询与
+  延迟任务。`npm run build` 会生成本地 PNG 图标和 `512×512` 猫咪资源并执行严格
+  TypeScript 检查，Python 全量回归为 `246 passed`。当前不连接设备或正式微信体系，
+  微信开发者工具多尺寸视觉验收、截图和录屏仍待人工完成；第二阶段接口差异见
+  `docs/wechat-mini-program-api-gap.md`。
 - 新增亲密度升级庆祝：每日见面、有效对话、实体触摸或完成任务使亲密度跨级时，
   自动等待语音会话和当前电机动作结束，再执行固定 `celebration_combo`；动作完成后
   本地播放“太棒啦，我们的羁绊又更深了一步！”。重复请求不会重复庆祝，触摸升级
@@ -481,6 +639,7 @@ TTS 音色由火山引擎控制台统一决定。
 
 ```text
 src/ai_cat_controller/             FastAPI、网页、服务和适配器
+miniprogram/                        原生微信小程序第一阶段 UI、Service 和本地场景
 tests/                             Mock 自动测试和安全边界测试
 deploy/systemd/                    FastAPI systemd 模板
 native/ai-toy-app/                 K1 硬件命令应用层
@@ -540,6 +699,13 @@ pytest -q
 ```
 
 测试默认使用 Mock。Local K1 测试注入假的命令执行器，不会操作 systemd 或硬件。
+
+微信小程序工程单独执行资源构建和 TypeScript 检查：
+
+```bash
+npm --prefix miniprogram install
+npm --prefix miniprogram run build
+```
 
 ## 配置
 

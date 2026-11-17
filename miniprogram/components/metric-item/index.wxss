@@ -1,0 +1,6 @@
+.metric { display: flex; align-items: center; flex-direction: column; justify-content: center; gap: var(--space-1); min-height: 178rpx; padding: var(--space-5) var(--space-2); border-radius: var(--radius-control); background: var(--color-surface-soft); text-align: center; }
+.icon-wrap { display: flex; align-items: center; justify-content: center; width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--color-surface); }
+.icon { width: 30rpx; height: 30rpx; opacity: .84; }
+.value { display: block; overflow: hidden; width: 100%; color: var(--color-title); font-size: 27rpx; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.label { color: var(--color-muted); font-size: 20rpx; }
+.hint { color: var(--color-muted); font-size: 19rpx; }

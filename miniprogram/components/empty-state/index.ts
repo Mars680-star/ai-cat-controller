@@ -1,0 +1,1 @@
+Component({ properties: { icon: { type: String, value: '/assets/icons/message-circle.png' }, title: String, description: String, actionText: String }, methods: { action() { this.triggerEvent('action') } } })

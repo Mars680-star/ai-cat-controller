@@ -18,12 +18,19 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from ai_cat_controller.core.config import parse_motion_bool
 import uuid
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ai_cat_controller.core.process_gate import (
+    ProcessGateError,
+    ProcessLease,
+    ProcessOperationGate,
+)
 from ai_cat_controller.domain.personalities import PERSONALITIES
 from ai_cat_controller.local_speech import (
     DEFAULT_ASSET_ROOT,
@@ -78,6 +85,9 @@ class AutonomyConfig:
     minimum_interval_seconds: float
     maximum_interval_seconds: float
     phrase_probability: float
+    enable_motion: bool = True
+    has_tail: bool = True
+    enable_tail_motion: bool = False
     conversation_motion_enabled: bool = False
     conversation_motion_probability: float = 1.0
     conversation_motion_delay_seconds: float = 1.0
@@ -94,6 +104,16 @@ class AutonomyConfig:
     local_speech_marker_path: Path = DEFAULT_MARKER_PATH
     local_speech_player_path: Path = DEFAULT_PLAYER_PATH
     local_speech_motion_settle_seconds: float = 2.2
+    process_gate_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if any(type(value) is not bool for value in (self.enable_motion, self.has_tail, self.enable_tail_motion)):
+            raise ValueError("Autonomy motion safety flags must be explicit booleans")
+        if self.process_gate_path is not None and (
+            not isinstance(self.process_gate_path, Path)
+            or not self.process_gate_path.is_absolute()
+        ):
+            raise ValueError("AI_CAT_PROCESS_GATE_PATH must be an absolute path")
 
     @classmethod
     def from_env(
@@ -101,6 +121,12 @@ class AutonomyConfig:
         environ: Mapping[str, str] | None = None,
     ) -> "AutonomyConfig":
         source = os.environ if environ is None else environ
+        process_gate_path = None
+        if "AI_CAT_PROCESS_GATE_PATH" in source:
+            raw_process_gate_path = source["AI_CAT_PROCESS_GATE_PATH"]
+            if not raw_process_gate_path or not Path(raw_process_gate_path).is_absolute():
+                raise ValueError("AI_CAT_PROCESS_GATE_PATH must be an absolute path")
+            process_gate_path = Path(raw_process_gate_path)
         try:
             api_port = int(source.get("AI_CAT_API_PORT", "8000"))
         except ValueError as exc:
@@ -185,6 +211,10 @@ class AutonomyConfig:
                 "than or equal to AI_CAT_CONVERSATION_TAIL_MIN_INTERVAL_SECONDS"
             )
         return cls(
+            enable_motion=parse_motion_bool(source.get("AI_CAT_ENABLE_MOTION", "true")),
+            has_tail=parse_motion_bool(source.get("AI_CAT_HAS_TAIL", "true")),
+            enable_tail_motion=parse_motion_bool(source.get("AI_CAT_ENABLE_TAIL_MOTION", "false")),
+            process_gate_path=process_gate_path,
             api_port=api_port,
             api_key=api_key,
             initial_delay_seconds=initial_delay,
@@ -281,6 +311,9 @@ class LocalControllerClient:
     def __init__(self, config: AutonomyConfig) -> None:
         self._base_url = f"http://127.0.0.1:{config.api_port}/api/v1"
         self._api_key = config.api_key
+        self._motion_enabled = config.enable_motion
+        self._has_tail = config.has_tail
+        self._tail_enabled = config.enable_tail_motion
 
     def _request(
         self,
@@ -340,6 +373,8 @@ class LocalControllerClient:
         intensity: float = 0.35,
         duration_ms: int = 1800,
     ) -> None:
+        if not self._motion_enabled:
+            raise ControllerApiError("动作已暂停")
         if action not in SAFE_ACTIONS:
             raise ValueError("autonomy action is not allowlisted")
         self._request(
@@ -359,6 +394,12 @@ class LocalControllerClient:
         intensity: float = 0.35,
         duration_ms: int = 600,
     ) -> None:
+        if not self._has_tail:
+            raise ControllerApiError("当前设备没有尾部机构")
+        if not self._motion_enabled:
+            raise ControllerApiError("动作已暂停")
+        if not self._tail_enabled:
+            raise ControllerApiError("尾部动作尚未开放")
         self._request(
             "POST",
             f"/motion/{CONVERSATION_TAIL_ACTION}",
@@ -388,15 +429,21 @@ class AutonomyWorker:
         random_source: random.Random | None = None,
         stop_event: threading.Event | None = None,
         local_player: LocalPhrasePlayer | None = None,
+        process_gate: ProcessOperationGate | None = None,
     ) -> None:
         self._config = config
         self._client = client
         self._random = random_source or random.Random()
         self._stop_event = stop_event or threading.Event()
+        self._owns_process_gate = process_gate is None and config.process_gate_path is not None
+        self._process_gate = process_gate
+        if self._owns_process_gate:
+            self._process_gate = ProcessOperationGate(config.process_gate_path)
         self._local_player = local_player or LocalPhrasePlayer(
             asset_root=config.local_speech_asset_root,
             marker_path=config.local_speech_marker_path,
             player_path=config.local_speech_player_path,
+            process_gate=self._process_gate,
         )
         self._conversation_token: tuple[int, int] | None = None
         self._next_conversation_head_at = 0.0
@@ -404,6 +451,16 @@ class AutonomyWorker:
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def close(self) -> None:
+        """Close owned coordination resources only after this worker has stopped."""
+        if self._owns_process_gate and self._process_gate is not None:
+            self._process_gate.close()
+
+    @staticmethod
+    def _checkpoint(lease: ProcessLease | None) -> None:
+        if lease is not None:
+            lease.checkpoint()
 
     def validate_startup(self) -> int:
         if not self._config.local_speech_enabled:
@@ -413,6 +470,19 @@ class AutonomyWorker:
         return len(paths)
 
     def run_once(self) -> dict[str, Any]:
+        if not self._config.enable_motion:
+            return {"executed": False, "reason": "motion_disabled"}
+        try:
+            with (
+                self._process_gate.normal()
+                if self._process_gate else nullcontext(None)
+            ) as lease:
+                return self._run_once(lease)
+        except ProcessGateError:
+            return {"executed": False, "reason": "maintenance"}
+
+    def _run_once(self, lease: ProcessLease | None) -> dict[str, Any]:
+        self._checkpoint(lease)
         status = self._client.dialog_status()
         dialog_state = str(status.get("state", "unavailable"))
         dialog_is_offline = dialog_state in AUTONOMY_OFFLINE_STATES
@@ -434,6 +504,7 @@ class AutonomyWorker:
             LOGGER.info("autonomous behavior skipped: %s", result)
             return result
 
+        self._checkpoint(lease)
         personality = self._client.personality_profile()
         if not personality.get("active") or (
             not personality.get("native_applied") and not dialog_is_offline
@@ -466,6 +537,7 @@ class AutonomyWorker:
 
         action = self._random.choices(actions, weights=weights, k=1)[0]
         event_id = f"auto-{int(time.time())}-{uuid.uuid4().hex[:10]}"
+        self._checkpoint(lease)
         self._client.start_head_action(action, f"{event_id}-motion")
 
         phrase: str | None = None
@@ -492,9 +564,19 @@ class AutonomyWorker:
                     ):
                         phrase = None
                     else:
-                        self._local_player.play(personality_id, phrase)
+                        self._checkpoint(lease)
+                        if lease is None:
+                            self._local_player.play(personality_id, phrase)
+                        else:
+                            self._local_player.play(
+                                personality_id, phrase, expected_ticket=lease.ticket
+                            )
                 else:
+                    self._checkpoint(lease)
                     self._client.speak(phrase, f"{event_id}-speech")
+            except ProcessGateError:
+                LOGGER.info("autonomous phrase skipped during maintenance")
+                phrase = None
             except (ControllerApiError, LocalSpeechError) as exc:
                 LOGGER.warning("autonomous phrase failed after motion start: %s", exc)
                 phrase = None
@@ -504,6 +586,22 @@ class AutonomyWorker:
         return result
 
     def run_conversation_motion_once(self) -> dict[str, Any]:
+        if not self._config.enable_motion:
+            return {"executed": False, "reason": "motion_disabled"}
+        try:
+            with (
+                self._process_gate.normal()
+                if self._process_gate else nullcontext(None)
+            ) as lease:
+                return self._run_conversation_motion_once(lease)
+        except ProcessGateError:
+            self._conversation_token = None
+            self._next_conversation_head_at = 0.0
+            self._next_conversation_tail_at = 0.0
+            return {"executed": False, "reason": "maintenance"}
+
+    def _run_conversation_motion_once(self, lease: ProcessLease | None) -> dict[str, Any]:
+        self._checkpoint(lease)
         status = self._client.dialog_status()
         state = str(status.get("state", "unavailable"))
         if (
@@ -534,6 +632,7 @@ class AutonomyWorker:
         head_due = now >= self._next_conversation_head_at
         tail_due = (
             self._config.conversation_tail_enabled
+            and self._config.has_tail and self._config.enable_tail_motion
             and now >= self._next_conversation_tail_at
         )
         if not head_due and not tail_due:
@@ -548,6 +647,7 @@ class AutonomyWorker:
 
         if tail_due:
             event_id = f"dialog-tail-{int(time.time())}-{uuid.uuid4().hex[:10]}"
+            self._checkpoint(lease)
             self._client.start_tail_action(
                 event_id,
                 intensity=0.35,
@@ -562,6 +662,7 @@ class AutonomyWorker:
             LOGGER.info("conversation motion submitted: %s", result)
             return result
 
+        self._checkpoint(lease)
         personality = self._client.personality_profile()
         autonomy = personality.get("autonomy")
         action_weights = (
@@ -587,6 +688,7 @@ class AutonomyWorker:
 
         action = self._random.choices(actions, weights=weights, k=1)[0]
         event_id = f"dialog-motion-{int(time.time())}-{uuid.uuid4().hex[:10]}"
+        self._checkpoint(lease)
         self._client.start_head_action(
             action,
             event_id,
@@ -659,7 +761,7 @@ class AutonomyWorker:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AI cat safe autonomous behavior")
+    parser = argparse.ArgumentParser(description="AI fox safe autonomous behavior")
     parser.add_argument(
         "--once",
         action="store_true",
@@ -672,18 +774,20 @@ def main() -> None:
     )
     config = AutonomyConfig.from_env()
     worker = AutonomyWorker(config, LocalControllerClient(config))
-    worker.validate_startup()
-    if args.once:
-        worker.run_once()
-        return
-
     def request_stop(signum: int, frame: object) -> None:
         del signum, frame
         worker.stop()
 
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(signal.SIGINT, request_stop)
-    worker.run_forever()
+    try:
+        worker.validate_startup()
+        if args.once:
+            worker.run_once()
+            return
+        signal.signal(signal.SIGTERM, request_stop)
+        signal.signal(signal.SIGINT, request_stop)
+        worker.run_forever()
+    finally:
+        worker.close()
 
 
 if __name__ == "__main__":

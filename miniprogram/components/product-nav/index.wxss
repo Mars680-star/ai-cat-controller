@@ -1,0 +1,11 @@
+:host { display: block; }
+/* Native button defaults are not reset by app.wxss across component isolation.
+   Set each item's geometry locally so all four columns stay in the viewport. */
+.nav-shell { position: fixed; z-index: 50; right: 0; bottom: 0; left: 0; display: flex; flex-wrap: wrap; box-sizing: border-box; width: 100%; padding: 10rpx 18rpx calc(10rpx + env(safe-area-inset-bottom)); border-top: 1rpx solid var(--color-line); background: rgba(255, 255, 255, .98); box-shadow: 0 -8rpx 30rpx rgba(47, 43, 36, .08); }
+.nav-item { position: relative; display: flex; flex: 0 0 25%; align-items: center; justify-content: center; box-sizing: border-box; width: 25%; max-width: 25%; min-width: 0; min-height: 88rpx; margin: 0; padding: 0 4rpx; gap: 10rpx; border: 0; border-radius: 12rpx; color: var(--color-muted); background: transparent; font-size: 24rpx; line-height: 1.4; white-space: nowrap; }
+.nav-item::after { border: 0; }
+.nav-item-pressed { background: var(--color-primary-soft); }
+.nav-item.active { color: var(--color-title); background: var(--color-primary-soft); font-weight: 700; }
+.nav-item.active::before { position: absolute; top: 0; left: 18rpx; width: 6rpx; height: 100%; border-radius: 6rpx; background: var(--color-primary); content: ''; }
+.nav-icon { flex: 0 0 30rpx; width: 30rpx; height: 30rpx; opacity: .7; }
+.nav-item.active .nav-icon { opacity: 1; }

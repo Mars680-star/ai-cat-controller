@@ -4,7 +4,7 @@
  * Maintenance notes:
  * - This process must not keep a Volcengine session open while idle.
  * - Wake/interruption phrases and VAD timing are maintained in this file.
- * - Keep this source byte-for-byte synchronized with the SDK overlay copy.
+ * - prepare_sdk.sh copies this canonical source into the reconstructed SDK.
  * - Deploy by rebuilding the wake-word binary; do not edit only the K1 copy.
  */
 #include <algorithm>
@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fcntl.h>
 #include <iostream>
 #include <spawn.h>
 #include <string>
@@ -40,19 +41,27 @@ constexpr int kSampleRate = 16000;
 constexpr int kHopSize = 256;
 constexpr int kSpeechStartFrames = 3;
 constexpr int kSilenceFrames = 18;
-constexpr int kInterruptSilenceFrames = 18;
+constexpr int kInterruptSilenceFrames = 6;
 constexpr size_t kPreSpeechSamples = 8000;
+constexpr size_t kInterruptPreSpeechSamples = 3200;
 constexpr size_t kMinUtteranceSamples = 8000;
+constexpr size_t kMinInterruptUtteranceSamples = 6400;
 constexpr size_t kMaxUtteranceSamples = 80000;
+constexpr size_t kMaxWakeUtteranceSamples = 48000;
+constexpr size_t kMaxInterruptUtteranceSamples = 24000;
 constexpr float kVadThreshold = 0.5f;
 constexpr auto kTriggerSettleDelay = std::chrono::seconds(1);
 constexpr const char* kDialogSessionMarker = "/run/ai-cat/dialog-session-active";
 constexpr const char* kLocalSpeechMarker = "/run/ai-cat/local-speech-active";
 constexpr const char* kDialogStatusPath = "/run/ai-cat/dialog-status.json";
+constexpr const char* kWakePrerollPath = "/run/ai-cat/wake-preroll.pcm";
+constexpr const char* kWakePrerollTmpPath = "/run/ai-cat/wake-preroll.pcm.tmp";
 constexpr const char* kDialogService = "volc-conv-ai.service";
 constexpr size_t kMaxDialogStatusBytes = 16 * 1024;
+constexpr size_t kMaxWakePrerollSamples = kSampleRate * 30;
 constexpr auto kCloudReadyTimeout = std::chrono::seconds(30);
-constexpr auto kInterruptContinuationWindow = std::chrono::seconds(2);
+constexpr auto kInterruptContinuationWindow = std::chrono::seconds(4);
+constexpr auto kActivationContinuationWindow = std::chrono::seconds(3);
 
 enum class CaptureMode {
     Paused,
@@ -89,14 +98,41 @@ bool matchesWakePhrase(const std::string& text, const std::string& wake_phrase) 
     }
 
     static const char* aliases[] = {
-        "晓安晓安",
-        "下安下安",
-        "小岸小岸",
-        "小安小岸",
-        "谢啊谢",
+        "晓安开启对话模式",
+        "下安开启对话模式",
+        "小岸开启对话模式",
     };
     for (const char* alias : aliases) {
         if (text.find(alias) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool matchesActivationPrefix(const std::string& text) {
+    static const char* names[] = {
+        "小安",
+        "晓安",
+        "小岸",
+        "下安",
+    };
+    for (const char* name : names) {
+        if (text.find(name) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool matchesActivationSuffix(const std::string& text) {
+    static const char* phrases[] = {
+        "开启对话模式",
+        "开始对话模式",
+        "开启对话",
+    };
+    for (const char* phrase : phrases) {
+        if (text.find(phrase) != std::string::npos) {
             return true;
         }
     }
@@ -115,6 +151,10 @@ bool matchesInterruptPhrase(const std::string& text) {
         "小安别说了",
         "小安安静",
         "小安暂停",
+        "小安结束对话",
+        "小安退出对话",
+        "小安结束",
+        "小安退出",
         "晓安停下",
         "小岸停下",
         "下安停下",
@@ -149,6 +189,10 @@ bool matchesInterruptSuffix(const std::string& text) {
         "别说了",
         "安静",
         "暂停",
+        "结束对话",
+        "退出对话",
+        "结束",
+        "退出",
     };
     for (const char* suffix : suffixes) {
         if (text.find(suffix) != std::string::npos) {
@@ -260,10 +304,6 @@ pid_t dialogStatusPid(const std::string& status) {
     return (::kill(pid, 0) == 0 || errno == EPERM) ? pid : -1;
 }
 
-bool dialogStatusProcessIsAlive(const std::string& status) {
-    return dialogStatusPid(status) > 1;
-}
-
 struct DialogRuntimeState {
     bool session_active = false;
     bool can_interrupt = false;
@@ -289,37 +329,32 @@ DialogRuntimeState readDialogRuntimeState() {
     return state;
 }
 
-int runSystemctl(std::vector<std::string> arguments) {
-    arguments.insert(arguments.begin(), "systemctl");
-    std::vector<char*> argv;
-    argv.reserve(arguments.size() + 1);
-    for (std::string& argument : arguments) {
-        argv.push_back(argument.data());
-    }
-    argv.push_back(nullptr);
-
+bool startDialogService() {
+    char command[] = "systemctl";
+    char no_block[] = "--no-block";
+    char start[] = "start";
+    char service[] = "volc-conv-ai.service";
+    char* argv[] = {command, no_block, start, service, nullptr};
     pid_t pid = -1;
     const int spawn_status = posix_spawn(
         &pid,
         "/bin/systemctl",
         nullptr,
         nullptr,
-        argv.data(),
+        argv,
         environ);
     if (spawn_status != 0) {
-        std::cerr << "[WakeWord] Failed to start systemctl: "
+        std::cerr << "[WakeWord] Failed to spawn dialog service start: "
                   << spawn_status << std::endl;
-        return -1;
+        return false;
     }
     int child_status = 0;
     pid_t wait_result;
     do {
         wait_result = waitpid(pid, &child_status, 0);
     } while (wait_result < 0 && errno == EINTR);
-    if (wait_result < 0 || !WIFEXITED(child_status)) {
-        return -1;
-    }
-    return WEXITSTATUS(child_status);
+    return wait_result >= 0 && WIFEXITED(child_status) &&
+        WEXITSTATUS(child_status) == 0;
 }
 
 bool dialogStatusIsReady(
@@ -334,37 +369,255 @@ bool dialogStatusIsReady(
     }
     const bool ready = status.find("\"state\":\"ready\"") != std::string::npos ||
         status.find("\"state\":\"interrupted\"") != std::string::npos;
-    return ready && dialogStatusProcessIsAlive(status);
+    return ready && dialogStatusPid(status) > 1;
 }
 
-bool triggerConversation() {
-    const bool already_active =
-        runSystemctl({"is-active", "--quiet", kDialogService}) == 0;
+pa_simple* openCaptureStream(
+    const pa_sample_spec& sample_spec,
+    int* pulse_error
+) {
+    return pa_simple_new(
+        nullptr,
+        "volc-k1-wake-word",
+        PA_STREAM_RECORD,
+        nullptr,
+        "wake-word-capture",
+        &sample_spec,
+        nullptr,
+        nullptr,
+        pulse_error);
+}
+
+bool playImmediateReadyTone(const pa_sample_spec& sample_spec) {
+    static const int16_t wave[16] = {
+        0, 3444, 6363, 8316, 9000, 8316, 6363, 3444,
+        0, -3444, -6363, -8316, -9000, -8316, -6363, -3444,
+    };
+    constexpr int kToneDurationMs = 220;
+    const int sample_count =
+        static_cast<int>(sample_spec.rate) * kToneDurationMs / 1000;
+    const int fade_samples = std::max(1, static_cast<int>(sample_spec.rate) / 200);
+    std::vector<int16_t> tone(static_cast<size_t>(sample_count));
+    for (int i = 0; i < sample_count; ++i) {
+        int envelope = fade_samples;
+        if (i < envelope) {
+            envelope = i;
+        }
+        if (sample_count - i - 1 < envelope) {
+            envelope = sample_count - i - 1;
+        }
+        tone[static_cast<size_t>(i)] = static_cast<int16_t>(
+            static_cast<int32_t>(wave[i % 16]) * envelope / fade_samples);
+    }
+
+    int pulse_error = 0;
+    pa_simple* playback = pa_simple_new(
+        nullptr,
+        "volc-k1-wake-word",
+        PA_STREAM_PLAYBACK,
+        nullptr,
+        "wake-ready-tone",
+        &sample_spec,
+        nullptr,
+        nullptr,
+        &pulse_error);
+    if (playback == nullptr) {
+        std::cerr << "[WakeWord] Immediate ready tone open failed: "
+                  << pa_strerror(pulse_error) << std::endl;
+        return false;
+    }
+    const bool played =
+        pa_simple_write(
+            playback,
+            tone.data(),
+            tone.size() * sizeof(tone[0]),
+            &pulse_error) >= 0 &&
+        pa_simple_drain(playback, &pulse_error) >= 0;
+    if (!played) {
+        std::cerr << "[WakeWord] Immediate ready tone playback failed: "
+                  << pa_strerror(pulse_error) << std::endl;
+    }
+    pa_simple_free(playback);
+    return played;
+}
+
+bool captureWakePrerollUntilReady(
+    const FileVersion& previous_status,
+    bool require_new_status,
+    const pa_sample_spec& sample_spec,
+    std::vector<int16_t>& samples,
+    bool& capture_succeeded
+) {
+    int pulse_error = 0;
+    pa_simple* capture = openCaptureStream(sample_spec, &pulse_error);
+    capture_succeeded = capture != nullptr;
+    if (!capture_succeeded) {
+        std::cerr << "[WakeWord] Wake preroll capture failed to open: "
+                  << pa_strerror(pulse_error)
+                  << "; dialog will use its fallback tone" << std::endl;
+    }
+
+    std::vector<int16_t> frame(kHopSize);
+    const auto deadline = std::chrono::steady_clock::now() + kCloudReadyTimeout;
+    while (!exit_requested && std::chrono::steady_clock::now() < deadline) {
+        if (dialogStatusIsReady(previous_status, require_new_status)) {
+            break;
+        }
+        if (capture == nullptr) {
+            usleep(100 * 1000);
+            continue;
+        }
+        if (pa_simple_read(
+                capture,
+                frame.data(),
+                frame.size() * sizeof(frame[0]),
+                &pulse_error) < 0) {
+            std::cerr << "[WakeWord] Wake preroll capture failed: "
+                      << pa_strerror(pulse_error)
+                      << "; dialog will use its fallback tone" << std::endl;
+            pa_simple_free(capture);
+            capture = nullptr;
+            capture_succeeded = false;
+            samples.clear();
+            continue;
+        }
+        const size_t remaining = kMaxWakePrerollSamples - samples.size();
+        const size_t append_count = std::min(remaining, frame.size());
+        samples.insert(samples.end(), frame.begin(), frame.begin() + append_count);
+    }
+    if (capture != nullptr) {
+        pa_simple_free(capture);
+    }
+    return !exit_requested &&
+        dialogStatusIsReady(previous_status, require_new_status);
+}
+
+bool writeWakePrerollAtomically(const std::vector<int16_t>& samples) {
+    if (mkdir("/run/ai-cat", 0755) != 0 && errno != EEXIST) {
+        std::cerr << "[WakeWord] Failed to create /run/ai-cat: "
+                  << std::strerror(errno) << std::endl;
+        return false;
+    }
+    const int fd = open(
+        kWakePrerollTmpPath,
+        O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+        0600);
+    if (fd < 0) {
+        std::cerr << "[WakeWord] Failed to open wake preroll temp file: "
+                  << std::strerror(errno) << std::endl;
+        return false;
+    }
+
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(samples.data());
+    const size_t byte_count = samples.size() * sizeof(samples[0]);
+    size_t written = 0;
+    bool write_ok = true;
+    while (written < byte_count) {
+        const ssize_t result = write(fd, bytes + written, byte_count - written);
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        if (result <= 0) {
+            write_ok = false;
+            break;
+        }
+        written += static_cast<size_t>(result);
+    }
+    if (write_ok && fsync(fd) != 0) {
+        write_ok = false;
+    }
+    if (close(fd) != 0) {
+        write_ok = false;
+    }
+    if (!write_ok || std::rename(kWakePrerollTmpPath, kWakePrerollPath) != 0) {
+        const int saved_errno = errno;
+        unlink(kWakePrerollTmpPath);
+        std::cerr << "[WakeWord] Failed to publish wake preroll: "
+                  << std::strerror(saved_errno) << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool triggerConversation(const pa_sample_spec& sample_spec) {
+    const auto trigger_started = std::chrono::steady_clock::now();
     const FileVersion previous_status = readFileVersion(kDialogStatusPath);
-    if (!already_active &&
-        runSystemctl({"--no-block", "start", kDialogService}) != 0) {
+    const DialogRuntimeState initial_state = readDialogRuntimeState();
+    const bool already_running = initial_state.dialog_pid > 1;
+    unlink(kWakePrerollPath);
+    unlink(kWakePrerollTmpPath);
+    if (!already_running && !startDialogService()) {
         std::cerr << "[WakeWord] Failed to start " << kDialogService << std::endl;
         return false;
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + kCloudReadyTimeout;
-    while (!exit_requested && std::chrono::steady_clock::now() < deadline) {
-        if (dialogStatusIsReady(previous_status, !already_active)) {
-            break;
-        }
-        usleep(100 * 1000);
+    std::cout << "[WakeWord] Immediate ready tone starting after "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - trigger_started).count()
+              << " ms" << std::endl;
+    const bool immediate_tone_played = playImmediateReadyTone(sample_spec);
+    const auto tone_finished = std::chrono::steady_clock::now();
+    if (immediate_tone_played) {
+        std::cout << "[WakeWord] Immediate ready tone played after "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         tone_finished - trigger_started).count()
+                  << " ms" << std::endl;
     }
-    if (exit_requested ||
-        !dialogStatusIsReady(previous_status, !already_active)) {
+
+    std::vector<int16_t> preroll;
+    bool preroll_capture_succeeded = false;
+    if (!captureWakePrerollUntilReady(
+            previous_status,
+            !already_running,
+            sample_spec,
+            preroll,
+            preroll_capture_succeeded)) {
         std::cerr << "[WakeWord] Cloud dialog did not become ready within "
                   << std::chrono::duration_cast<std::chrono::seconds>(
                          kCloudReadyTimeout).count()
                   << " seconds" << std::endl;
+        unlink(kWakePrerollPath);
+        unlink(kWakePrerollTmpPath);
         return false;
     }
 
-    if (runSystemctl({"kill", "--signal=SIGUSR1", kDialogService}) != 0) {
-        std::cerr << "[WakeWord] Failed to signal " << kDialogService << std::endl;
+    const bool handoff_ready =
+        immediate_tone_played &&
+        preroll_capture_succeeded;
+    /*
+     * A pre-warmed cloud session can already be ready before the first capture
+     * read. Publish one silent frame so the dialog still knows the immediate
+     * tone was played and does not emit its delayed fallback tone as well.
+     */
+    if (handoff_ready && preroll.empty()) {
+        preroll.assign(kHopSize, 0);
+    }
+    const bool handoff_published =
+        handoff_ready && writeWakePrerollAtomically(preroll);
+    if (handoff_published) {
+        std::cout << "[WakeWord] Wake preroll written: bytes="
+                  << preroll.size() * sizeof(preroll[0])
+                  << ", cloud_ready_ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - trigger_started).count()
+                  << std::endl;
+    } else {
+        unlink(kWakePrerollPath);
+        unlink(kWakePrerollTmpPath);
+        std::cerr << "[WakeWord] Preroll handoff unavailable; "
+                  << "dialog will play its fallback tone" << std::endl;
+    }
+    const DialogRuntimeState ready_state = readDialogRuntimeState();
+    if (ready_state.dialog_pid <= 1) {
+        unlink(kWakePrerollPath);
+        std::cerr << "[WakeWord] Dialog became unavailable before trigger"
+                  << std::endl;
+        return false;
+    }
+    if (::kill(ready_state.dialog_pid, SIGUSR1) != 0) {
+        unlink(kWakePrerollPath);
+        std::cerr << "[WakeWord] Failed to signal " << kDialogService << ": "
+                  << std::strerror(errno) << std::endl;
         return false;
     }
     std::cout << "[WakeWord] Conversation triggered" << std::endl;
@@ -391,7 +644,7 @@ bool triggerInterruption() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string wake_phrase = "小安小安";
+    std::string wake_phrase = "小安开启对话模式";
     std::string model_dir = "/root/.cache/sensevoice";
     bool debug_transcripts = false;
 
@@ -405,7 +658,7 @@ int main(int argc, char** argv) {
             debug_transcripts = true;
         } else if (arg == "--help") {
             std::cout << "Usage: " << argv[0]
-                      << " [--phrase 小安小安] [--model-dir PATH]"
+                      << " [--phrase 小安开启对话模式] [--model-dir PATH]"
                       << " [--debug-transcripts]" << std::endl;
             return 0;
         } else {
@@ -435,12 +688,13 @@ int main(int argc, char** argv) {
         {
             wake_phrase,
             "小安",
+            "开启对话模式",
             "小安停下",
             "小安别说了",
             "小安安静",
             "小安暂停",
         },
-        5.0f);
+        8.0f);
     std::cout << "[WakeWord] SenseVoice ready, phrase=\"" << wake_phrase
               << "\", interrupt=\"小安停下\"" << std::endl;
 
@@ -456,16 +710,7 @@ int main(int argc, char** argv) {
     sample_spec.channels = 1;
     int pulse_error = 0;
     const auto openCapture = [&sample_spec, &pulse_error]() {
-        return pa_simple_new(
-            nullptr,
-            "volc-k1-wake-word",
-            PA_STREAM_RECORD,
-            nullptr,
-            "wake-word-capture",
-            &sample_spec,
-            nullptr,
-            nullptr,
-            &pulse_error);
+        return openCaptureStream(sample_spec, &pulse_error);
     };
     pa_simple* capture = openCapture();
     if (capture == nullptr) {
@@ -483,6 +728,8 @@ int main(int argc, char** argv) {
     int silence_run = 0;
     auto resume_not_before = std::chrono::steady_clock::time_point::min();
     auto interrupt_prefix_deadline =
+        std::chrono::steady_clock::time_point::min();
+    auto activation_prefix_deadline =
         std::chrono::steady_clock::time_point::min();
     CaptureMode capture_mode = CaptureMode::Wake;
 
@@ -510,6 +757,8 @@ int main(int argc, char** argv) {
             utterance.clear();
             pre_speech.clear();
             interrupt_prefix_deadline =
+                std::chrono::steady_clock::time_point::min();
+            activation_prefix_deadline =
                 std::chrono::steady_clock::time_point::min();
             capture_mode = desired_mode;
             if (capture_mode == CaptureMode::Interrupt) {
@@ -568,7 +817,11 @@ int main(int argc, char** argv) {
 
         if (!recording) {
             pre_speech.insert(pre_speech.end(), frame.begin(), frame.end());
-            while (pre_speech.size() > kPreSpeechSamples) {
+            const size_t pre_speech_limit =
+                capture_mode == CaptureMode::Interrupt
+                    ? kInterruptPreSpeechSamples
+                    : kPreSpeechSamples;
+            while (pre_speech.size() > pre_speech_limit) {
                 pre_speech.pop_front();
             }
 
@@ -589,20 +842,53 @@ int main(int argc, char** argv) {
             ? kInterruptSilenceFrames
             : kSilenceFrames;
         const bool utterance_finished = silence_run >= silence_frames;
-        const bool utterance_full = utterance.size() >= kMaxUtteranceSamples;
+        const size_t max_utterance_samples =
+            capture_mode == CaptureMode::Wake
+                ? kMaxWakeUtteranceSamples
+                : (
+                    capture_mode == CaptureMode::Interrupt
+                        ? kMaxInterruptUtteranceSamples
+                        : kMaxUtteranceSamples
+                );
+        const bool utterance_full = utterance.size() >= max_utterance_samples;
         if (!utterance_finished && !utterance_full) {
             continue;
         }
 
-        if (utterance.size() >= kMinUtteranceSamples) {
+        const size_t min_utterance_samples =
+            capture_mode == CaptureMode::Interrupt
+                ? kMinInterruptUtteranceSamples
+                : kMinUtteranceSamples;
+        if (utterance.size() >= min_utterance_samples) {
             const std::vector<float> audio = normalizeAudio(utterance);
+            const auto recognize_started = std::chrono::steady_clock::now();
             const std::string recognized = model.recognize(audio);
+            const auto recognize_finished = std::chrono::steady_clock::now();
             const std::string normalized = normalizeText(recognized);
-            const bool wake_matched = capture_mode == CaptureMode::Wake &&
-                matchesWakePhrase(normalized, wake_phrase);
+            const auto now = std::chrono::steady_clock::now();
+            bool wake_matched = capture_mode == CaptureMode::Wake &&
+                (
+                    matchesWakePhrase(normalized, wake_phrase) ||
+                    (
+                        now <= activation_prefix_deadline &&
+                        matchesActivationSuffix(normalized)
+                    )
+                );
             bool interrupt_matched = false;
+            if (capture_mode == CaptureMode::Wake) {
+                if (!wake_matched && matchesActivationPrefix(normalized)) {
+                    activation_prefix_deadline =
+                        now + kActivationContinuationWindow;
+                    std::cout << "[WakeWord] Activation prefix accepted; "
+                              << "waiting for dialog-mode suffix" << std::endl;
+                } else if (
+                    wake_matched || now > activation_prefix_deadline
+                ) {
+                    activation_prefix_deadline =
+                        std::chrono::steady_clock::time_point::min();
+                }
+            }
             if (capture_mode == CaptureMode::Interrupt) {
-                const auto now = std::chrono::steady_clock::now();
                 interrupt_matched = matchesInterruptPhrase(normalized) ||
                     (now <= interrupt_prefix_deadline &&
                      matchesInterruptSuffix(normalized));
@@ -624,7 +910,7 @@ int main(int argc, char** argv) {
                 std::cout << "[WakeWord] Matched: " << wake_phrase << std::endl;
                 pa_simple_free(capture);
                 capture = nullptr;
-                if (triggerConversation()) {
+                if (triggerConversation(sample_spec)) {
                     resume_not_before =
                         std::chrono::steady_clock::now() + kTriggerSettleDelay;
                     std::cout << "[WakeWord] Waiting for dialog session marker"
@@ -637,7 +923,19 @@ int main(int argc, char** argv) {
                 std::cout << "[WakeWord] Interrupt matched: 小安停下" << std::endl;
                 pa_simple_free(capture);
                 capture = nullptr;
-                triggerInterruption();
+                const bool interrupted = triggerInterruption();
+                std::cout
+                    << "[WakeWord][latency] stage=interrupt_signal "
+                    << "audio_ms="
+                    << (utterance.size() * 1000 / kSampleRate)
+                    << " endpoint_silence_ms="
+                    << (kInterruptSilenceFrames * kHopSize * 1000 /
+                        kSampleRate)
+                    << " asr_ms="
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(
+                           recognize_finished - recognize_started).count()
+                    << " signal_sent=" << (interrupted ? 1 : 0)
+                    << std::endl;
                 resume_not_before =
                     std::chrono::steady_clock::now() + kTriggerSettleDelay;
             }

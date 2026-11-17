@@ -1,0 +1,11 @@
+.backdrop { position: fixed; z-index: 300; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; background: var(--color-overlay); }
+.sheet { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; padding: var(--space-4) var(--space-6) calc(var(--space-6) + env(safe-area-inset-bottom)); border-radius: var(--radius-card) var(--radius-card) 0 0; background: var(--color-bg); box-shadow: var(--shadow-sheet); }
+.handle { width: 64rpx; height: 6rpx; margin: 0 auto var(--space-6); border-radius: var(--radius-pill); background: var(--color-line); }
+.title { display: block; color: var(--color-title); font-size: 32rpx; font-weight: 700; }
+.desc { display: block; margin-top: var(--space-2); color: var(--color-muted); font-size: 25rpx; line-height: 1.55; }
+.actions { display: flex; gap: var(--space-4); margin-top: var(--space-6); }
+.sheet-button { display: flex; flex: 1 1 0; align-items: center; justify-content: center; box-sizing: border-box; min-width: 0; min-height: 88rpx; margin: 0; padding: 16rpx 12rpx; border: 0; border-radius: var(--radius-control); font-size: 27rpx; font-weight: 650; line-height: 1.5; }
+.sheet-button::after { border: 0; }
+.cancel { background: var(--color-surface); }
+.confirm { color: var(--color-title); background: var(--color-primary); box-shadow: var(--shadow-button); }
+.confirm.danger { color: var(--color-surface); background: var(--color-danger); box-shadow: none; }

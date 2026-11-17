@@ -1,0 +1,15 @@
+{
+  "protocol": "aicat-provision-v1",
+  "deviceId": "dev_11111111111111111111111111111111",
+  "sessionId": "33333333333333333333333333333333",
+  "keyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "nonceHex": "000404040404040404040404",
+  "requestId": "wifi_vector_1",
+  "kind": "configure",
+  "body": {
+    "ssid": "家庭 Wi-Fi ",
+    "password": "test-password",
+    "security": "wpa2-personal"
+  },
+  "ciphertextHex": "07db16b5b8ced1aae39e5467d1cd8572ac504788b46078cf30bbb759c4f7274f3ca082636c9adf6c71af0fcadfdb0ac43a929cf80d6372794b2b8f2e9037d01fd5eeb006c51f9b25e14d4f827533f1f70e9f0be40af1d56e36f9af80f38e"
+}

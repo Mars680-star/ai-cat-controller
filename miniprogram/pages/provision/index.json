@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "安卓安全配网",
+  "enablePullDownRefresh": false,
+  "usingComponents": { "app-page": "/components/app-page/index" }
+}

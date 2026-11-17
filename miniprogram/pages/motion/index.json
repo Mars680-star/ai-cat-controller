@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "动作",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "app-page": "/components/app-page/index",
+    "status-badge": "/components/status-badge/index",
+    "record-disclosure": "/components/record-disclosure/index"
+  }
+}

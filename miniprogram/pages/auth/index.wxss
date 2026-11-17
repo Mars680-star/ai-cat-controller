@@ -1,0 +1,18 @@
+.auth-page { min-height: 100vh; background: var(--color-bg); }
+.product-topbar { display: flex; align-items: center; min-height: 112rpx; padding: 20rpx 32rpx; border-bottom: 4rpx solid var(--color-primary); background: #20231f; color: #fff; }
+.brand-mark { display: flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; margin-right: 18rpx; border-radius: 14rpx; background: #b88a26; font-size: 34rpx; font-weight: 800; }
+.brand-title, .brand-subtitle { display: block; }
+.brand-title { font-size: 30rpx; font-weight: 750; }
+.brand-subtitle { margin-top: 4rpx; color: #c9cdc7; font-size: 20rpx; }
+.login-panel { margin: 36rpx 32rpx; overflow: hidden; border: 1rpx solid var(--color-line); border-radius: var(--radius-card); background: #fff; box-shadow: var(--shadow-card); }
+.login-visual { display: flex; justify-content: center; padding: 40rpx; background: var(--color-primary-soft); }
+.login-visual image { width: 300rpx; height: 300rpx; border-radius: 24rpx; }
+.login-content { padding: 36rpx 32rpx 44rpx; }
+.eyebrow { display: block; color: var(--color-primary-deep); font-size: 23rpx; font-weight: 700; }
+.login-title { display: block; margin-top: 8rpx; color: var(--color-title); font-size: 42rpx; font-weight: 760; }
+.optional { margin-left: 10rpx; color: var(--color-muted); font-size: 20rpx; font-weight: 400; }
+.agreement { display: flex; align-items: center; margin: 28rpx 0 22rpx; color: var(--color-muted); font-size: 22rpx; }
+.agreement checkbox { transform: scale(.78); }
+.agreement-link { min-height: 48rpx; color: var(--color-primary-deep); font-size: 22rpx; }
+.login-btn { width: 100%; }
+.login-note { display: block; margin-top: 20rpx; color: var(--color-muted); font-size: 24rpx; line-height: 1.6; }

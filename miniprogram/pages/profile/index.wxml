@@ -1,0 +1,55 @@
+<app-page authKind="{{liveState.authKind}}" current="settings" liveDevice="{{liveMode}}" loading="{{liveMode ? false : loading}}" error="{{liveMode ? '' : error}}" subtitle="{{liveMode ? '真实设备 · 设置与反馈' : pet ? pet.name + ' · ' + pet.personalityName : '陪伴你的 AI 狐狸'}}" online="{{liveMode && liveOnline}}" statusText="{{liveMode ? liveStatusLabel : '本地预览'}}" bindretry="load">
+  <live-product-panel state="{{liveState}}" busy="{{preferencesLoading}}" error="{{preferencesError}}" caption="本卡片用于登录和选择设备。下方设置与反馈须逐次确认才会保存；不会自动认领或更改设备。" bindenable="useRealDevice" bindlogin="liveLogin" bindrefresh="refreshPreferences" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="showPreview" />
+  <view wx:if="{{liveMode}}" class="preferences-status" role="status"><text class="section-title">{{preferencesStatus}}</text><text class="section-copy">{{preferencesReason}}</text><text class="field-note">{{preferencesKnown ? '真实资料已核验，各按钮按服务端权限开放；保存回执不代表实际发声或客服处理。' : '等待真实资料及权限核验，不使用演示值代替；读取和刷新不会自动保存。'}}</text></view>
+  <view wx:if="{{pet}}">
+    <view class="page-heading-row"><view><text class="eyebrow">基础设置</text><text class="page-title">偏好与账号</text></view><text class="preview-badge">{{liveMode ? '真实资料' : '演示模式'}}</text></view>
+    <view class="account-line"><text class="user-name">{{liveMode ? '当前微信授权设备' : session.displayName || '体验用户'}}</text><text>{{pet.name}} · {{pet.personalityName}}</text></view>
+    <view class="preview-note"><text class="preview-mark">{{liveMode ? 'REAL' : 'UI'}}</text><text>{{liveMode ? '设置影响真实设备；反馈仅保存到设备本地，不代表客服已收到。请勿填写密钥或敏感信息。清记忆、解绑和重置尚未接入。' : '所有设置和危险操作仅用于本地预览，不影响真实设备。反馈不会上传，请勿输入真实密钥或敏感信息。'}}</text></view>
+
+    <view class="settings-section">
+      <view class="section-heading"><text class="section-kicker">让相处更合拍</text><text class="section-title">宠物偏好</text><text class="section-copy">名称、音量与连续聊天时间</text></view>
+      <view class="field"><text class="field-label">狐狸的名字</text><input class="field-input" value="{{name === null ? '' : name}}" maxlength="{{liveMode ? 40 : 20}}" disabled="{{liveMode && !canChangeName}}" placeholder="{{liveMode && !preferencesKnown ? '真实名字未知，请先刷新' : '1–20 个字符'}}" bindinput="inputName" /></view>
+      <view class="range-field"><view class="range-heading"><text>{{liveMode ? '待保存音量偏好' : '音量'}}</text><text class="range-value mono">{{volume === null ? '未知' : volume + '%'}}{{!liveMode && volume === 0 ? ' · 静音预览' : ''}}</text></view><slider wx:if="{{volume !== null}}" min="0" max="100" value="{{volume}}" disabled="{{liveMode && !canChangeVolume}}" activeColor="#967023" backgroundColor="#ece7dc" block-size="22" bindchanging="onVolumeChange" bindchange="onVolumeChange" /><block wx:if="{{liveMode}}"><view class="real-reading"><text>已保存偏好：{{realStoredLabel}}</text><text>实际扬声器：{{realOutputLabel}}</text><text>{{realMutedLabel}}</text></view><text class="field-note">实际读数与保存偏好可能不同，实际输出可高于 100%；本页只允许保存 0–100%。拖动不会发送，只有确认保存才可能改变扬声器。</text></block><text wx:else class="field-note">只改变演示音量，不调整设备扬声器。</text></view>
+      <view class="range-field"><view class="range-heading"><text>连续聊天时间</text><text class="range-value mono">{{followUpSeconds === null ? '未知' : followUpSeconds + ' 秒'}}</text></view><slider wx:if="{{followUpSeconds !== null}}" min="5" max="120" step="{{liveMode ? 1 : 5}}" value="{{followUpSeconds}}" disabled="{{liveMode && !canChangeFollowUp}}" activeColor="#967023" backgroundColor="#ece7dc" block-size="22" bindchanging="onFollowChange" bindchange="onFollowChange" /><text class="field-note">5–120 秒 · 回答后等待继续追问的时间{{liveMode ? ' · 来源：' + realFollowSource : ''}}</text></view>
+      <view wx:if="{{!liveMode}}" class="field"><text class="field-label">访问密钥 <text class="optional">未来接口占位</text></text><input class="field-input" password value="{{apiKey}}" placeholder="无需填写真实密钥" bindinput="inputApiKey" /><text class="field-note">不保存、不用于鉴权，离开页面即清空。</text></view>
+      <text wx:if="{{settingsDirty}}" class="pending-note">{{liveMode ? '有未保存的真实偏好，刷新不会覆盖正在编辑的字段' : '有尚未保存的本地偏好'}}</text>
+      <text wx:if="{{liveMode && settingsDraftError}}" class="request-error" role="alert">{{settingsDraftError}}</text>
+      <button class="btn btn-primary save-action" bindtap="saveSettings" loading="{{saving}}" disabled="{{liveMode ? !canSaveReal : saving || processingDanger}}">{{saving ? '正在保存…' : liveMode ? '确认保存真实设置' : '保存设置'}}</button>
+      <view wx:if="{{liveMode && settingsMessage}}" class="receipt-note" role="status"><text>{{settingsMessage}}</text><view wx:for="{{settingsSteps}}" wx:key="name" class="receipt-step"><text>{{item.name}}</text><text>{{item.status}}</text></view></view>
+      <button wx:if="{{liveMode && canCheckSettings}}" class="btn btn-secondary" bindtap="checkPreferenceReceipt" data-kind="settings" loading="{{settingsChecking}}" disabled="{{settingsChecking || saving}}">核对原设置回执</button>
+      <button wx:if="{{liveMode}}" class="refresh-link" bindtap="refreshPreferences" disabled="{{preferencesLoading}}">刷新真实设置与实际读数</button>
+    </view>
+
+    <view class="settings-section feedback-section">
+      <view class="section-heading"><text class="section-kicker">一起把体验变好</text><text class="section-title">异常反馈</text><text class="section-copy">记录设备、对话、动作或账号问题</text></view>
+      <view class="field"><text class="field-label">问题类型</text><picker range="{{feedbackTypes}}" value="{{feedbackIndex}}" disabled="{{liveMode && !preferencesKnown}}" bindchange="onFeedbackType"><view class="field-input picker-value"><text>{{feedbackTypes[feedbackIndex]}}</text><text class="picker-arrow">⌄</text></view></picker></view>
+      <view class="field"><text class="field-label">问题描述</text><textarea class="field-textarea" maxlength="{{liveMode ? 1000 : 500}}" value="{{feedbackContent}}" disabled="{{liveMode && !preferencesKnown}}" placeholder="{{liveMode ? '2–500 字，可换行；仅保存到设备本地…' : '说说发生了什么，仅演示不会上传…'}}" bindinput="inputFeedback" /><view class="field-hint"><text>2–500 字{{liveMode ? ' · 支持换行、制表符' : ''}}</text><text>剩余 {{feedbackRemaining}} 字</text></view></view>
+      <text wx:if="{{liveMode && feedbackDraftError}}" class="request-error" role="alert">{{feedbackDraftError}}</text>
+      <button class="btn btn-secondary save-action" bindtap="submitFeedback" loading="{{feedbackSubmitting}}" disabled="{{liveMode ? !canFeedbackReal : feedbackSubmitting || processingDanger}}">{{feedbackSubmitting ? liveMode ? '正在保存…' : '正在演示…' : liveMode ? '确认保存本地反馈' : '提交反馈'}}</button>
+      <view wx:if="{{liveMode && feedbackMessage}}" class="receipt-note" role="status"><text>{{feedbackMessage}}</text><view wx:for="{{feedbackSteps}}" wx:key="name" class="receipt-step"><text>{{item.name}}</text><text>{{item.status}}</text></view></view>
+      <button wx:if="{{liveMode && canCheckFeedback}}" class="btn btn-secondary" bindtap="checkPreferenceReceipt" data-kind="feedback" loading="{{feedbackChecking}}" disabled="{{feedbackChecking || feedbackSubmitting}}">核对原反馈回执</button>
+      <text wx:if="{{liveMode}}" class="field-note">反馈只保存在所选设备，不是客服工单；正文不保存到小程序本地存储。</text>
+    </view>
+
+    <view class="data-section-heading"><text class="section-title">记忆与数据</text><text class="section-copy">以下操作范围不同，确认前请仔细阅读。</text></view>
+    <view class="danger-zone">
+      <view class="danger-copy-block"><text class="danger-title">清除全部记忆</text><text class="danger-copy">短期原文与长期结构化记忆一并清除，完整对话记录仍保留；新对话会重新形成记忆。</text><text wx:if="{{memoryNotice}}" class="memory-note">{{memoryNotice}}</text></view>
+      <button class="btn btn-danger" data-kind="memory" bindtap="showDanger" disabled="{{liveMode || processingDanger}}">{{liveMode ? '一键清除记忆 · 尚未接入' : '一键清除记忆'}}</button>
+      <text class="scope-note">{{liveMode ? '尚未接入：不会删除真实设备的记忆。' : '仅演示清除，不影响真实设备记忆。'}}</text>
+    </view>
+    <view class="danger-zone">
+      <view class="danger-copy-block"><text class="danger-title">解绑设备</text><text class="danger-copy">解除当前账号与设备的绑定，保留设备性格与成长，原用户历史不会交给新用户。</text></view>
+      <button class="btn btn-danger" data-kind="unbind" bindtap="showDanger" disabled="{{liveMode || processingDanger}}">{{liveMode ? '解除绑定 · 尚未接入' : '解除绑定'}}</button>
+      <text class="scope-note">{{liveMode ? '尚未接入：不会解除设备归属；退出真实登录也不等于解绑。' : '仅解除本地演示绑定，真实设备不受影响。'}}</text>
+    </view>
+    <view class="danger-zone critical">
+      <view class="danger-copy-block"><text class="danger-title">重新开始</text><text class="danger-copy">{{liveMode ? '格式化可能清除账号、绑定、性格、亲密度、记忆、动作、对话与反馈。本页尚未接入，不会执行。' : '演示重置账号、绑定、性格、亲密度、记忆、动作、对话与反馈。与单独清除记忆不同，对话也在重置范围内。'}}</text></view>
+      <button class="btn reset-button" data-kind="reset" bindtap="showDanger" disabled="{{liveMode || processingDanger}}">{{liveMode ? '重置全部数据 · 尚未接入' : '重置全部数据'}}</button>
+      <text class="scope-note">{{liveMode ? '尚未接入：不会格式化设备、删除记录或更改云端授权。' : '仅本地预览；不会更改云端授权或设备设置。'}}</text>
+    </view>
+    <button class="btn logout-button" bindtap="logout" disabled="{{processingDanger}}">{{liveMode ? '退出真实设备登录' : '退出当前账号'}}</button>
+    <text class="logout-note">{{liveMode ? '仅注销当前真实业务会话，不会解绑设备；未决请求标记仍保留。' : '退出本地演示账号，不会解绑真实设备。'}}</text>
+
+    <confirm-sheet wx:if="{{!liveMode}}" visible="{{dangerKind !== ''}}" title="{{danger.title}}" description="{{danger.description}}" confirmText="{{danger.confirmText}}" danger loading="{{processingDanger}}" bindcancel="hideDanger" bindconfirm="confirmDanger" />
+  </view>
+</app-page>

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 class DeviceStatusData(BaseModel):
     adapter_mode: str
+    device_serial: str | None = None
     connected: bool
     hostname: str
     platform: str
@@ -18,6 +19,8 @@ class DeviceStatusData(BaseModel):
     dialog_state: str
     head_state: str
     tail_state: str
+    motion_enabled: bool = True
+    has_tail: bool = True
     action_count: int
     last_action_at: str | None
     last_error: str | None

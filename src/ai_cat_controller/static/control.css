@@ -2057,6 +2057,144 @@ textarea:hover {
   border-top: 0;
 }
 
+.mijia-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  gap: 32px;
+  padding: 28px;
+  background: #fff8dc;
+  border: 1px solid #e7cf75;
+}
+
+.mijia-overview-copy h3 {
+  margin-bottom: 8px;
+  font-size: 1.32rem;
+}
+
+.mijia-overview-copy > p:not(.section-kicker) {
+  max-width: 640px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.mijia-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.mijia-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid #eadb9e;
+}
+
+.mijia-facts div {
+  min-width: 0;
+  padding: 16px;
+  border-right: 1px solid #eadb9e;
+  border-bottom: 1px solid #eadb9e;
+}
+
+.mijia-facts div:nth-child(2n) {
+  border-right: 0;
+}
+
+.mijia-facts div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.mijia-facts dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.mijia-facts dd {
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.mijia-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.mijia-capability-card,
+.mijia-steps {
+  padding: 22px;
+  background: #ffffff;
+  border: 1px solid #dfe4dd;
+}
+
+.mijia-capability-list {
+  display: grid;
+  gap: 8px;
+  min-height: 120px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mijia-capability-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f7f9f6;
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+
+.mijia-capability-list small {
+  color: var(--muted);
+}
+
+.mijia-steps {
+  margin-top: 24px;
+}
+
+.mijia-steps ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mijia-steps li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mijia-steps li > span {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: #9a741b;
+  border-radius: 50%;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.mijia-steps p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .danger-zone {
   background: #fffafa;
   border-color: #e5c4bf;
@@ -2084,8 +2222,13 @@ textarea:hover {
   }
 
   .personality-insight-grid,
-  .settings-layout {
+  .settings-layout,
+  .mijia-overview {
     grid-template-columns: 1fr;
+  }
+
+  .mijia-capability-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .behavior-section {
@@ -2105,7 +2248,7 @@ textarea:hover {
   .bottom-nav {
     min-height: 68px;
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     overflow-x: visible;
     padding-inline: max(2px, env(safe-area-inset-left));
   }
@@ -2184,6 +2327,30 @@ textarea:hover {
 
   .settings-layout {
     gap: 34px;
+  }
+
+  .mijia-overview {
+    padding: 20px;
+  }
+
+  .mijia-capability-grid,
+  .mijia-steps ol {
+    grid-template-columns: 1fr;
+  }
+
+  .mijia-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .mijia-facts div,
+  .mijia-facts div:nth-child(2n),
+  .mijia-facts div:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid #eadb9e;
+  }
+
+  .mijia-facts div:last-child {
+    border-bottom: 0;
   }
 
   .danger-zone {

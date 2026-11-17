@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ai_cat_controller.core.errors import CommandNotAllowedError
+from ai_cat_controller.core.operation_gate import current_process_work_lease
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +30,7 @@ class CommandRunner:
         allowed_commands: dict[str, frozenset[tuple[str, ...]]] | None = None,
         max_output_bytes: int = 16_384,
         terminate_grace_seconds: float = 2.0,
-        environment: Mapping[str, str] | None = None,
+        environment: Mapping[str, str | None] | None = None,
     ) -> None:
         self._allowed_executables = allowed_executables
         self._allowed_services = allowed_services
@@ -79,32 +80,45 @@ class CommandRunner:
 
     async def run(self, executable: str, args: list[str]) -> CommandResult:
         self._validate(executable, args)
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, **self._environment},
-        )
+        environment = dict(os.environ)
+        for key, value in self._environment.items():
+            if value is None:
+                environment.pop(key, None)
+            else:
+                environment[key] = value
+        lease = current_process_work_lease()
+        inherited_fd = lease.duplicate_fd() if lease is not None else None
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self._timeout_seconds
+            process = await asyncio.create_subprocess_exec(
+                executable,
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=environment,
+                **({"pass_fds": (inherited_fd,)} if inherited_fd is not None else {}),
             )
-        except TimeoutError:
-            stdout, stderr = await self._terminate_process(process)
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self._timeout_seconds
+                )
+            except TimeoutError:
+                stdout, stderr = await self._terminate_process(process)
+                return CommandResult(
+                    returncode=process.returncode if process.returncode is not None else -1,
+                    stdout=self._decode(stdout),
+                    stderr=self._decode(stderr),
+                    timed_out=True,
+                )
+            except asyncio.CancelledError:
+                await self._terminate_process(process)
+                raise
+
             return CommandResult(
-                returncode=process.returncode if process.returncode is not None else -1,
+                returncode=process.returncode or 0,
                 stdout=self._decode(stdout),
                 stderr=self._decode(stderr),
-                timed_out=True,
+                timed_out=False,
             )
-        except asyncio.CancelledError:
-            await self._terminate_process(process)
-            raise
-
-        return CommandResult(
-            returncode=process.returncode or 0,
-            stdout=self._decode(stdout),
-            stderr=self._decode(stderr),
-            timed_out=False,
-        )
+        finally:
+            if inherited_fd is not None:
+                os.close(inherited_fd)

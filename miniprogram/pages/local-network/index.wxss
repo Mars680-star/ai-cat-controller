@@ -1,0 +1,49 @@
+.wizard-heading { padding: 28rpx 28rpx 18rpx; }
+.wizard-heading .page-title, .wizard-intro { display: block; }
+.wizard-heading .page-title { margin-bottom: 12rpx; font-size: 40rpx; }
+.wizard-intro { color: #777d73; font-size: 26rpx; line-height: 1.6; }
+.wizard-steps { display: flex; align-items: center; margin: 0 28rpx 26rpx; }
+.wizard-step { display: flex; flex-direction: column; align-items: center; gap: 10rpx; color: #8d9189; font-size: 22rpx; white-space: nowrap; }
+.step-dot { display: flex; align-items: center; justify-content: center; width: 48rpx; height: 48rpx; border-radius: 50%; background: #eaece6; font-weight: 700; font-size: 24rpx; }
+.wizard-step.active { color: #8b661e; font-weight: 700; }
+.wizard-step.active .step-dot { background: #fff0b9; border: 2rpx solid #c59b35; box-sizing: border-box; }
+.wizard-step.done .step-dot { color: #fff; background: #557d68; }
+.step-line { flex: 1; height: 2rpx; margin: 0 16rpx 30rpx; background: #dde1d8; }
+.network-card, .disclosure-card { margin: 20rpx 28rpx; padding: 28rpx; background: #fff; border: 1rpx solid #e1e4db; border-radius: 24rpx; }
+.current-step { border-color: #e8d298; }
+.step-kicker, .section-title, .section-copy, .field-note, .notice, .error-copy, .working { display: block; }
+.step-kicker { margin-bottom: 12rpx; color: #967023; font-size: 22rpx; font-weight: 700; }
+.section-title { margin-bottom: 14rpx; font-size: 34rpx; font-weight: 700; line-height: 1.5; }
+.section-copy { color: #72796f; line-height: 1.7; font-size: 27rpx; }
+.field-note { margin-top: 14rpx; color: #858b80; line-height: 1.7; font-size: 24rpx; }
+.network-button { margin: 28rpx 0 0; padding: 20rpx; border-radius: 16rpx; font-size: 29rpx; line-height: 1.5; background: #916b20; color: #fff; }
+.network-button.secondary { background: #f3f3ee; color: #715723; }
+.network-button[disabled], .location-button[disabled] { opacity: .45; }
+.hotspot-summary { margin-top: 24rpx; padding: 20rpx; border-radius: 16rpx; background: #fff8de; }
+.hotspot-summary .field-note:first-child { margin-top: 0; }
+.ap-name { display: block; margin: 12rpx 0; font-size: 34rpx; font-weight: 700; word-break: break-all; }
+.hotspot-password { font-size: 27rpx; }
+.inline-pair { margin-top: 22rpx; }
+.location-choice { display: flex; gap: 12rpx; margin-bottom: 18rpx; }
+.location-button { flex: 1; padding: 13rpx 10rpx; border: 1rpx solid #e4e4dc; border-radius: 14rpx; font-size: 24rpx; line-height: 1.4; background: #f6f6f1; color: #777d73; }
+.location-button.selected { background: #fff1c2; color: #755718; border-color: #dfbf65; font-weight: 700; }
+.reconnect-option { margin-top: 22rpx; padding-top: 10rpx; border-top: 1rpx solid #edf0e8; }
+.text-button { padding: 12rpx 0; margin: 0; text-align: left; font-size: 26rpx; color: #967023; background: transparent; line-height: 1.5; }
+.text-button::after, .disclosure-toggle::after, .location-button::after { border: 0; }
+.notice { margin-top: 20rpx; font-size: 25rpx; line-height: 1.7; color: #8c6927; }
+.error-copy { margin-top: 20rpx; font-size: 25rpx; line-height: 1.7; color: #a3493e; }
+.working { color: #967023; padding: 20rpx 0 0; font-size: 25rpx; }
+.disclosure-card { padding: 0 24rpx; border-color: #e7e9e2; }
+.disclosure-toggle { display: flex; justify-content: space-between; padding: 22rpx 0; border: 0; background: transparent; line-height: 1.5; font-size: 25rpx; text-align: left; color: #70776c; }
+.details-content { padding-bottom: 24rpx; border-top: 1rpx solid #edf0e8; }
+.identifiers { padding: 14rpx 18rpx; margin-top: 16rpx; background: #f7f7f1; border-radius: 14rpx; }
+.identifiers text { display: block; margin: 8rpx 0; font-size: 22rpx; line-height: 1.6; word-break: break-all; color: #7e8478; }
+.inline-provision { margin: 0 0 22rpx; }
+.flow-footer { margin: 0 28rpx; }
+.closeout-card { border-color: #dfc8a0; background: #fffdf6; }
+.closeout-card .section-title { font-size: 30rpx; }
+.closeout-facts { display: flex; flex-direction: column; gap: 20rpx; margin-top: 24rpx; }
+.closeout-fact { display: flex; align-items: flex-start; gap: 12rpx; min-height: 88rpx; box-sizing: border-box; padding: 12rpx 0; }
+.closeout-fact checkbox { flex-shrink: 0; }
+.closeout-fact text { min-width: 0; color: #666f61; font-size: 24rpx; line-height: 1.65; }
+.closeout-submit { background: #775e35; }

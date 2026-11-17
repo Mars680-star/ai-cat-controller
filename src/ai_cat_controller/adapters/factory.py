@@ -1,19 +1,14 @@
-"""Construct Mock/K1 adapters and define the executable command allowlist.
-
-Maintenance notes:
-- Every new native motor preset must be added here explicitly and covered by a
-  command-runner test.
-- Do not replace exact argv tuples with command prefixes or free-form strings.
-"""
+"""Adapter construction."""
 
 from ai_cat_controller.adapters.base import AiCatAdapter
 from ai_cat_controller.adapters.command_runner import CommandRunner
 from ai_cat_controller.adapters.local_k1 import LocalK1Adapter
 from ai_cat_controller.adapters.mock import MockAiCatAdapter
 from ai_cat_controller.core.config import Settings
+from ai_cat_controller.core.operation_gate import DeviceOperationGate
 
 
-def create_adapter(settings: Settings) -> AiCatAdapter:
+def create_adapter(settings: Settings, *, operation_gate: DeviceOperationGate | None = None) -> AiCatAdapter:
     if settings.hardware_driver == "mock":
         return MockAiCatAdapter(settings.service_names)
 
@@ -80,6 +75,10 @@ def create_adapter(settings: Settings) -> AiCatAdapter:
             pulseaudio_ctl_binary: frozenset(pulseaudio_commands),
         },
         timeout_seconds=settings.command_timeout_seconds,
-        environment={"PULSE_SERVER": settings.pulse_server},
+        environment={
+            "PULSE_SERVER": settings.pulse_server,
+            "AI_CAT_PROCESS_GATE_PATH": (str(settings.process_gate_path)
+                if settings.process_gate_path is not None else None),
+        },
     )
-    return LocalK1Adapter(settings, runner)
+    return LocalK1Adapter(settings, runner, operation_gate=operation_gate)

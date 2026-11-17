@@ -1,0 +1,52 @@
+<app-page authKind="{{liveState.authKind}}" current="personality" liveDevice="{{liveMode}}" loading="{{false}}" error="{{liveMode ? '' : error}}" subtitle="{{pet ? pet.name + ' · ' + pet.personalityName : 'AI 狐狸伴侣'}}" online="{{liveMode ? liveOnline : true}}" statusText="{{liveMode ? liveStatusLabel : '界面预览'}}" bindretry="load">
+  <live-product-panel state="{{liveState}}" busy="{{productLoading}}" error="{{productError}}" bindenable="useRealDevice" bindlogin="liveLogin" bindrefresh="liveProductRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="showPreview" />
+  <loading-skeleton wx:if="{{!liveMode && loading || liveMode && productLoading && !growth}}" />
+  <view wx:if="{{growth}}">
+    <view class="page-heading">
+      <text class="eyebrow">性格成长</text>
+      <text class="page-title">独一无二的陪伴</text>
+      <text class="page-description">基础性格与长期互动，共同组成它的表达和陪伴方式。</text>
+      <text wx:if="{{liveMode}}" class="section-help">真实成长数据 · 更新于 {{sampledTime}}</text>
+    </view>
+
+    <view class="overview-card">
+      <view class="overview-top"><text class="section-kicker">当前陪伴性格</text><text class="state-label {{growth.enabled ? '' : 'is-paused'}}">{{growth.enabled ? '持续成长中' : '成长已暂停'}}</text></view>
+      <text class="overview-title">{{pet.personalityName}}</text>
+      <text class="overview-copy">长期互动会丰富六维倾向与成长标签，不会把当前选择的性格替换成另一个。</text>
+      <view class="tag-heading"><text>成长标签</text><text>{{growth.tags.length}} 个</text></view>
+      <view wx:if="{{growth.tags.length}}" class="tag-row"><text wx:for="{{growth.tags}}" wx:key="*this" class="tag">{{item}}</text></view>
+      <text wx:else class="empty-copy">相处还在慢慢积累。继续交流，它会逐渐形成自己的表达倾向。</text>
+    </view>
+
+    <view class="section-heading"><text class="section-title">六维成长倾向</text><text class="section-help">分值用于呈现当前倾向，没有好坏之分。</text></view>
+    <view class="attributes">
+      <view wx:for="{{growth.attributes}}" wx:key="id" wx:for-item="attribute" class="attribute">
+        <view class="attribute-top"><text class="attribute-name">{{attribute.name}}</text><view class="attribute-score"><text class="attribute-value mono">{{attribute.value}}</text><text class="score-limit">/ 100</text></view></view>
+        <view class="scale"><view style="width: {{attribute.value}}%;"></view></view>
+        <text class="attribute-band">{{attribute.band}}</text>
+      </view>
+    </view>
+
+    <view class="section-heading"><text class="section-title">当前行为画像</text><text class="section-help">把抽象的成长，变成看得见的陪伴细节。</text></view>
+    <view class="portrait"><view wx:for="{{growth.portraits}}" wx:key="*this" class="portrait-item"><text class="portrait-dot"></text><text>{{item}}</text></view><text wx:if="{{!growth.portraits.length}}" class="empty-copy">更多陪伴后，这里会逐渐形成行为画像。</text></view>
+
+    <view class="records"><record-disclosure title="最近成长" count="{{growth.recent.length}}">
+      <view wx:for="{{growth.recent}}" wx:key="id" class="recent-row"><view class="recent-copy"><text class="recent-title">{{item.reason}}</text><text class="recent-time">{{item.time}}</text><text wx:if="{{liveMode && (item.topic || item.emotion)}}" class="recent-time">{{item.topic ? '话题：' + item.topic : ''}} {{item.emotion ? '情绪：' + item.emotion : ''}}</text><text class="recent-value">{{item.change}}</text></view></view>
+      <text wx:if="{{!growth.recent.length}}" class="empty-copy">还没有成长记录，从一次交流开始。</text>
+    </record-disclosure></view>
+
+    <view wx:if="{{liveMode}}" class="records"><record-disclosure title="成长标签历史" count="{{tagHistory.length}}"><view wx:for="{{tagHistory}}" wx:key="id" class="recent-row"><view class="recent-copy"><text class="recent-title">{{item.name}} · {{item.active ? '当前生效' : '历史标签'}}</text><text class="recent-time">{{item.description}}</text><text class="recent-time">获得于 {{item.time}}</text><text wx:if="{{item.replacedTime}}" class="recent-time">替换于 {{item.replacedTime}}</text></view></view><text wx:if="{{!tagHistory.length}}" class="empty-copy">暂无真实标签历史，继续自然互动即可，不会填入示例标签。</text></record-disclosure></view>
+
+    <view wx:if="{{!liveMode && growth.debugValuesVisible}}" class="experience-panel">
+      <text class="section-kicker">本地体验工具</text><text class="section-title">成长体验加速</text>
+      <text class="experience-copy">模拟多次互动，预览分值、标签与记录的变化。仅更新本地演示数据，不代表真实陪伴经历。</text>
+      <text class="field-label">互动类型</text>
+      <picker range="{{debugEvents}}" value="{{debugIndex}}" bindchange="onDebugEvent" disabled="{{debugSubmitting}}"><view class="experience-control picker-control"><text>{{debugEvents[debugIndex]}}</text><text>选择 ›</text></view></picker>
+      <text class="field-label">互动次数</text>
+      <view class="count-field"><input class="count-input" type="number" maxlength="3" value="{{debugCount}}" disabled="{{debugSubmitting}}" bindinput="inputDebugCount" aria-label="成长体验互动次数"/><text>1–500 次</text></view>
+      <text wx:if="{{debugError}}" class="form-error">{{debugError}}</text>
+      <button class="btn btn-secondary generate-button" bindtap="generateGrowth" loading="{{debugSubmitting}}" disabled="{{debugSubmitting}}">{{debugSubmitting ? '正在更新预览' : '生成成长事件'}}</button>
+      <text wx:if="{{debugResult}}" class="experience-result">{{debugResult}}</text>
+    </view>
+  </view>
+</app-page>

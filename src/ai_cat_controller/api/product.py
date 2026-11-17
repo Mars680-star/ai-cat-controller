@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Path, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, status
 
 from ai_cat_controller.api.dependencies import get_services
 from ai_cat_controller.core.state import AppServices
 from ai_cat_controller.schemas.common import ApiResponse
 from ai_cat_controller.schemas.product import (
     BindPetRequest,
+    ClearDialogMemoryRequest,
     DebugGrowthRequest,
     ExecuteActionRequest,
     FeedbackRequest,
@@ -30,9 +32,15 @@ def _response(message: str, data: Any) -> ApiResponse[Any]:
 
 
 async def mock_user_id(
+    request: Request,
     services: Annotated[AppServices, Depends(get_services)],
     session_token: Annotated[str | None, Header(alias="X-Mock-Session")] = None,
 ) -> str:
+    if request.headers.getlist('x-local-gateway'):
+        principal = getattr(request.state,'local_gateway_principal',None)
+        if principal is None:
+            raise HTTPException(status_code=401,detail='本机网关授权无效')
+        return principal.user_id
     return services.product.resolve_session(session_token)
 
 
@@ -54,10 +62,15 @@ async def personalities(
 
 @router.get("/pets", response_model=ApiResponse[list[dict[str, Any]]])
 async def pets(
+    request: Request,
     services: Annotated[AppServices, Depends(get_services)],
     user_id: Annotated[str, Depends(mock_user_id)],
 ) -> ApiResponse[Any]:
-    return _response("宠物列表", await services.product.list_pets(user_id))
+    items = await services.product.list_pets(user_id)
+    principal = getattr(request.state,'local_gateway_principal',None)
+    if principal is not None:
+        items = [item for item in items if item.get('pet_id') == principal.pet_id]
+    return _response("宠物列表", items)
 
 
 @router.post("/pets/bind", response_model=ApiResponse[dict[str, Any]])
@@ -275,6 +288,69 @@ async def dialog_conversation_detail(
         conversation_id,
     )
     return _response("会话详情已同步", result)
+
+
+async def _readonly_query_guard(request: Request) -> None:
+    # This capability intentionally has no sync/limit/file or arbitrary cursor
+    # options. A future client must not silently turn it into the old importer.
+    if request.url.query:
+        raise HTTPException(status_code=400, detail="只读对话不接受查询参数")
+    async def empty_body():
+        async for chunk in request.stream():
+            if chunk:
+                raise HTTPException(status_code=400, detail="只读对话不接受请求内容")
+    try:
+        await asyncio.wait_for(empty_body(), 1.0)
+    except TimeoutError:
+        raise HTTPException(status_code=400, detail="只读对话请求内容不可用") from None
+
+
+@router.get("/pets/{pet_id}/dialog-readonly/status", response_model=ApiResponse[dict[str, Any]])
+async def dialog_readonly_status(
+    pet_id: str, request: Request,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    await _readonly_query_guard(request)
+    return _response("只读语音状态", await services.product.dialog_readonly_status(user_id, pet_id))
+
+
+@router.get("/pets/{pet_id}/dialog-readonly/conversations", response_model=ApiResponse[dict[str, Any]])
+async def dialog_readonly_conversations(
+    pet_id: str, request: Request,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    await _readonly_query_guard(request)
+    return _response("已保存会话，只读", await services.product.dialog_readonly_conversations(user_id, pet_id))
+
+
+@router.get("/pets/{pet_id}/dialog-readonly/conversations/{conversation_id}", response_model=ApiResponse[dict[str, Any]])
+async def dialog_readonly_conversation(
+    pet_id: str, conversation_id: Annotated[str, Path(min_length=4, max_length=256)], request: Request,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    await _readonly_query_guard(request)
+    return _response("已保存会话详情，只读", await services.product.dialog_readonly_conversation(user_id, pet_id, conversation_id))
+
+
+@router.post(
+    "/pets/{pet_id}/memory/clear",
+    response_model=ApiResponse[dict[str, Any]],
+)
+async def clear_dialog_memory(
+    pet_id: str,
+    request: ClearDialogMemoryRequest,
+    services: Annotated[AppServices, Depends(get_services)],
+    user_id: Annotated[str, Depends(mock_user_id)],
+) -> ApiResponse[Any]:
+    result = await services.product.clear_dialog_memory(
+        user_id=user_id,
+        pet_id=pet_id,
+        request_id=request.request_id,
+    )
+    return _response("短期与长期记忆已清除，对话记录仍然保留", result)
 
 
 @router.patch(

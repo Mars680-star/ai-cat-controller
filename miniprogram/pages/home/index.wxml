@@ -1,0 +1,40 @@
+<app-page authKind="{{liveState.authKind}}" current="home" liveDevice="{{liveMode}}" loading="{{false}}" error="{{liveMode ? '' : error}}" subtitle="{{liveMode ? '我的 AI 猫 · 真实状态' : dashboard ? dashboard.pet.name + ' · ' + dashboard.pet.personalityName : '陪伴你的智能宠物'}}" online="{{liveMode ? liveOnline : dashboard && dashboard.pet.connectionState !== 'offline'}}" statusText="{{liveMode ? liveStatusLabel : dashboard && dashboard.pet.connectionState === 'offline' ? '设备离线' : '界面预览'}}" bindretry="retry">
+  <live-product-panel wx:if="{{liveMode}}" state="{{liveState}}" busy="{{productLoading}}" error="{{productError}}" bindlogin="liveLogin" bindrefresh="liveProductRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="showPreview" />
+  <view wx:else class="real-device-shortcut">
+    <text class="real-device-title">连接我的 AI 猫</text>
+    <text class="real-device-copy">在连接页扫码直连设备；当前下方为演示数据。</text>
+    <button class="real-device-button" bindtap="openRealDevice">连接我的设备</button>
+  </view>
+  <loading-skeleton wx:if="{{!liveMode && loading || liveMode && productLoading && !dashboard}}" />
+  <view wx:if="{{dashboard}}" class="home-content">
+    <view class="page-heading-row"><view><text class="eyebrow">{{liveMode ? '真实宠物主页' : '宠物主页'}}</text><text class="page-title">{{dashboard.pet.name}}</text></view><text class="state-label {{dashboard.pet.connectionState === 'offline' || dashboard.pet.connectionState === 'unverified' ? 'offline' : ''}}">{{dashboard.pet.connectionState === 'online' ? '在线' : dashboard.pet.connectionState === 'weak' ? '弱网' : dashboard.pet.connectionState === 'unverified' ? '连接未验证' : '离线'}}</text></view>
+    <text wx:if="{{liveMode}}" class="live-sample">真实业务数据 · 更新于 {{sampledTime}}</text>
+
+    <view wx:if="{{dashboard.pet.connectionState === 'offline'}}" class="notice notice-danger">设备暂时离线，历史记录仍可查看。</view>
+    <view wx:elif="{{dashboard.pet.connectionState === 'weak'}}" class="notice notice-info">连接不稳定，请避免连续重复操作。</view>
+
+    <view class="home-overview">
+      <image src="{{dashboard.pet.avatarUrl}}" mode="aspectFill" />
+      <view class="personality-summary"><text class="personality-code">{{dashboard.pet.personalityId}}</text><text class="personality-name">{{dashboard.pet.personalityName}}</text><text class="personality-description">{{dashboard.pet.personalityDescription}}</text><text class="language-style">{{dashboard.pet.languageStyle}}</text></view>
+    </view>
+
+    <view class="metric-grid home-metrics">
+      <button class="metric accent-green" bindtap="openGrowth"><text>亲密度</text><text class="metric-value mono">{{dashboard.intimacy.points}}</text><text class="metric-note">{{dashboard.intimacy.badge}} {{dashboard.intimacy.levelName}}</text></button>
+      <button class="metric accent-yellow" bindtap="openDevice"><text>电量</text><text class="metric-value mono">{{batteryLabel}}</text><text class="metric-note">{{chargeLabel}}</text></button>
+      <button class="metric accent-coral" bindtap="openDevice"><text>网络</text><text class="metric-value">{{networkLabel}}</text><text class="metric-note">{{dashboard.pet.networkName}}</text></button>
+    </view>
+
+    <view class="address-band"><text>现在它会称呼你</text><text class="address-value">“{{dashboard.pet.address}}”</text></view>
+
+    <view class="companion-section">
+      <view class="home-section-heading"><text>今天的陪伴</text><text class="muted">{{liveMode && dashboard.today.interactionCount === null ? '今日总数暂未提供' : dashboard.today.interactionCount + ' 次互动'}}</text></view>
+      <text wx:if="{{liveMode}}" class="home-row-copy">只展示最近 30 条记录，不把部分记录推算为全天合计。</text>
+      <view class="companion-row"><image src="/assets/icons/clock.png" class="home-row-icon"/><view><text class="home-row-title">最近一次互动</text><text class="home-row-copy">{{dashboard.today.lastInteraction}}</text></view></view>
+    </view>
+    <view class="companion-section">
+      <view class="home-section-heading"><text>最近动态</text><text class="muted">{{liveMode ? '真实互动 · 最近 30 条' : '演示时间线'}}</text></view>
+      <view wx:for="{{dashboard.recent}}" wx:key="id" class="home-activity"><view class="activity-dot"></view><view class="activity-content"><text class="home-row-title">{{item.title}}</text><text class="home-row-copy">{{item.type}} · {{item.time}}</text></view></view>
+      <text wx:if="{{!dashboard.recent.length}}" class="home-row-copy">暂无互动记录。</text>
+    </view>
+  </view>
+</app-page>

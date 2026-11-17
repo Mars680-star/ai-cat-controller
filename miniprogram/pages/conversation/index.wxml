@@ -1,0 +1,30 @@
+<app-page authKind="{{liveState.authKind}}" noTab liveDevice="{{detailLive}}" loading="{{false}}" error="{{detailLive ? '' : error}}" subtitle="{{pet ? pet.name + ' · 会话详情' : 'AI 狐狸伴侣'}}" online="{{detailLive ? liveOnline : true}}" statusText="{{detailLive ? liveStatusLabel : '界面预览'}}" bindretry="load">
+  <live-product-panel wx:if="{{detailLive}}" state="{{liveState}}" busy="{{liveDetailLoading}}" error="{{liveDetailError}}" selectionLocked="{{true}}" previewLabel="返回会话列表" caption="只读取本次链接对应设备的已保存会话；不发送文字、不唤醒或打断。需要切换设备时，请返回列表。" bindlogin="liveLogin" bindrefresh="liveDetailRefresh" bindlist="liveList" bindselect="liveSelect" bindlogout="liveLogout" bindpreview="goBack" />
+  <loading-skeleton wx:if="{{!detailLive && loading || detailLive && liveDetailLoading && !conversation}}" />
+  <view class="page-heading"><text class="eyebrow">对话历史</text><text class="page-title">这一次交流</text><text class="page-description">{{detailLive ? '只读展示设备库已经保存的消息，不包含尚未同步入库的语音内容。' : '完整保留这一段问答，随时回来看看。'}}</text></view>
+  <view wx:if="{{conversation}}">
+    <view class="session-head">
+      <view class="session-top"><text class="session-title">{{startedLabel}}</text><status-badge state="{{conversation.status === 'complete' ? 'complete' : 'neutral'}}" text="{{detailLive ? conversation.statusText : conversation.status === 'complete' ? '已完成' : conversation.status === 'waiting_assistant' ? '等待回答' : '仅有回答'}}"/></view>
+      <text class="session-meta">{{conversation.sourceText || '语音互动'}} · 持续 {{conversation.durationText}}</text>
+      <text class="session-meta">{{conversation.messages.length}} 条消息 · {{detailLive ? '当前读取窗口' : '本地演示记录'}}</text>
+      <text wx:if="{{detailLive}}" class="session-meta">设备库计数 {{conversation.messageCount}} 条 · {{conversation.sourceText}}</text>
+      <text wx:if="{{detailLive && conversation.truncated}}" class="window-note">仅显示最近 {{conversation.windowMessageCount}} 条（受条数与内容大小限制），完整记录仍保存在设备。本窗口不是完整历史。</text>
+    </view>
+
+    <view class="messages">
+      <view wx:for="{{conversation.messages}}" wx:key="messageId" class="message-row {{item.role}}">
+        <image wx:if="{{item.role === 'assistant'}}" class="message-avatar" src="{{pet.avatarUrl}}" mode="aspectFill"/>
+        <view class="bubble">
+          <text class="speaker-name">{{item.role === 'user' ? '我' : pet.name || '小安'}}</text>
+          <text class="message-content" user-select="true">{{item.content}}</text>
+          <view class="message-meta"><text>{{item.createdLabel}}</text><text wx:if="{{item.deliveryState === 'sending'}}">发送中…</text><text wx:elif="{{item.deliveryState === 'failed'}}" class="failed">发送失败</text></view>
+        </view>
+      </view>
+      <view wx:if="{{!detailLive && conversation.status === 'waiting_assistant'}}" class="message-row assistant"><image class="message-avatar" src="{{pet.avatarUrl}}" mode="aspectFill"/><view class="bubble thinking"><view class="thinking-dots"><view></view><view></view><view></view></view><text class="thinking-label">正在思考 · 状态预览</text></view></view>
+      <text wx:if="{{!conversation.messages.length}}" class="empty-copy">这次会话还没有消息。</text>
+    </view>
+    <text class="end-note">{{detailLive ? '设备库已保存内容 · 更新于 ' + conversation.sampledLabel + '，历史记录不代表当前正在回答。' : '以上为本地界面演示数据'}}</text>
+  </view>
+  <text wx:if="{{detailLive && !conversation && !liveDetailLoading}}" class="empty-copy">{{liveDetailError ? '真实详情尚未验证，不显示演示内容。' : !liveState.signedIn ? liveState.authKind === 'local' ? '请重新扫描机身卡本地配对后重试，旧身份消息不会显示。' : '请验证微信登录后重试；身份失效时不会显示之前的消息。' : '详情暂未取得，请刷新；若记录链接过期，请返回列表重新打开。'}}</text>
+  <button class="back-button" bindtap="goBack" disabled="{{leaving}}">{{leaving ? '正在返回…' : '返回会话列表'}}</button>
+</app-page>

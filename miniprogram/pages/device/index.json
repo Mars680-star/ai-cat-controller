@@ -1,0 +1,1 @@
+{ "navigationBarTitleText": "我的设备", "enablePullDownRefresh": true, "usingComponents": { "app-page": "/components/app-page/index", "local-connect": "/components/local-connect/index", "live-device-panel": "/components/live-device-panel/index", "loading-skeleton": "/components/loading-skeleton/index" } }

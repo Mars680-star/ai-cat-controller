@@ -1,0 +1,1 @@
+Component({ properties: { visible: Boolean, title: String, description: String, confirmText: { type: String, value: '确认' }, loading: Boolean, danger: Boolean }, methods: { cancel() { if (!this.data.loading) this.triggerEvent('cancel') }, confirm() { if (!this.data.loading) this.triggerEvent('confirm') }, stop() {} } })

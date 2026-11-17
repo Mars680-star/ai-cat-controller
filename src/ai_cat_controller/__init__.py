@@ -1,4 +1,4 @@
-"""AI Cat Controller package."""
+"""AI Fox Controller package."""
 
 __all__ = ["__version__"]
 

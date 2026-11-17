@@ -1,0 +1,10 @@
+.setting-slider { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5); }
+.slider-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+.slider-copy { display: flex; flex: 1; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.slider-title { color: var(--color-title); font-size: 27rpx; font-weight: 650; }
+.slider-description { color: var(--color-muted); font-size: 21rpx; line-height: 1.45; }
+.slider-value { flex: 0 0 auto; color: var(--color-primary-deep); font-size: 24rpx; font-weight: 700; }
+.slider-control { position: relative; height: 44rpx; touch-action: none; }
+.slider-track { position: absolute; top: 19rpx; right: 0; left: 0; height: 6rpx; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-line); }
+.slider-fill { height: 100%; border-radius: var(--radius-pill); background: var(--color-primary); }
+.slider-thumb { position: absolute; top: 10rpx; width: 24rpx; height: 24rpx; border: 6rpx solid var(--color-surface); border-radius: 50%; background: var(--color-primary); box-shadow: var(--shadow-thumb); transform: translateX(-50%); }

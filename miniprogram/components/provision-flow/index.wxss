@@ -1,0 +1,24 @@
+:host { display:block; }
+.wifi-form { padding:32rpx; border:1rpx solid #e3e6df; border-radius:24rpx; background:#fff; }
+.form-heading { margin-bottom:24rpx; }
+.title,.result-title { display:block; color:#272c26; font-size:34rpx; font-weight:700; line-height:1.5; }
+.step-note,.note { display:block; margin-top:10rpx; color:#788074; font-size:24rpx; line-height:1.7; }
+.label { display:block; margin:24rpx 0 12rpx; font-size:27rpx; font-weight:600; }
+.input { box-sizing:border-box; height:96rpx; width:100%; padding:0 24rpx; background:#f5f5f0; border:1rpx solid #e1e4dc; border-radius:14rpx; font-size:28rpx; }
+.hotspot-check,.radio { display:flex; align-items:center; gap:12rpx; padding:18rpx 0; font-size:25rpx; line-height:1.6; }
+.primary,.secondary { margin-top:24rpx; border-radius:16rpx; font-size:28rpx; line-height:1.6; padding:24rpx 20rpx; }
+.primary { color:#fff; background:#8a641d; font-weight:700; }
+.secondary { color:#695b40; background:#f5f4ef; }
+.primary[disabled],.secondary[disabled] { color:#9b9e96; background:#f1f2ed; }
+.details-button { padding:18rpx 0; margin-top:16rpx; color:#8a641d; background:transparent; font-size:24rpx; }
+button::after { border:0; }
+.details { padding-top:12rpx; border-top:1rpx solid #eceee7; }
+.error,.notice { display:block; margin-bottom:18rpx; font-size:25rpx; line-height:1.7; }
+.error { color:#b65d51; }
+.notice { color:#816125; }
+.result { padding:12rpx 0; }
+.compatibility-help,.compatibility-status { margin:0 0 22rpx; padding:20rpx; border:1rpx solid #ead394; border-radius:16rpx; background:#fff8de; }
+.compatibility-help .note:first-child,.compatibility-status .note { margin-top:0; }
+.recovery-button { margin-top:18rpx; }
+.compatibility-title { display:block; margin-bottom:8rpx; color:#76581c; font-size:25rpx; font-weight:700; }
+.diagnostic { overflow-wrap:anywhere; }

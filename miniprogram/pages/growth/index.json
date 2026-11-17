@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "成长",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "app-page": "/components/app-page/index",
+    "live-product-panel": "/components/live-product-panel/index",
+    "loading-skeleton": "/components/loading-skeleton/index",
+    "record-disclosure": "/components/record-disclosure/index"
+  }
+}

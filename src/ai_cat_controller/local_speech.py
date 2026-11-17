@@ -12,8 +12,16 @@ import os
 import subprocess
 import wave
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
+from ai_cat_controller.core.operation_gate import current_process_work_lease
+from ai_cat_controller.core.process_gate import (
+    ProcessGateError,
+    ProcessLease,
+    ProcessOperationGate,
+    ProcessTicket,
+)
 from ai_cat_controller.domain.personalities import PERSONALITIES, PERSONALITY_BY_ID
 
 DEFAULT_ASSET_ROOT = Path("/opt/ai-cat-controller/assets/local-speech")
@@ -79,6 +87,7 @@ class LocalPhrasePlayer:
         output_device: str = DEFAULT_OUTPUT_DEVICE,
         timeout_seconds: float = PLAYER_TIMEOUT_SECONDS,
         run_command: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+        process_gate: ProcessOperationGate | None = None,
     ) -> None:
         self._asset_root = asset_root
         self._marker_path = marker_path
@@ -86,25 +95,28 @@ class LocalPhrasePlayer:
         self._output_device = output_device
         self._timeout_seconds = timeout_seconds
         self._run_command = run_command
+        self._process_gate = process_gate
 
-    def play(self, personality_id: str, phrase: str) -> Path:
+    def play(
+        self, personality_id: str, phrase: str, *, expected_ticket: ProcessTicket | None = None
+    ) -> Path:
         expected_path = phrase_asset_path(
             self._asset_root,
             personality_id,
             phrase,
         )
-        return self._play_asset(expected_path, "personality-phrase")
+        return self._play_asset(expected_path, "personality-phrase", expected_ticket)
 
-    def play_touch(self, sensor: str) -> Path:
+    def play_touch(self, sensor: str, *, expected_ticket: ProcessTicket | None = None) -> Path:
         expected_path = touch_phrase_asset_path(
             self._asset_root,
             sensor,
         )
-        return self._play_asset(expected_path, f"touch-{sensor}")
+        return self._play_asset(expected_path, f"touch-{sensor}", expected_ticket)
 
-    def play_event(self, event: str) -> Path:
+    def play_event(self, event: str, *, expected_ticket: ProcessTicket | None = None) -> Path:
         expected_path = event_phrase_asset_path(self._asset_root, event)
-        return self._play_asset(expected_path, f"event-{event}")
+        return self._play_asset(expected_path, f"event-{event}", expected_ticket)
 
     def validate_personality_assets(self) -> tuple[Path, ...]:
         try:
@@ -148,9 +160,33 @@ class LocalPhrasePlayer:
                 )
         return paths
 
-    def _play_asset(self, expected_path: Path, stream_name: str) -> Path:
+    def _play_asset(
+        self, expected_path: Path, stream_name: str, expected_ticket: ProcessTicket | None = None
+    ) -> Path:
+        try:
+            parent = current_process_work_lease(reject_unleased_context=True)
+            if parent is not None:
+                if self._process_gate is not None and not parent.same_domain(self._process_gate):
+                    raise ProcessGateError()
+                reservation = parent.fork(expected=expected_ticket)
+            elif self._process_gate is not None:
+                reservation = self._process_gate.normal(expected=expected_ticket)
+            elif expected_ticket is not None:
+                raise LocalSpeechError("local phrase process gate is unavailable")
+            else:
+                reservation = nullcontext(None)
+            with reservation as lease:
+                return self._play_asset_leased(expected_path, stream_name, lease)
+        except ProcessGateError as exc:
+            raise LocalSpeechError("local phrase playback unavailable during maintenance") from exc
+
+    def _play_asset_leased(
+        self, expected_path: Path, stream_name: str, lease: ProcessLease | None
+    ) -> Path:
         asset = self._resolve_asset(expected_path)
 
+        if lease is not None:
+            lease.checkpoint()
         self._marker_path.parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
@@ -165,7 +201,23 @@ class LocalPhrasePlayer:
                 marker.write(f"{os.getpid()}\n")
                 marker.flush()
                 os.fsync(marker.fileno())
+            if lease is not None:
+                lease.checkpoint()
+            player_descriptor = None
             try:
+                player_options: dict[str, object] = {
+                    "check": False,
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.PIPE,
+                    "timeout": self._timeout_seconds,
+                }
+                if lease is not None:
+                    # The opaque player must keep the actual work lease even
+                    # if this Python keeper crashes. pass_fds deliberately
+                    # preserves this one FD across close_fds/CLOEXEC; never
+                    # LOCK_UN a duplicate of the still-running child's lease.
+                    player_descriptor = lease.duplicate_fd()
+                    player_options["pass_fds"] = (player_descriptor,)
                 result = self._run_command(
                     [
                         str(self._player_path),
@@ -174,13 +226,13 @@ class LocalPhrasePlayer:
                         f"--stream-name={stream_name}",
                         str(asset),
                     ],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    timeout=self._timeout_seconds,
+                    **player_options,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise LocalSpeechError(f"local phrase playback failed: {exc}") from exc
+            finally:
+                if player_descriptor is not None:
+                    os.close(player_descriptor)
             if result.returncode != 0:
                 error = result.stderr.decode("utf-8", errors="replace").strip()
                 raise LocalSpeechError(

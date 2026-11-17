@@ -1,0 +1,7 @@
+{
+  "component": true,
+  "usingComponents": {
+    "loading-skeleton": "/components/loading-skeleton/index",
+    "product-nav": "/components/product-nav/index"
+  }
+}

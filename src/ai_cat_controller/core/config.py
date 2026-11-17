@@ -26,6 +26,18 @@ CONFIRMED_SERVICE_NAMES = frozenset(
 )
 
 
+def parse_motion_bool(value: object) -> bool:
+    """Safety flags reject missing-looking/ambiguous values instead of enabling."""
+    if type(value) is bool:
+        return value
+    if isinstance(value, str):
+        if value.lower() in {"1", "true", "yes", "on"}:
+            return True
+        if value.lower() in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError("Motion safety flags require an explicit boolean token without whitespace")
+
+
 class Settings(BaseModel):
     """Validated runtime settings loaded without a dotenv side effect."""
 
@@ -38,22 +50,28 @@ class Settings(BaseModel):
 
     api_key_enabled: bool = False
     api_key: SecretStr = SecretStr("")
+    enable_local_gateway_delegation: bool = False
+    local_gateway_delegation_path: Path | None = None
 
     command_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     dialog_start_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     motion_cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
     motion_profile: Literal["legacy_safe", "k1_vendor_smooth"] = "legacy_safe"
+    enable_motion: bool = True
+    has_tail: bool = True
     enable_tail_motion: bool = False
     debug_unlock_all_actions: bool = False
     debug_unlimited_touch_intimacy: bool = False
     enable_growth_personality_v1: bool = False
     enable_debug_growth: bool = False
     enable_product_data_reset: bool = False
+    process_gate_path: Path | None = None
     enable_touch_motion: bool = True
     touch_motion_cooldown_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     enable_touch_speech: bool = False
     touch_speech_cooldown_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
     enable_level_up_celebration: bool = False
+    autonomy_in_process_enabled: bool = False
     touch_speech_asset_root: Path = Path("/opt/ai-cat-controller/assets/local-speech")
     touch_speech_marker_path: Path = Path("/run/ai-cat/local-speech-active")
     touch_speech_player_path: Path = Path("/usr/bin/paplay")
@@ -74,6 +92,8 @@ class Settings(BaseModel):
         ge=0.5,
         le=10.0,
     )
+    dialog_audio_marker_path: Path = Path("/run/ai-cat/dialog-audio-active")
+    dialog_session_marker_path: Path = Path("/run/ai-cat/dialog-session-active")
     dialog_status_path: Path = Path("/run/ai-cat/dialog-status.json")
     dialog_event_path: Path = Path("/var/lib/ai-cat-controller/dialog-events.jsonl")
     dialog_text_request_path: Path = Path(
@@ -89,6 +109,35 @@ class Settings(BaseModel):
     dialog_service: str = "volc-conv-ai.service"
     wake_service: str = "volc-k1-wake-word.service"
     pulseaudio_service: str = "volc-pulseaudio.service"
+
+    @field_validator("enable_motion", "has_tail", "enable_tail_motion", "enable_local_gateway_delegation", mode="before")
+    @classmethod
+    def validate_motion_flag(cls, value: object) -> bool:
+        return parse_motion_bool(value)
+
+    @field_validator("process_gate_path", mode="before")
+    @classmethod
+    def validate_process_gate_path(cls, value: object):
+        if value is None:
+            return None
+        raw = os.fspath(value)
+        if (not isinstance(raw, str) or not raw.startswith("/") or
+                any(part in {"", ".", ".."} for part in raw.split("/")[1:]) or
+                any(ord(char) < 32 or ord(char) == 127 for char in raw)):
+            raise ValueError("Process coordination requires an explicit normalized absolute directory")
+        return Path(raw)
+
+    @field_validator("local_gateway_delegation_path", mode="before")
+    @classmethod
+    def validate_local_gateway_path(cls, value):
+        if value is None:
+            return None
+        raw = os.fspath(value)
+        if (not isinstance(raw,str) or not raw.startswith('/') or
+                any(part in {'','.','..'} for part in raw.split('/')[1:]) or
+                any(ord(char)<32 or ord(char)==127 for char in raw)):
+            raise ValueError('Local gateway delegation requires a normalized absolute private path')
+        return Path(raw)
 
     @field_validator("api_host")
     @classmethod
@@ -147,6 +196,10 @@ class Settings(BaseModel):
             raise ValueError("AI_CAT_API_KEY is required when API key authentication is enabled")
         if self.hardware_driver == "local_k1" and not self.api_key_enabled:
             raise ValueError("local_k1 mode requires AI_CAT_API_KEY_ENABLED=true")
+        if self.enable_local_gateway_delegation and (
+                not self.api_key_enabled or self.local_gateway_delegation_path is None or
+                self.local_gateway_delegation_path.absolute() == self.data_path.absolute()):
+            raise ValueError('Local delegation requires API authentication and a separate explicit private store')
         return self
 
     @property
@@ -163,6 +216,8 @@ class Settings(BaseModel):
             "log_level": source.get("AI_CAT_LOG_LEVEL", "INFO").upper(),
             "api_key_enabled": source.get("AI_CAT_API_KEY_ENABLED", "false"),
             "api_key": source.get("AI_CAT_API_KEY", ""),
+            "enable_local_gateway_delegation": source.get("AI_CAT_ENABLE_LOCAL_GATEWAY_DELEGATION", "false"),
+            "local_gateway_delegation_path": source.get("AI_CAT_LOCAL_GATEWAY_DELEGATION_PATH"),
             "command_timeout_seconds": source.get("AI_CAT_COMMAND_TIMEOUT_SECONDS", "12.0"),
             "dialog_start_timeout_seconds": source.get(
                 "AI_CAT_DIALOG_START_TIMEOUT_SECONDS", "30.0"
@@ -171,6 +226,8 @@ class Settings(BaseModel):
             "motion_profile": source.get(
                 "AI_CAT_MOTION_PROFILE", "legacy_safe"
             ),
+            "enable_motion": source.get("AI_CAT_ENABLE_MOTION", "true"),
+            "has_tail": source.get("AI_CAT_HAS_TAIL", "true"),
             "enable_tail_motion": source.get("AI_CAT_ENABLE_TAIL_MOTION", "false"),
             "debug_unlock_all_actions": source.get(
                 "AI_CAT_DEBUG_UNLOCK_ALL_ACTIONS", "false"
@@ -187,6 +244,7 @@ class Settings(BaseModel):
             "enable_product_data_reset": source.get(
                 "AI_CAT_ENABLE_PRODUCT_DATA_RESET", "false"
             ),
+            "process_gate_path": source.get("AI_CAT_PROCESS_GATE_PATH"),
             "enable_touch_motion": source.get(
                 "AI_CAT_ENABLE_TOUCH_MOTION", "true"
             ),
@@ -201,6 +259,9 @@ class Settings(BaseModel):
             ),
             "enable_level_up_celebration": source.get(
                 "AI_CAT_ENABLE_LEVEL_UP_CELEBRATION", "false"
+            ),
+            "autonomy_in_process_enabled": source.get(
+                "AI_CAT_AUTONOMY_IN_PROCESS_ENABLED", "false"
             ),
             "touch_speech_asset_root": source.get(
                 "AI_CAT_TOUCH_SPEECH_ASSET_ROOT",
@@ -240,6 +301,14 @@ class Settings(BaseModel):
             ),
             "paw_touch_confirmation_window_seconds": source.get(
                 "AI_CAT_PAW_TOUCH_CONFIRMATION_WINDOW_SECONDS", "3.0"
+            ),
+            "dialog_audio_marker_path": source.get(
+                "AI_CAT_DIALOG_AUDIO_MARKER_PATH",
+                "/run/ai-cat/dialog-audio-active",
+            ),
+            "dialog_session_marker_path": source.get(
+                "AI_CAT_DIALOG_SESSION_MARKER_PATH",
+                "/run/ai-cat/dialog-session-active",
             ),
             "dialog_status_path": source.get(
                 "AI_CAT_DIALOG_STATUS_PATH", "/run/ai-cat/dialog-status.json"

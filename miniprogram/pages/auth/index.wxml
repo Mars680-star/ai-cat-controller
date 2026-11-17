@@ -1,0 +1,17 @@
+<view class="auth-page">
+  <view class="product-topbar"><view class="brand-mark">A</view><view><text class="brand-title">AI 狐狸伴侣</text><text class="brand-subtitle">小安 · 温柔陪伴，从这里开始</text></view></view>
+  <view class="login-panel">
+    <view class="login-visual"><image src="/assets/ai-cat-avatar.png" mode="aspectFill" /></view>
+    <view class="login-content">
+      <text class="eyebrow">登录界面 · 本地预览</text>
+      <text class="login-title">欢迎来到小安的空间</text>
+      <text class="login-note">当前仅展示界面，不登录微信、不连接设备。</text>
+      <view class="field"><text class="field-label">账号标识</text><input class="field-input" value="{{loginCode}}" maxlength="64" bindinput="inputLoginCode" /></view>
+      <view class="field"><text class="field-label">用户昵称</text><input class="field-input" value="{{nickname}}" maxlength="32" bindinput="inputNickname" /></view>
+      <view class="field"><text class="field-label">访问密钥 <text class="optional">接入接口后启用</text></text><input class="field-input" password disabled placeholder="预览无需密钥，请勿填写真实凭据" /></view>
+      <checkbox-group bindchange="onAgreementChange"><label class="agreement"><checkbox value="agree" checked="{{agreed}}" color="#F0B030"/><text>我已阅读并同意</text><button class="agreement-link" bindtap="showAgreement">《隐私与用户协议》</button></label></checkbox-group>
+      <button class="btn btn-primary login-btn" bindtap="login" disabled="{{submitting}}">{{submitting ? '正在进入…' : '进入界面预览'}}</button>
+      <text class="login-note">登录与绑定仅保存在此模拟器中，不影响真实设备。</text>
+    </view>
+  </view>
+</view>

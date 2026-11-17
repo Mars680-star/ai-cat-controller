@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "设备只读联调",
+  "enablePullDownRefresh": true,
+  "usingComponents": { "app-page": "/components/app-page/index" }
+}

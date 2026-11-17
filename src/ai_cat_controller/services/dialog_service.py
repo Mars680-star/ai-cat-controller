@@ -22,9 +22,10 @@ from ai_cat_controller.core.errors import (
     ActionConflictError,
     AdapterNotImplementedError,
 )
+from ai_cat_controller.core.operation_gate import DeviceOperationGate, device_operation
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_FOLLOW_UP_SECONDS = 30
+DEFAULT_FOLLOW_UP_SECONDS = 25
 MIN_FOLLOW_UP_SECONDS = 5
 MAX_FOLLOW_UP_SECONDS = 120
 MAX_CONFIG_BYTES = 4096
@@ -40,8 +41,11 @@ class DialogService:
         self,
         adapter: AiCatAdapter,
         config_path: Path = Path(".data/dialog-runtime-config.json"),
+        *,
+        maintenance_gate: DeviceOperationGate | None = None,
     ) -> None:
         self._adapter = adapter
+        self._maintenance_gate = maintenance_gate
         self._config_path = config_path
         self._lock = asyncio.Lock()
         self._config_lock = asyncio.Lock()
@@ -112,11 +116,13 @@ class DialogService:
         async with self._config_lock:
             return await asyncio.to_thread(self._read_config)
 
+    @device_operation
     async def update_config(self, follow_up_seconds: int) -> dict[str, Any]:
         async with self._config_lock:
             await asyncio.to_thread(self._write_config, follow_up_seconds)
             return await asyncio.to_thread(self._read_config)
 
+    @device_operation
     async def wake(self, request_id: str | None = None) -> dict[str, Any]:
         if not self._adapter.supports(Capability.WAKE_DIALOG):
             raise AdapterNotImplementedError("当前适配器不支持对话唤醒")
@@ -222,6 +228,7 @@ class DialogService:
                 "changed": True,
             }
 
+    @device_operation
     async def send_text(
         self,
         content: str,
@@ -251,6 +258,7 @@ class DialogService:
                 "changed": True,
             }
 
+    @device_operation
     async def speak(
         self,
         content: str,

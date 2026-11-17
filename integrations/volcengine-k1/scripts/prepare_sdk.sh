@@ -38,6 +38,9 @@ done
 cp -a "$INTEGRATION_DIR/overlay/." "$SDK_DIR/"
 cp "$REPO_DIR/native/dialog/volc_conv_ai_demo.c" \
     "$SDK_DIR/examples/low_load_solution/macos/volc_conv_ai_demo.c"
+mkdir -p "$SDK_DIR/examples/low_load_solution/common"
+cp "$REPO_DIR/native/common/ai_cat_process_gate.h" \
+    "$SDK_DIR/examples/low_load_solution/common/ai_cat_process_gate.h"
 cp "$REPO_DIR/native/wake-word/main.cpp" \
     "$SDK_DIR/examples/low_load_solution/linux_k1/wake_word/main.cpp"
 
